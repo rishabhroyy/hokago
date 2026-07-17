@@ -245,6 +245,7 @@ model Profile {
   updatedAt      DateTime  @updatedAt
 
   playbackStates PlaybackState[]
+  playbackSessions PlaybackSession[]
   hostedParties  WatchParty[]    @relation("PartyHost")
   partyMembers   PartyMember[]
 
@@ -361,6 +362,7 @@ model MediaItem {
   playbackStates    PlaybackState[]
   collectionEntries CollectionEntry[]
   watchParties      WatchParty[]
+  playbackSessions  PlaybackSession[]
 
   @@index([libraryId, kind])
   @@index([parentId])
@@ -413,6 +415,8 @@ model MediaFile {
   subtitleTracks SubtitleTrack[]
   fonts          MediaFileFont[]
   transcodeJobs  TranscodeJob[]
+  playbackSessions PlaybackSession[]
+  trickplay      Trickplay?
 
   @@index([mediaItemId])
   @@index([hash])
@@ -758,15 +762,61 @@ model MediaSegment {
   @@map("media_segments")
 }
 
+/// Created for EVERY playback start, including Direct Play — this is what makes
+/// "who's watching now" (§11.4) and watch-party correlation (§17) possible.
+/// A bare sessionKey string on TranscodeJob alone can't attribute a viewer or a
+/// Direct Play stream to anyone; this table is the fix.
+model PlaybackSession {
+  id             String         @id @default(uuid()) @db.Uuid
+  profileId      String         @db.Uuid
+  profile        Profile        @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  mediaItemId    String         @db.Uuid
+  mediaItem      MediaItem      @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  mediaFileId    String         @db.Uuid
+  mediaFile      MediaFile      @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  method         PlaybackMethod
+  deviceProfile  Json
+  startedAt      DateTime       @default(now())
+  /// Null while playing; set on end/timeout.
+  endedAt        DateTime?
+  lastHeartbeatAt DateTime      @default(now())
+  positionMs     Int            @default(0)
+  bandwidthKbps  Int?
+
+  transcodeJobs TranscodeJob[]
+  partyMember   PartyMember?
+
+  @@index([profileId, endedAt])
+  @@index([mediaItemId])
+  @@map("playback_sessions")
+}
+
+/// ~6MB/90min at 320x180/10s (§14). One sprite sheet + a VTT-style index per file.
+model Trickplay {
+  id           String    @id @default(uuid()) @db.Uuid
+  mediaFileId  String    @unique @db.Uuid
+  mediaFile    MediaFile @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  tileWidth    Int
+  tileHeight   Int
+  intervalMs   Int       @default(10000)
+  tilesPerSheet Int
+  /// Sprite sheet paths under /config/cache — disposable, regenerable (§16.1).
+  sheetPaths   String[]
+  generatedAt  DateTime  @default(now())
+
+  @@map("trickplay")
+}
+
 model TranscodeJob {
-  id          String         @id @default(uuid()) @db.Uuid
-  sessionKey  String
-  mediaFileId String         @db.Uuid
-  mediaFile   MediaFile      @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  id          String          @id @default(uuid()) @db.Uuid
+  sessionId   String          @db.Uuid
+  session     PlaybackSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  mediaFileId String          @db.Uuid
+  mediaFile   MediaFile       @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
   method      PlaybackMethod
   /// Serialized device profile the decision was made against (§11.1).
   deviceProfile Json
-  state       TranscodeState @default(QUEUED)
+  state       TranscodeState  @default(QUEUED)
   segmentFrom Int?
   segmentTo   Int?
   /// Tracked so SIGTERM can reap children — orphaned ffmpeg is a classic bug (§9.6.4).
@@ -774,9 +824,9 @@ model TranscodeJob {
   startedAt   DateTime?
   endedAt     DateTime?
   lastError   String?
-  createdAt   DateTime       @default(now())
+  createdAt   DateTime        @default(now())
 
-  @@index([sessionKey])
+  @@index([sessionId])
   @@index([state])
   @@map("transcode_jobs")
 }
@@ -803,16 +853,23 @@ model WatchParty {
   @@map("watch_parties")
 }
 
+/// Links to PlaybackSession so a participant's transcode state (§11 direct-play
+/// vs transcode, current segment) is queryable directly — no undocumented
+/// convention inside an opaque key (§17).
 model PartyMember {
-  partyId   String     @db.Uuid
-  party     WatchParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
-  profileId String     @db.Uuid
-  profile   Profile    @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  joinedAt  DateTime   @default(now())
-  ready     Boolean    @default(false)
+  partyId   String           @db.Uuid
+  party     WatchParty       @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  profileId String           @db.Uuid
+  profile   Profile          @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  /// Set once the member starts playback; null before then. One-to-one —
+  /// a member has at most one active session for this party.
+  sessionId String?          @unique @db.Uuid
+  session   PlaybackSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  joinedAt  DateTime         @default(now())
+  ready     Boolean          @default(false)
   /// Last reported position, for stall detection (§17).
-  positionMs Int       @default(0)
-  reportedAt DateTime  @default(now())
+  positionMs Int             @default(0)
+  reportedAt DateTime        @default(now())
 
   @@id([partyId, profileId])
   @@index([profileId])

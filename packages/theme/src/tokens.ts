@@ -110,6 +110,16 @@ export const RadiusTokens = z.object({
   card: Length,
 });
 
+/** §15.2 lists "borders" as its own category, distinct from color and radius. */
+export const BorderWidthTokens = z.object({
+  none: Length,
+  thin: Length,
+  base: Length,
+  thick: Length,
+  /** Focus ring width — accessibility-relevant, kept independent of `thick`. */
+  focus: Length,
+});
+
 export const SpacingTokens = z.object({
   xs: Length,
   sm: Length,
@@ -221,6 +231,7 @@ export const ThemeTokens = z.object({
   fontSize: FontSizeTokens,
   fontWeight: FontWeightTokens,
   radius: RadiusTokens,
+  borderWidth: BorderWidthTokens,
   spacing: SpacingTokens,
   shadow: ShadowTokens,
   motion: MotionTokens,
@@ -278,6 +289,7 @@ export function tokensToCssVars(t: ThemeTokens): Record<string, string> {
   walk("text", t.fontSize);
   walk("weight", t.fontWeight);
   walk("radius", t.radius);
+  walk("border", t.borderWidth);
   walk("space", t.spacing);
   walk("shadow", t.shadow);
   walk("motion", t.motion);
@@ -420,6 +432,13 @@ export const defaultTheme: ThemeManifest = {
       lg: "0.875rem",
       full: "9999px",
       card: "0.75rem",
+    },
+    borderWidth: {
+      none: "0",
+      thin: "1px",
+      base: "1px",
+      thick: "2px",
+      focus: "2px",
     },
     spacing: {
       xs: "0.25rem",

@@ -35,9 +35,19 @@ non-obvious, cross-referenced to the doc.
 9. **Valkey is a cache, not a source of truth.** Postgres derived state answers "what work
    exists"; a boot reconciler re-enqueues anything missing. Losing Valkey must lose zero work. (§9.6.2)
 10. **Every job is idempotent**, keyed on content hash, not job ID. Safe to run twice, always. (§9.6.1)
-11. **Bind mounts only. No named docker volumes**, including Postgres. (§16.1)
-12. **Chromecast is permanently out.** No public domain is in scope. Don't add hooks for it. (§18.3)
+11. **Bind mounts only. No named docker volumes**, including Postgres — **except Postgres's own
+    UID.** `/config/db` is owned by Postgres's internal UID (typically 999), not PUID/PGID.
+    Documented deliberate exception, not a bug. (§16.1, §16.2)
+12. **Chromecast is permanently out.** No public domain is in scope. Don't add hooks for it,
+    don't use it as an example anywhere — including the device-profile abstraction (§11.1). (§18.3)
 13. **`hokago` is always lowercase.** Docs, UI, package names, containers. Everywhere.
+14. **Every playback start creates a `PlaybackSession`, including Direct Play.** This is what
+    "who's watching now" and watch-party per-participant transcode state are built on — don't
+    reintroduce a bare `sessionKey` string in its place. (§11.4, §17)
+15. **`contentProfile` is a default, not a hard wall, for `MediaKind.MOVIE`.** The resolver may
+    try the anime provider chain for a movie regardless of its library's profile — cheap,
+    evidence-gated, and it's why an anime movie sitting in a general Movies library (a common
+    *arr layout) doesn't lose AniList. Series/episode parsing still forks hard on the profile. (§8.7.6)
 
 ---
 

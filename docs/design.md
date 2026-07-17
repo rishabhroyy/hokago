@@ -523,9 +523,24 @@ This is the part that makes it actually seamless rather than merely non-failing.
 
 ### 8.7.5 Scope of the bare case, honestly
 
-The generated path is the *only* source of movie posters **only** when all of these are true: it's a movie, it's not anime (AniList covers anime movies including in-series ones — §7.3), there's no NFO, no sidecar art, `poster.jpg` was never written by Radarr, and the optional key (§8.6) is off.
+The generated path is the *only* source of movie posters **only** when all of these are true: it's a movie, it's not anime (AniList covers anime movies including in-series ones, §7.3 — but see §8.7.6 for the cross-library case), there's no NFO, no sidecar art, `poster.jpg` was never written by Radarr, and the optional key (§8.6) is off.
 
 That's a real user. It's not a common one.
+
+### 8.7.6 ⭐ Anime movies in a general-purpose library — resolved
+
+`contentProfile` is set **per `Library`**, which forks parser and provider order (§7.2). But *arr conventions commonly split anime series and movies into separate folders — a "Movies" library often holds *Demon Slayer: Mugen Train* right alongside *Oppenheimer*, and nothing about that folder says "anime." If `contentProfile` were a hard wall, that movie would silently lose AniList and land in the bare-poster case (§8.7.5) for no reason a user would understand.
+
+**Decision: `contentProfile` is the default provider order, not a hard boundary.** For `MediaKind.MOVIE` specifically, the resolver may also try the anime chain (AniList, then Jikan) as an **additional enrichment attempt**, regardless of the owning library's profile. This is not a schema change and not a new mechanism — it's the existing `Evidence` model (§7.5) doing exactly what it's for: a confident AniList hit is a strong signal like any other, and it's allowed to win even in a `GENERAL` library.
+
+Why this is the right shape rather than (the rejected alternative) inferring `contentProfile` per item:
+
+- **It's cheap and targeted.** Gated to `MediaKind.MOVIE` only — not full anime-parser overhead for every file in every general library, just one extra provider try for a kind that's a small fraction of any library.
+- **It doesn't ask the operator to reorganize their *arr layout around our library boundaries**, which would be backwards — Radarr doesn't know or care what `hokago` calls a library.
+- **It reuses infrastructure that already exists** rather than adding a per-item profile-inference system, which is real complexity for a narrow case.
+- **The failure mode is graceful either way.** No AniList match → falls through to the normal chain → generated art if truly bare. Never worse than today; sometimes better.
+
+`contentProfile` remains the primary, cheap default for everything else — series/episode parsing still forks hard on it, since trying both parsers on every TV file would be wasteful and rarely helps. This carve-out is movie-only.
 
 ---
 
@@ -659,7 +674,7 @@ Transcode        video codec unsupported, bitrate cap, resolution, HDR→SDR, su
 
 Evaluation order (Jellyfin's StreamBuilder, which is correct): force flags → direct play eval vs profile → transcoding profile eval.
 
-**Keep the profile abstraction general** — `chromecast` and `airplay` should be expressible as just another profile with `subtitles: burn` (§18.3). We get that free if we don't hardcode assumptions.
+**Keep the profile abstraction general** — `airplay` should be expressible as just another profile with `subtitles: burn` (§18.3, §20.2). Chromecast is permanently out (§18.3) — don't use it as an example here or anywhere; there is nothing to build toward.
 
 Gotchas: **MKV is not streamable in Firefox** (always remuxes). Subtitles can trigger *either* remux or full video transcode. HEVC browser support limited; AV1 growing. A client advertising "4K" does not support every 4K codec/profile/HDR format/bitrate.
 
@@ -832,6 +847,8 @@ Media roots mount `:ro` by default. Write-back (§10.4) requires explicitly moun
 ### 16.2 Self-hoster expectations (non-negotiable)
 
 - **PUID / PGID** — linuxserver convention. Without it: permission-denied bug reports forever. **Doubly true with bind mounts** — the mounted folders must be chownable to PUID:PGID or readable by it.
+
+  **⚠️ Explicit exception: `/config/db`.** Stock Postgres images run internally as a fixed UID (typically `999`), not an arbitrary configurable one the way `hokago`/`hokago-worker` do. Fighting that with PUID/PGID recreates the exact permission hell those variables exist to prevent — this is the same reason Immich and Nextcloud carve Postgres out too. **`app`/`worker` containers honor PUID/PGID on their bind mounts; `/config/db` is owned by Postgres's own internal UID and is documented as a deliberate, permanent exception, not a bug.** The wizard's filesystem probe (§16.1) should check `/config/db` is writable by that UID specifically, not by PUID/PGID.
 - **TZ** env var.
 - **Base path support** — people run at `example.com/hokago`. Retrofitting is painful.
 - **First-run wizard** — admin account, library paths, `/config` filesystem probe. **No API key screen** (§8.4, §8.6).

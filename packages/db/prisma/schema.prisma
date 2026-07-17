@@ -1,0 +1,855 @@
+// hokago — canonical data model
+// Design doc: docs/design.md §7. This file is the source of truth for types.
+//
+// INVARIANTS (do not violate without updating docs/design.md):
+//   - No music. Ever. MediaKind is video-only. (§2)
+//   - No email column anywhere. (§7.1)
+//   - Anime is NOT a MediaKind — it is ContentProfile.ANIME on the Library. (§7.2)
+//   - MediaItem.confidence is DERIVED from Evidence, never authored. (§7.5)
+//   - Artwork stores bytes locally; never a remote URL. (§3.5, §7.6)
+//   - Valkey is a cache. This DB is the source of truth for "what work exists". (§9.6.2)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Video only. Music is permanently out of scope (§2).
+enum MediaKind {
+  MOVIE
+  SERIES
+  SEASON
+  EPISODE
+}
+
+/// Drives parser choice and provider order. Anime is a profile, not a kind (§7.2).
+enum ContentProfile {
+  GENERAL
+  ANIME
+}
+
+enum Provider {
+  LOCAL // NFO + sidecar artwork
+  EMBEDDED // container tags, attached_pic
+  GENERATED // ffmpeg-derived (§8.7)
+  TVMAZE
+  ANILIST
+  MAL // via Jikan
+  ANIDB // mapping target only; we never call AniDB
+  IMDB // datasets, packages-optional (§8.5)
+  WIKIDATA
+  TMDB // OPTIONAL TIER ONLY — user-supplied key, off by default (§8.6)
+}
+
+enum TitleType {
+  PRIMARY
+  ROMAJI
+  ENGLISH
+  NATIVE
+  SYNONYM
+}
+
+enum CollectionKind {
+  FRANCHISE
+  MOVIE_SET
+}
+
+/// How an item relates to its collection (§7.3).
+enum RelationType {
+  MAIN
+  MOVIE
+  OVA
+  SPECIAL
+  RECAP // hidden by default — a preference, never a deletion
+  SIDE_STORY
+  PREQUEL
+  SEQUEL
+}
+
+/// Evidence signal types, weighted in §7.5.
+enum SignalType {
+  NFO_UNIQUEID // ~certain
+  EMBEDDED_TAG // very strong
+  SIBLING_CONSISTENCY // strong
+  FOLDER_NAME // strong
+  PROBE_RUNTIME // strong — the movie/episode discriminator (§7.5)
+  FILENAME_PARSE // medium
+  TRACK_LANGUAGE // weak
+  RESOLUTION_CODEC // weak
+}
+
+enum StreamType {
+  VIDEO
+  AUDIO
+  SUBTITLE
+  ATTACHMENT
+  DATA
+}
+
+enum SubtitleFormat {
+  ASS
+  SSA
+  SRT
+  VTT
+  PGS // bitmap — forces burn-in, kills Direct Play (§13.4)
+  VOBSUB
+  DVBSUB
+}
+
+enum ArtworkKind {
+  POSTER // 2:3 — composed, not extracted, when generated (§8.7.3)
+  BACKDROP // 16:9
+  STILL // 16:9, episode
+  BANNER
+  LOGO // never generatable (§8.7.1)
+  THUMB
+}
+
+/// Priority order is explicit on Artwork.priority; this records provenance.
+enum ArtworkSource {
+  LOCAL_SIDECAR // poster.jpg / -poster.jpg — highest (§8.3, §10.1)
+  NFO_URL
+  EMBEDDED // attached_pic
+  PROVIDER // network, keyless (or optional-key tier)
+  GENERATED // always loses to everything else (§8.7.4)
+}
+
+enum SegmentType {
+  INTRO
+  OUTRO
+  RECAP
+  PREVIEW
+}
+
+/// Cascade order, cheapest first (§14). MANUAL always wins.
+enum SegmentSource {
+  CHAPTER
+  COMMUNITY
+  FINGERPRINT
+  MANUAL
+}
+
+/// Drives metadata_cache TTL (§8.3). Never a global constant.
+enum LifecycleState {
+  UNKNOWN
+  UNRELEASED
+  ONGOING // short TTL, episode list only
+  ENDED // infinite TTL
+}
+
+/// Poison-pill handling (§9.6.6). NEEDS_ATTENTION items must remain playable.
+enum ItemState {
+  OK
+  NEEDS_ATTENTION
+}
+
+enum FontFormat {
+  WOFF2
+  WOFF
+  TTF
+  OTF
+  TTC
+}
+
+/// All sources converge on one hash-deduped store served from our origin (§1.1).
+enum FontSource {
+  VENDORED // build-time floor — guarantees offline first boot
+  SUBTITLE // extracted from MKV/.mks/sibling fonts dir (§13.2)
+  THEME_BUNDLE // /config/themes/<name>/fonts/ (§1.1 source 2)
+  THEME_REMOTE // server-side fetch-once (§1.1 source 3)
+  USER_DROP // /config/fonts/ (§1.1 source 4)
+}
+
+enum ThemeSource {
+  BUILTIN
+  BUNDLE // dropped into /config/themes/
+  IMPORTED // pasted/uploaded JSON
+}
+
+enum FetchState {
+  PENDING
+  OK
+  FAILED
+}
+
+enum PlaybackMethod {
+  DIRECT_PLAY
+  DIRECT_STREAM
+  TRANSCODE
+}
+
+enum TranscodeState {
+  QUEUED
+  RUNNING
+  DONE
+  CANCELLED
+  FAILED
+}
+
+enum PartyState {
+  WAITING
+  PLAYING
+  PAUSED
+  ENDED
+}
+
+enum ScanMode {
+  WATCH_AND_PERIODIC // inotify + periodic fallback (§9.5)
+  PERIODIC_ONLY // required for NFS/SMB — inotify silently never fires
+  MANUAL
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCOUNTS  (§7.1) — no email, anywhere, ever.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Account {
+  id           String    @id @default(uuid()) @db.Uuid
+  username     String    @unique
+  passwordHash String // argon2id
+  isAdmin      Boolean   @default(false)
+  disabled     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  profiles     Profile[]
+  sessions     Session[]
+  invitesMade  Invite[]  @relation("InviteCreator")
+
+  @@map("accounts")
+}
+
+model Profile {
+  id             String    @id @default(uuid()) @db.Uuid
+  accountId      String    @db.Uuid
+  account        Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  name           String
+  avatarPath     String?
+  themeId        String?   @db.Uuid
+  theme          Theme?    @relation(fields: [themeId], references: [id], onDelete: SetNull)
+  /// Max allowed rating; null = unrestricted.
+  maturityRating String?
+  /// Free-form UI prefs. Shape owned by packages/contract, not this file.
+  prefs          Json      @default("{}")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  playbackStates PlaybackState[]
+  hostedParties  WatchParty[]    @relation("PartyHost")
+  partyMembers   PartyMember[]
+
+  @@unique([accountId, name])
+  @@index([accountId])
+  @@map("profiles")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  accountId        String    @db.Uuid
+  account          Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  device           String?
+  userAgent        String?
+  createdAt        DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+
+  @@index([accountId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Invite links. Shared manually (Discord, tailnet, whatever). No email (§2).
+model Invite {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String    @unique
+  createdById String    @db.Uuid
+  createdBy   Account   @relation("InviteCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  expiresAt   DateTime?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("invites")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIBRARIES & MEDIA  (§7.2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Library {
+  id             String         @id @default(uuid()) @db.Uuid
+  name           String
+  /// Bind-mount path inside the container, e.g. /media/anime (§16.1).
+  rootPath       String         @unique
+  contentProfile ContentProfile @default(GENERAL)
+  /// Kinds expected here. A library may hold movies AND series (§7.3).
+  mediaKinds     MediaKind[]
+  /// Override of the default provider chain. Empty = use profile default (§8.3).
+  providerOrder  Provider[]
+  scanMode       ScanMode       @default(WATCH_AND_PERIODIC)
+  /// Probed at runtime, never assumed. Gates NFO/EDL write-back (§10.4).
+  writable       Boolean        @default(false)
+  /// Force composed posters even where real art exists — consistency > authenticity (§8.7.3).
+  composeAllPosters Boolean     @default(false)
+  enabled        Boolean        @default(true)
+  lastScanAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  items          MediaItem[]
+
+  @@map("libraries")
+}
+
+/// The central entity. Hierarchy: SERIES -> SEASON -> EPISODE. MOVIE is standalone
+/// but may also join a Collection (§7.3) — that is how movies live inside series.
+model MediaItem {
+  id        String    @id @default(uuid()) @db.Uuid
+  libraryId String    @db.Uuid
+  library   Library   @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  kind      MediaKind
+
+  parentId  String?     @db.Uuid
+  parent    MediaItem?  @relation("Hierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  MediaItem[] @relation("Hierarchy")
+
+  title         String
+  sortTitle     String
+  originalTitle String?
+  overview      String?
+  year          Int?
+  /// From ffprobe. THE movie/episode discriminator (§7.5, §9.2c).
+  runtimeMs     Int?
+
+  // Promoted out of jsonb: these are sorted and filtered on constantly.
+  // Season 00 = specials, per TVDB/Kodi convention (§7.2).
+  seasonNumber   Int?
+  episodeNumber  Int?
+  /// Absolute numbering. Resolves against seasonal via IdMapping.episodeOffset (§7.4).
+  absoluteNumber Int?
+
+  premieredAt    DateTime?
+  lifecycleState LifecycleState @default(UNKNOWN)
+
+  /// DERIVED from Evidence by the resolver. Materialized here for query/sort only.
+  /// NEVER author this directly. Recompute from Evidence. (§7.5)
+  confidence     Float          @default(0)
+  state          ItemState      @default(OK)
+
+  /// Genuinely open fields only. Anything queried gets a real column.
+  extra          Json           @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  titles            Title[]
+  files             MediaFile[]
+  externalIds       ExternalId[]
+  evidence          Evidence[]
+  artwork           Artwork[]
+  segments          MediaSegment[]
+  playbackStates    PlaybackState[]
+  collectionEntries CollectionEntry[]
+  watchParties      WatchParty[]
+
+  @@index([libraryId, kind])
+  @@index([parentId])
+  @@index([sortTitle])
+  @@index([kind, confidence])
+  @@index([state])
+  @@index([parentId, seasonNumber, episodeNumber])
+  @@map("media_items")
+}
+
+/// Multi-title search: romaji / english / native / synonyms (§20.2).
+/// Add a GIN/pg_trgm index via migration — Prisma can't express it natively.
+model Title {
+  id          String    @id @default(uuid()) @db.Uuid
+  mediaItemId String    @db.Uuid
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  value       String
+  type        TitleType
+  lang        String? // BCP-47
+
+  @@index([mediaItemId])
+  @@index([value])
+  @@map("titles")
+}
+
+model MediaFile {
+  id          String    @id @default(uuid()) @db.Uuid
+  mediaItemId String    @db.Uuid
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+
+  /// Absolute path inside the container.
+  path      String  @unique
+  sizeBytes BigInt
+  mtime     DateTime
+  /// Rename/move detection without re-import (§9.5).
+  inode     BigInt?
+  /// Content hash. The idempotency key for all derived work (§9.6.1).
+  hash      String?
+
+  container    String?
+  durationMs   Int?
+  bitrate      Int?
+  probedAt     DateTime?
+  probeFailed  Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  streams        MediaStream[]
+  subtitleTracks SubtitleTrack[]
+  fonts          MediaFileFont[]
+  transcodeJobs  TranscodeJob[]
+
+  @@index([mediaItemId])
+  @@index([hash])
+  @@index([inode])
+  @@map("media_files")
+}
+
+model MediaStream {
+  id          String     @id @default(uuid()) @db.Uuid
+  mediaFileId String     @db.Uuid
+  mediaFile   MediaFile  @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  streamIndex Int
+  type        StreamType
+  codec       String?
+  profile     String?
+  lang        String? // BCP-47
+  title       String?
+  channels    Int?
+  sampleRate  Int?
+  width       Int?
+  height      Int?
+  frameRate   Float?
+  bitDepth    Int?
+
+  isDefault Boolean @default(false)
+  isForced  Boolean @default(false)
+  isHearingImpaired Boolean @default(false)
+
+  /// HDR detection gates the whole tone-map chain — SDR skips it entirely (§11.3).
+  /// { colorPrimaries, transfer, matrix, masteringDisplay, contentLightLevel, dv? }
+  hdrMeta Json?
+
+  @@unique([mediaFileId, streamIndex])
+  @@index([mediaFileId, type])
+  @@map("media_streams")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COLLECTIONS  (§7.3) — how movies live inside series.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Collection {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String
+  sortTitle String
+  kind      CollectionKind @default(FRANCHISE)
+  overview  String?
+  /// True when built from a provider relation graph; false when hand-made.
+  derived   Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  entries     CollectionEntry[]
+  externalIds ExternalId[]
+
+  @@index([sortTitle])
+  @@map("collections")
+}
+
+/// Many-to-many. A movie is a first-class MOVIE in browse AND an entry here (§7.3).
+model CollectionEntry {
+  id           String       @id @default(uuid()) @db.Uuid
+  collectionId String       @db.Uuid
+  collection   Collection   @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  mediaItemId  String       @db.Uuid
+  mediaItem    MediaItem    @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+
+  relationType RelationType @default(MAIN)
+  /// How it shipped.
+  releaseOrder Int?
+  /// Chronological / recommended watch order. Both stored; user picks (§7.3).
+  storyOrder   Int?
+  /// Positions a movie inside a series, e.g. "after S1" → renders inline (§7.3).
+  anchor       String?
+
+  @@unique([collectionId, mediaItemId])
+  @@index([collectionId, releaseOrder])
+  @@index([collectionId, storyOrder])
+  @@index([mediaItemId])
+  @@map("collection_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IDENTITY  (§7.4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ExternalId {
+  id           String      @id @default(uuid()) @db.Uuid
+  mediaItemId  String?     @db.Uuid
+  mediaItem    MediaItem?  @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  collectionId String?     @db.Uuid
+  collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  provider   String // Provider enum value; String so packages-optional can extend
+  providerId String
+  confidence Float  @default(1)
+  createdAt  DateTime @default(now())
+
+  @@unique([mediaItemId, provider])
+  @@unique([collectionId, provider])
+  @@index([provider, providerId])
+  @@map("external_ids")
+}
+
+/// Mappings are UNIDIRECTIONAL. A→B does not imply B→A — store both (§7.4).
+model IdMapping {
+  id             String @id @default(uuid()) @db.Uuid
+  sourceProvider String
+  sourceId       String
+  targetProvider String
+  targetId       String
+
+  seasonOffset Int @default(0)
+  /// THE load-bearing field. Absolute → seasonal numbering (§7.4).
+  episodeOffset Int @default(0)
+
+  /// Which packages-optional dataset produced this (§8.5). Null = local/manual.
+  datasetSource String?
+  fetchedAt     DateTime @default(now())
+
+  @@unique([sourceProvider, sourceId, targetProvider, targetId])
+  @@index([sourceProvider, sourceId])
+  @@index([targetProvider, targetId])
+  @@map("id_mappings")
+}
+
+/// Confidence is derived from these rows. Never store a magic number (§7.5).
+/// Re-resolution = recompute from Evidence, which is why this table exists at all.
+model Evidence {
+  id          String     @id @default(uuid()) @db.Uuid
+  mediaItemId String     @db.Uuid
+  mediaItem   MediaItem  @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  signalType  SignalType
+  source      String // provider name, file path, "probe", etc.
+  /// The observed value, e.g. { imdb: "tt0245429" } or { runtimeMs: 6480000 }
+  value       Json
+  weight      Float
+  observedAt  DateTime   @default(now())
+
+  @@index([mediaItemId])
+  @@index([mediaItemId, signalType])
+  @@map("evidence")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// METADATA CACHE & ARTWORK  (§7.6, §8.3, §8.7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MetadataCache {
+  id         String  @id @default(uuid()) @db.Uuid
+  provider   String
+  externalId String
+  payload    Json
+  /// Jikan returns one per request → If-None-Match → 304, zero work (§8.3).
+  etag       String?
+  fetchedAt  DateTime @default(now())
+  /// TTL derived from lifecycleState, never a global constant (§8.3).
+  ttlPolicy  String
+  lifecycleState LifecycleState @default(UNKNOWN)
+  expiresAt  DateTime?
+
+  @@unique([provider, externalId])
+  @@index([expiresAt])
+  @@map("metadata_cache")
+}
+
+/// Artwork is stored as BYTES, locally. Never a remote URL. Never hotlinked (§3.5).
+/// This is also what buys COOP/COEP immunity for JASSUB (§13.3).
+model Artwork {
+  id          String        @id @default(uuid()) @db.Uuid
+  mediaItemId String        @db.Uuid
+  mediaItem   MediaItem     @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  kind        ArtworkKind
+  source      ArtworkSource
+  /// Lower = wins. Derived from source; explicit so resolution is deterministic.
+  priority    Int
+  /// Path under /config/artwork. The bytes. Not a URL.
+  bytesPath   String
+  hash        String
+  width       Int?
+  height      Int?
+  sizeBytes   Int?
+  /// For GENERATED: { strategy: "blur-extend"|"weighted-crop", sourceFrameMs, score }
+  meta        Json?
+  createdAt   DateTime      @default(now())
+
+  @@unique([mediaItemId, kind, source])
+  @@index([mediaItemId, kind, priority])
+  @@index([hash])
+  @@map("artwork")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBTITLES & FONTS  (§13) — the shared store is the primitive (§1.1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SubtitleTrack {
+  id          String         @id @default(uuid()) @db.Uuid
+  mediaFileId String         @db.Uuid
+  mediaFile   MediaFile      @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  lang        String?
+  title       String?
+  format      SubtitleFormat
+  forced      Boolean        @default(false)
+  sdh         Boolean        @default(false)
+  /// Embedded: stream index. External: null.
+  streamIndex Int?
+  /// External sidecar or extracted-to-disk path. Embedded-only: null.
+  path        String?
+  /// PGS/VOBSUB force burn-in and kill Direct Play — flag at scan time (§13.4).
+  requiresBurnIn Boolean     @default(false)
+  createdAt   DateTime       @default(now())
+
+  @@index([mediaFileId])
+  @@map("subtitle_tracks")
+}
+
+/// One hash-deduped store. Four sources, one origin (§1.1). Path is under /config/store.
+model Font {
+  hash      String     @id // sha256 of the bytes
+  family    String
+  subfamily String?
+  weight    Int?
+  style     String? // normal | italic
+  format    FontFormat
+  source    FontSource
+  path      String
+  sizeBytes Int
+  /// unicode-range coverage, for subsetted faces.
+  unicodeRange String?
+  createdAt DateTime   @default(now())
+
+  mediaFiles MediaFileFont[]
+  themes     ThemeFont[]
+
+  @@index([family])
+  @@index([source])
+  @@map("fonts")
+}
+
+/// Which fonts a file's ASS tracks need. Drives offline download packaging (§20.2a).
+model MediaFileFont {
+  mediaFileId String    @db.Uuid
+  mediaFile   MediaFile @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  fontHash    String
+  font        Font      @relation(fields: [fontHash], references: [hash], onDelete: Cascade)
+
+  @@id([mediaFileId, fontHash])
+  @@index([fontHash])
+  @@map("media_file_fonts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THEMES  (§15) — tokens validated against packages/theme
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Theme {
+  id      String      @id @default(uuid()) @db.Uuid
+  slug    String      @unique
+  name    String
+  source  ThemeSource @default(BUILTIN)
+  /// Validated against packages/theme ThemeTokens schema. Invalid = rejected on import.
+  tokens  Json
+  /// For BUNDLE: /config/themes/<slug>/
+  bundlePath String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  profiles  Profile[]
+  fonts     ThemeFont[]
+  fontFetches ThemeFontFetch[]
+
+  @@map("themes")
+}
+
+model ThemeFont {
+  themeId  String @db.Uuid
+  theme    Theme  @relation(fields: [themeId], references: [id], onDelete: Cascade)
+  fontHash String
+  font     Font   @relation(fields: [fontHash], references: [hash], onDelete: Cascade)
+
+  @@id([themeId, fontHash])
+  @@index([fontHash])
+  @@map("theme_fonts")
+}
+
+/// Source 3: theme declares a font URL → server fetches ONCE → bytes stored forever.
+/// A background job. Never a browser request. Theme still applies via fallback
+/// stack while PENDING or FAILED — degrade, never error (§1.1, §3.2).
+model ThemeFontFetch {
+  id       String     @id @default(uuid()) @db.Uuid
+  themeId  String     @db.Uuid
+  theme    Theme      @relation(fields: [themeId], references: [id], onDelete: Cascade)
+  url      String
+  family   String
+  state    FetchState @default(PENDING)
+  fontHash String? // set on success
+  attempts Int        @default(0)
+  lastError String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([themeId, url])
+  @@index([state])
+  @@map("theme_font_fetches")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYBACK, SEGMENTS, PARTIES  (§7.7, §14, §17)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PlaybackState {
+  id          String    @id @default(uuid()) @db.Uuid
+  profileId   String    @db.Uuid
+  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  mediaItemId String    @db.Uuid
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  positionMs  Int       @default(0)
+  durationMs  Int?
+  watched     Boolean   @default(false)
+  playCount   Int       @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([profileId, mediaItemId])
+  @@index([profileId, updatedAt])
+  @@map("playback_state")
+}
+
+/// Cascade: chapter → community → fingerprint. MANUAL always wins (§14).
+model MediaSegment {
+  id          String        @id @default(uuid()) @db.Uuid
+  mediaItemId String        @db.Uuid
+  mediaItem   MediaItem     @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  type        SegmentType
+  startMs     Int
+  endMs       Int
+  source      SegmentSource
+  confidence  Float         @default(1)
+  createdAt   DateTime      @default(now())
+
+  @@unique([mediaItemId, type, source])
+  @@index([mediaItemId])
+  @@map("media_segments")
+}
+
+model TranscodeJob {
+  id          String         @id @default(uuid()) @db.Uuid
+  sessionKey  String
+  mediaFileId String         @db.Uuid
+  mediaFile   MediaFile      @relation(fields: [mediaFileId], references: [id], onDelete: Cascade)
+  method      PlaybackMethod
+  /// Serialized device profile the decision was made against (§11.1).
+  deviceProfile Json
+  state       TranscodeState @default(QUEUED)
+  segmentFrom Int?
+  segmentTo   Int?
+  /// Tracked so SIGTERM can reap children — orphaned ffmpeg is a classic bug (§9.6.4).
+  pid         Int?
+  startedAt   DateTime?
+  endedAt     DateTime?
+  lastError   String?
+  createdAt   DateTime       @default(now())
+
+  @@index([sessionKey])
+  @@index([state])
+  @@map("transcode_jobs")
+}
+
+/// Server is the timekeeper. Key on MEDIA POSITION, never wall clock — participants
+/// may be in different transcode states (§17).
+model WatchParty {
+  id           String     @id @default(uuid()) @db.Uuid
+  hostProfileId String    @db.Uuid
+  hostProfile  Profile    @relation("PartyHost", fields: [hostProfileId], references: [id], onDelete: Cascade)
+  mediaItemId  String     @db.Uuid
+  mediaItem    MediaItem  @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  state        PartyState @default(WAITING)
+  positionMs   Int        @default(0)
+  /// Server clock at last command. Clients self-correct against this (§17).
+  issuedAt     DateTime   @default(now())
+  inviteCode   String     @unique
+  createdAt    DateTime   @default(now())
+  endedAt      DateTime?
+
+  members PartyMember[]
+
+  @@index([state])
+  @@map("watch_parties")
+}
+
+model PartyMember {
+  partyId   String     @db.Uuid
+  party     WatchParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  profileId String     @db.Uuid
+  profile   Profile    @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime   @default(now())
+  ready     Boolean    @default(false)
+  /// Last reported position, for stall detection (§17).
+  positionMs Int       @default(0)
+  reportedAt DateTime  @default(now())
+
+  @@id([partyId, profileId])
+  @@index([profileId])
+  @@map("party_members")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS  (§8.6 option (b))
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Server settings. Single row enforced by application logic.
+model ServerSetting {
+  id        String   @id @default("singleton")
+  /// Base path, e.g. "/hokago" (§16.2).
+  basePath  String   @default("/")
+  /// Global + per-user transcode caps (§11.4).
+  maxConcurrentTranscodes Int @default(2)
+  maxTranscodesPerUser    Int @default(1)
+  /// Chromaprint scheduling (§14 tier 3).
+  fingerprintEnabled  Boolean @default(false)
+  fingerprintThreads  Int     @default(2)
+  fingerprintWindow   String? // cron expr, off-peak
+  setupCompletedAt    DateTime?
+  updatedAt DateTime @updatedAt
+
+  @@map("server_settings")
+}
+
+/// §8.6 DECISION (b): settings-only toggle. NEVER in the first-run wizard.
+/// NEVER a nag, banner, or modal. Off by default. We ship no key and depend on none.
+model ProviderConfig {
+  id        String   @id @default(uuid()) @db.Uuid
+  provider  String   @unique
+  enabled   Boolean  @default(false)
+  /// User-supplied credential, encrypted at rest. Never ours, never bundled (§8.4).
+  secretEnc String?
+  updatedAt DateTime @updatedAt
+
+  @@map("provider_config")
+}

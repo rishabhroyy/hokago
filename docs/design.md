@@ -326,6 +326,8 @@ artwork         id, entity_id, kind, source, bytes_path, width, height, hash
 
 `artwork.bytes_path` — artwork **stored as bytes locally**. Never a remote URL. Never hotlinked, even where permitted.
 
+**`entity_id` is polymorphic**, same pattern as `external_ids` (§7.4): a `MediaItem` or a `Collection`, never both. A franchise/collection gets its own poster rather than borrowing a member's — decided, schema updated to match.
+
 ### 7.7 Playback, segments, parties
 
 ```
@@ -783,6 +785,8 @@ packages/theme  →  typed token set  →  CSS custom properties  →  data-them
 ```
 
 Themes are **validated JSON**, per profile, in Postgres, importable/exportable. Runtime switch, no rebuild. **Every shadcn component consumes tokens only. Never a hardcoded value.** This rule makes or breaks the requirement.
+
+**Schema note:** `Theme.colorScheme` (dark|light) is its own column, mirroring `ThemeManifest.colorScheme` — not inferred from `color.bg` lightness. The switcher needs it to group reference themes (e.g. `oled` vs `light`) without parsing token values.
 
 ### 15.2 Token surface
 

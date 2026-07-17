@@ -175,6 +175,14 @@ enum ThemeSource {
   IMPORTED // pasted/uploaded JSON
 }
 
+/// Mirrors ThemeManifest.colorScheme (packages/theme). Explicit column, not
+/// inferred from token lightness — the switcher needs to group reference
+/// themes (e.g. distinguish `oled` from `light`) without parsing color values.
+enum ColorScheme {
+  DARK
+  LIGHT
+}
+
 enum FetchState {
   PENDING
   OK
@@ -471,6 +479,7 @@ model Collection {
 
   entries     CollectionEntry[]
   externalIds ExternalId[]
+  artwork     Artwork[]
 
   @@index([sortTitle])
   @@map("collections")
@@ -585,10 +594,14 @@ model MetadataCache {
 
 /// Artwork is stored as BYTES, locally. Never a remote URL. Never hotlinked (§3.5).
 /// This is also what buys COOP/COEP immunity for JASSUB (§13.3).
+/// Polymorphic like ExternalId: belongs to a MediaItem OR a Collection (a
+/// franchise gets its own poster, not just a borrowed member's) — never both.
 model Artwork {
-  id          String        @id @default(uuid()) @db.Uuid
-  mediaItemId String        @db.Uuid
-  mediaItem   MediaItem     @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  id           String        @id @default(uuid()) @db.Uuid
+  mediaItemId  String?       @db.Uuid
+  mediaItem    MediaItem?    @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  collectionId String?       @db.Uuid
+  collection   Collection?   @relation(fields: [collectionId], references: [id], onDelete: Cascade)
   kind        ArtworkKind
   source      ArtworkSource
   /// Lower = wins. Derived from source; explicit so resolution is deterministic.
@@ -604,7 +617,9 @@ model Artwork {
   createdAt   DateTime      @default(now())
 
   @@unique([mediaItemId, kind, source])
+  @@unique([collectionId, kind, source])
   @@index([mediaItemId, kind, priority])
+  @@index([collectionId, kind, priority])
   @@index([hash])
   @@map("artwork")
 }
@@ -678,6 +693,7 @@ model Theme {
   slug    String      @unique
   name    String
   source  ThemeSource @default(BUILTIN)
+  colorScheme ColorScheme @default(DARK)
   /// Validated against packages/theme ThemeTokens schema. Invalid = rejected on import.
   tokens  Json
   /// For BUNDLE: /config/themes/<slug>/

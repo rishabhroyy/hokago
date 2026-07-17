@@ -937,7 +937,7 @@ Same two structural problems, weaker form:
 
 ## 19. Build order
 
-**Step 0 — license firewall.** `packages/metadata` = interfaces only, `packages-optional/` exists and is empty. Can't be retrofitted.
+**Step 0 — license firewall. Done.** `packages/metadata` ships `MetadataProvider` / `MappingSource` interfaces only (`packages/metadata/src/index.ts`). `packages-optional/` exists, empty except a `README.md` documenting the constraint.
 
 1. **Foundations.** Prisma schema (§7) + theme token contract (§15) + contract package + custom ffmpeg image + vendored font subsets + compose (bind mounts, §16.1) boots and migrates.
 2. **Local-first pipeline, end to end.** scan → group (w/ runtime clustering) → NFO parse → embedded tags/art → generated art. **Ship a working, fully offline, zero-network media server.**

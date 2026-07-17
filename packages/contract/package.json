@@ -1,0 +1,25 @@
+{
+  "name": "@hokago/contract",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./health": "./dist/health.js",
+    "./openapi": "./dist/openapi.js",
+    "./client": "./dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "generate": "tsx scripts/generate.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1",
+    "@asteasolutions/zod-to-openapi": "^7.3.0",
+    "openapi-fetch": "^0.13.4"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.6.1",
+    "openapi3-ts": "^4.6.0"
+  }
+}

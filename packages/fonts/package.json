@@ -1,0 +1,15 @@
+{
+  "name": "@hokago/fonts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsx scripts/build.ts"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/zen-maru-gothic": "^5.2.8",
+    "subset-font": "^2.5.0"
+  }
+}

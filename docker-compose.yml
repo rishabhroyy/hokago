@@ -1,0 +1,87 @@
+# hokago — deployment compose. Design doc: docs/design.md §16.1, §16.2, §6.1.
+#
+# Bind mounts only. No named docker volumes anywhere, including Postgres —
+# except Postgres's own internal UID (see the postgres service below). §16.1/16.2.
+#
+# hwaccel is a later overlay (§14, build order step 14) — this file is CPU-only.
+# PUID/PGID enforcement on the app/worker containers is also a later step
+# (build order step 14); the env vars are declared here so compose doesn't
+# need reshaping when that lands.
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hokago
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hokago}
+      POSTGRES_DB: hokago
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      # Published for pg_dump/migrations from the host (§16.3 backup story).
+      # Not required by any container — safe to remove for a locked-down deploy.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Bind mount, not a named volume (§16.1). No `user:` override here —
+      # the stock postgres image runs internally as its own fixed UID
+      # (typically 999) and chowns this path itself on first boot. Fighting
+      # that with PUID/PGID recreates the exact permission hell those
+      # variables exist to prevent (§16.2, documented deliberate exception).
+      - ${HOKAGO_CONFIG_DIR:-./data/config}/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hokago"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-bookworm
+    restart: unless-stopped
+    volumes:
+      - ${HOKAGO_CONFIG_DIR:-./data/config}/cache/valkey:/data
+
+  hokago:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+    command: ["node", "apps/api/dist/index.js"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
+      VALKEY_URL: redis://valkey:6379
+      PORT: 3000
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${HOKAGO_PORT:-3000}:3000"
+    volumes:
+      - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
+
+  hokago-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+    command: ["node", "apps/worker/dist/index.js"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
+      VALKEY_URL: redis://valkey:6379
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
+      # Media roots are first-class and plural (§16.1) — the user adds one
+      # line per library root and points a Library at it. Example, disabled:
+      # - /mnt/media/movies:/media/movies:ro

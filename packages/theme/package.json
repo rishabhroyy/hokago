@@ -1,0 +1,16 @@
+{
+  "name": "@hokago/theme",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/tokens.js",
+  "types": "./dist/tokens.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate:default": "tsx scripts/validate-default.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

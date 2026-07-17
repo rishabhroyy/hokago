@@ -1,3 +1,14 @@
 .DS_Store
 graphify-out/cache/
 graphify-out/.graphify_*
+
+node_modules/
+dist/
+*.tsbuildinfo
+.turbo/
+packages/db/generated/
+packages/fonts/vendor/
+packages/contract/generated/
+/config/
+/data/
+.env

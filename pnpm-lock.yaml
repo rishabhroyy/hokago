@@ -41,6 +41,12 @@ importers:
       '@hokago/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@hokago/metadata':
+        specifier: workspace:*
+        version: link:../../packages/metadata
+      '@hokago/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@hokago/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -92,6 +98,14 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0
 
+  packages/metadata: {}
+
+  packages/providers:
+    dependencies:
+      '@hokago/metadata':
+        specifier: workspace:*
+        version: link:../metadata
+
   packages/queue:
     dependencies:
       bullmq:
@@ -106,6 +120,12 @@ importers:
       '@hokago/db':
         specifier: workspace:*
         version: link:../db
+      '@hokago/metadata':
+        specifier: workspace:*
+        version: link:../metadata
+      '@hokago/providers':
+        specifier: workspace:*
+        version: link:../providers
       anitomy:
         specifier: ^0.0.35
         version: 0.0.35

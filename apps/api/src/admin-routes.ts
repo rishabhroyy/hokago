@@ -11,6 +11,9 @@ const connection = getConnection();
 const queues: Record<QueueName, Queue> = {
   scan: new Queue(QUEUE_NAMES.SCAN, { connection }),
   artwork: new Queue(QUEUE_NAMES.ARTWORK, { connection }),
+  "metadata-tvmaze": new Queue(QUEUE_NAMES.METADATA_TVMAZE, { connection }),
+  "metadata-anilist": new Queue(QUEUE_NAMES.METADATA_ANILIST, { connection }),
+  "metadata-mal": new Queue(QUEUE_NAMES.METADATA_MAL, { connection }),
 };
 
 const JOB_STATES = ["waiting", "active", "completed", "failed", "delayed"] as const;

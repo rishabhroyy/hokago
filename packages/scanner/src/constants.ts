@@ -53,7 +53,17 @@ export const SIGNAL_WEIGHT: Record<string, number> = {
   FILENAME_PARSE: 0.45,
   TRACK_LANGUAGE: 0.2,
   RESOLUTION_CODEC: 0.2,
+  PROVIDER_MATCH: 0.9,
 };
+
+// §8.2/§8.7.6 default provider order, used when Library.providerOrder is empty.
+// MOVIE always additionally tries the anime chain regardless of profile (§8.7.6,
+// non-negotiable #15) — merged in by callers, not baked into this table.
+export const DEFAULT_PROVIDER_ORDER: Record<string, { SERIES: string[]; MOVIE: string[] }> = {
+  GENERAL: { SERIES: ["TVMAZE"], MOVIE: [] },
+  ANIME: { SERIES: ["ANILIST", "MAL"], MOVIE: ["ANILIST", "MAL"] },
+};
+export const ANIME_MOVIE_CARVEOUT = ["ANILIST", "MAL"];
 
 const SEASON_DIR = /^season\s*0*(\d{1,3})$/i;
 const SEASON_DIR_SHORT = /^s0*(\d{1,3})$/i;

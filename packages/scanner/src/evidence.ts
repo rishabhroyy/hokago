@@ -61,7 +61,7 @@ export async function syncEvidenceAndConfidence(
   evidence: EvidenceInput[],
   contradicted = false,
 ): Promise<number> {
-  await db.$transaction(async (tx) => {
+  const finalRows = await db.$transaction(async (tx) => {
     const existing = await tx.evidence.findMany({ where: { mediaItemId } });
     const existingByKey = new Map(existing.map((row) => [`${row.signalType}::${row.source}`, row]));
     const seenIds = new Set<string>();
@@ -94,14 +94,25 @@ export async function syncEvidenceAndConfidence(
       seenIds.add(created.id);
     }
 
-    const stale = existing.filter((row) => !seenIds.has(row.id));
+    // PROVIDER_MATCH rows belong to a separate subsystem (the metadata
+    // pipeline) from whichever caller is syncing here (e.g. a local rescan) —
+    // never delete one just because this caller's snapshot doesn't mention
+    // it. A provider entry is only ever replaced by passing the same
+    // signalType+source key back in, which goes through the update path above.
+    const stale = existing.filter((row) => !seenIds.has(row.id) && row.signalType !== "PROVIDER_MATCH");
     if (stale.length > 0) {
       await tx.evidence.deleteMany({ where: { id: { in: stale.map((row) => row.id) } } });
     }
+
+    return tx.evidence.findMany({ where: { mediaItemId } });
   });
 
+  // Confidence is derived from the full post-sync Evidence snapshot, not the
+  // caller's partial view — otherwise a caller passing only its own subset
+  // (e.g. local scan evidence) would silently drop preserved PROVIDER_MATCH
+  // weight from the computed confidence (§7.5, non-negotiable #8).
   const confidence = computeConfidence(
-    evidence.map((e) => ({ weight: SIGNAL_WEIGHT[e.signalType] ?? 0.5 })),
+    finalRows.map((r) => ({ weight: r.weight })),
     contradicted,
   );
   await db.mediaItem.update({ where: { id: mediaItemId }, data: { confidence } });

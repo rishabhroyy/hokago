@@ -85,6 +85,7 @@ enum SignalType {
   FILENAME_PARSE // medium
   TRACK_LANGUAGE // weak
   RESOLUTION_CODEC // weak
+  PROVIDER_MATCH // network provider identity match (§8.3) — strong, not certain
 }
 
 enum StreamType {
@@ -603,8 +604,8 @@ model MetadataCache {
   provider   String
   externalId String
   payload    Json
-  /// Jikan returns one per request → If-None-Match → 304, zero work (§8.3).
-  etag       String?
+  /// Jikan's Last-Modified header → If-Modified-Since → 304, zero work (§8.3).
+  lastModified String?
   fetchedAt  DateTime @default(now())
   /// TTL derived from lifecycleState, never a global constant (§8.3).
   ttlPolicy  String

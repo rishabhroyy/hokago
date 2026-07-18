@@ -79,6 +79,15 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0
 
+  packages/scanner:
+    dependencies:
+      '@hokago/db':
+        specifier: workspace:*
+        version: link:../db
+      fast-xml-parser:
+        specifier: ^4.5.1
+        version: 4.5.7
+
   packages/theme:
     dependencies:
       zod:
@@ -469,6 +478,10 @@ packages:
   fast-uri@4.1.0:
     resolution: {integrity: sha512-ZodJ2cRiLVWGi9IgPb3mbgSqM4CD3LexCHkuv0FfBXHJI1ADfucTD06m6clO2Cy5RZYsw/SiCVl/dyrFI/SYWA==}
 
+  fast-xml-parser@4.5.7:
+    resolution: {integrity: sha512-a6Qh1RMCNbSrU1+sAyAAZH3rTe+OaWJbNZIq0S+ifZciUUOQtlVxBJwoTUE2bYhysmG/RYyI5WJFIKdBahJdrQ==}
+    hasBin: true
+
   fastify-type-provider-zod@4.0.2:
     resolution: {integrity: sha512-FDRzSL3ZuoZ+4YDevR1YOinmDKkxOdy3QB9dDR845sK+bQvDroPKhHAXLEAOObDxL7SMA0OZN/A4osrNBTdDTQ==}
     peerDependencies:
@@ -689,6 +702,9 @@ packages:
   split2@4.2.0:
     resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
     engines: {node: '>= 10.x'}
+
+  strnum@1.1.2:
+    resolution: {integrity: sha512-vrN+B7DBIoTTZjnPNewwhx6cBA/H+IS7rfW68n7XxC1y7uoiGQBxaKzqucGUgavX15dJgiGztLJ8vxuEzwqBdA==}
 
   subset-font@2.5.0:
     resolution: {integrity: sha512-Vsa8ngQ/ohhUj0an7on49y9jLZ2rK5U+T1FzPM4/ZQY0xUy5mLis6BfFtPGzecTjFgYXQlvY7FlsJF4t3R/6Ug==}
@@ -1094,6 +1110,10 @@ snapshots:
 
   fast-uri@4.1.0: {}
 
+  fast-xml-parser@4.5.7:
+    dependencies:
+      strnum: 1.1.2
+
   fastify-type-provider-zod@4.0.2(fastify@5.10.0)(zod@3.25.76):
     dependencies:
       '@fastify/error': 4.2.0
@@ -1320,6 +1340,8 @@ snapshots:
       atomic-sleep: 1.0.0
 
   split2@4.2.0: {}
+
+  strnum@1.1.2: {}
 
   subset-font@2.5.0:
     dependencies:

@@ -1,0 +1,15 @@
+{
+  "name": "@hokago/scanner",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "scan": "tsx scripts/scan.ts"
+  },
+  "dependencies": {
+    "@hokago/db": "workspace:*",
+    "fast-xml-parser": "^4.5.1"
+  }
+}

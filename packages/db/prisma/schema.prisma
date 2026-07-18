@@ -312,6 +312,9 @@ model Library {
   composeAllPosters Boolean     @default(false)
   enabled        Boolean        @default(true)
   lastScanAt     DateTime?
+  /// Last directory fully completed in the sorted walk order, for scan
+  /// resume (§9.6.3). Null when idle or a scan finished cleanly.
+  scanCursor     String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -371,6 +374,7 @@ model MediaItem {
   collectionEntries CollectionEntry[]
   watchParties      WatchParty[]
   playbackSessions  PlaybackSession[]
+  jobFailures       JobFailure[]
 
   @@index([libraryId, kind])
   @@index([parentId])
@@ -568,6 +572,26 @@ model Evidence {
   @@index([mediaItemId])
   @@index([mediaItemId, signalType])
   @@map("evidence")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JOB ROBUSTNESS  (§9.6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Durable poison-pill counter (§9.6.6). Valkey/BullMQ retry state is a cache
+/// and must not be the only place a failure count lives — this survives a
+/// Valkey loss so a re-derived job doesn't start back at attempt 1 forever.
+model JobFailure {
+  id          String    @id @default(uuid()) @db.Uuid
+  mediaItemId String    @db.Uuid
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  jobType     String
+  attempts    Int       @default(0)
+  lastError   String?
+  lastFailedAt DateTime @default(now())
+
+  @@unique([mediaItemId, jobType])
+  @@map("job_failures")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

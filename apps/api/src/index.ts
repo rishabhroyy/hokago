@@ -5,6 +5,7 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import { HealthResponse } from "@hokago/contract/health";
+import { registerAdminRoutes } from "./admin-routes.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -14,6 +15,8 @@ app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () =
   status: "ok" as const,
   version: "0.0.0",
 }));
+
+await registerAdminRoutes(app);
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

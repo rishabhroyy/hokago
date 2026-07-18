@@ -3,16 +3,22 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { trackPid, untrackPid } from "./child-registry.js";
 
 const POSTER_WIDTH = 1000;
 const POSTER_HEIGHT = 1500; // 2:3 (§8.7.3)
 const CANDIDATE_COUNT = 5;
 
+/** Registers the child's PID so a worker's SIGTERM handler can reap it (§9.6.4). */
 async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync("ffmpeg", args, { maxBuffer: 32 * 1024 * 1024 });
+  return new Promise((resolve, reject) => {
+    const child = execFile("ffmpeg", args, { maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+      untrackPid(child.pid);
+      if (err) reject(err);
+      else resolve({ stdout, stderr });
+    });
+    trackPid(child.pid);
+  });
 }
 
 /** Runs a single ffmpeg pass over a short window near sampleAtSec, parses the last crop=W:H:X:Y (§8.7.2 — black bars would otherwise skew scoring and composition). */

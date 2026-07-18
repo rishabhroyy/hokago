@@ -1,28 +1,16 @@
 import path from "node:path";
 
-import { Prisma, PrismaClient, type SignalType } from "@hokago/db";
+import { Prisma, PrismaClient, type ContentProfile } from "@hokago/db";
 
 import { resolveArtwork } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
-import { SIGNAL_WEIGHT, parseSeasonDirName } from "./constants.js";
+import { parseSeasonDirName } from "./constants.js";
+import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import { partialHash } from "./hash.js";
 import { findNfoForFile } from "./nfo.js";
 import { parseFilename } from "./parse-filename.js";
 import { probeFile, type ProbeResult } from "./probe.js";
 import { type DiscoveredFile, groupByDirectory, walkVideoFiles } from "./walk.js";
-
-// jsonb round-trips through Postgres don't preserve JS object key insertion
-// order, so a plain JSON.stringify comparison against a freshly-fetched row
-// spuriously reports "changed" on every scan. Sort keys recursively so the
-// comparison is order-independent.
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const keys = Object.keys(value as Record<string, unknown>).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
 
 export interface IngestSummary {
   directoriesScanned: number;
@@ -34,10 +22,10 @@ export interface IngestSummary {
 }
 
 /**
- * Directory-hierarchy heuristic (§9.2 "group first, match second" —
- * ponytail stand-in for the real parser registry, Step 4):
+ * Directory-hierarchy heuristic (§9.2 "group first, match second"):
  *
- * For each directory of video files, parse every filename. If a majority
+ * For each directory of video files, parse every filename through the
+ * registry (§9.3, forked by the library's content profile). If a majority
  * carry a season/episode marker, the directory is a season worth of a
  * series (explicit "Season 01"-style dirname, or implicit Season 1 if not).
  * Runtime-cluster outliers within that group become standalone movies —
@@ -45,8 +33,8 @@ export interface IngestSummary {
  * directory is independently a movie (covers both one-movie-per-folder and
  * flat scene-style dumps of unrelated files in one folder).
  */
-function isSeasonLikeDirectory(files: DiscoveredFile[]): boolean {
-  const parsed = files.map((f) => parseFilename(path.basename(f.path)));
+function isSeasonLikeDirectory(files: DiscoveredFile[], profile: ContentProfile): boolean {
+  const parsed = files.map((f) => parseFilename(path.basename(f.path), profile));
   const seasoned = parsed.filter((p) => p.episode !== null).length;
   return seasoned / files.length >= 0.5;
 }
@@ -78,10 +66,39 @@ async function findOrCreateChild(
   return { id: created.id, wasCreated: true };
 }
 
+/**
+ * Collections (§7.3): find-then-create, mirroring findOrCreateChild — no
+ * unique DB constraint on name, so this is a lookup, not a true upsert.
+ */
+async function findOrCreateCollection(
+  db: PrismaClient,
+  params: { name: string; kind: "FRANCHISE" | "MOVIE_SET" },
+): Promise<{ id: string }> {
+  const existing = await db.collection.findFirst({ where: { name: params.name, kind: params.kind } });
+  if (existing) return { id: existing.id };
+  const created = await db.collection.create({
+    data: { name: params.name, sortTitle: params.name.toLowerCase(), kind: params.kind, derived: true },
+  });
+  return { id: created.id };
+}
+
 interface FileContext {
   file: DiscoveredFile;
   dir: string;
   probe: ProbeResult | null;
+}
+
+export interface ArtworkNeeded {
+  mediaItemId: string;
+  filePath: string;
+  dir: string;
+  durationMs: number | null;
+}
+
+interface LeafResult {
+  mediaItemId: string;
+  artworkStored: number;
+  needsArtwork: ArtworkNeeded | null;
 }
 
 async function ingestLeafItem(
@@ -91,9 +108,11 @@ async function ingestLeafItem(
   kind: "MOVIE" | "EPISODE",
   parentId: string | null,
   seasonNumber: number | null,
-): Promise<number> {
+  deferArtwork: boolean,
+  profile: ContentProfile,
+): Promise<LeafResult> {
   const { file, dir, probe } = ctx;
-  const parsed = parseFilename(path.basename(file.path));
+  const parsed = parseFilename(path.basename(file.path), profile);
   const title = parsed.title ?? path.basename(file.path);
 
   // Path first (common case, cheap unique lookup). If the path moved, fall
@@ -153,9 +172,7 @@ async function ingestLeafItem(
     await db.mediaItem.update({ where: { id: mediaItemId }, data: { runtimeMs: probe.durationMs } });
   }
 
-  const evidence: { signalType: SignalType; source: string; value: Record<string, unknown> }[] = [
-    { signalType: "FOLDER_NAME", source: dir, value: { title } },
-  ];
+  const evidence: EvidenceInput[] = [{ signalType: "FOLDER_NAME", source: dir, value: { title } }];
   if (parsed.episode !== null || parsed.title) {
     evidence.push({ signalType: "FILENAME_PARSE", source: file.path, value: { ...parsed } });
   }
@@ -169,56 +186,12 @@ async function ingestLeafItem(
     evidence.push({ signalType: "NFO_UNIQUEID", source: "nfo", value: { ...nfo } });
   }
 
-  // Sync rather than blind delete+recreate (§9.6.1 idempotency, §9.6.2
-  // self-healing, §3.6/§9.6.7 crash-only): unchanged signals keep their
-  // original observedAt instead of resetting on every rescan, changed/new
-  // signals get a fresh one, and vanished sources are removed. All in one
-  // transaction so a crash mid-sync can never leave a MediaItem with zero
-  // evidence rows.
-  await db.$transaction(async (tx) => {
-    const existing = await tx.evidence.findMany({ where: { mediaItemId } });
-    const existingByKey = new Map(existing.map((row) => [`${row.signalType}::${row.source}`, row]));
-    const seenIds = new Set<string>();
-
-    for (const e of evidence) {
-      const key = `${e.signalType}::${e.source}`;
-      const weight = SIGNAL_WEIGHT[e.signalType] ?? 0.5;
-      const prior = existingByKey.get(key);
-
-      if (prior) {
-        seenIds.add(prior.id);
-        const unchanged = stableStringify(prior.value) === stableStringify(e.value) && prior.weight === weight;
-        if (unchanged) continue;
-        await tx.evidence.update({
-          where: { id: prior.id },
-          data: { value: e.value as Prisma.InputJsonValue, weight, observedAt: new Date() },
-        });
-        continue;
-      }
-
-      const created = await tx.evidence.create({
-        data: {
-          mediaItemId,
-          signalType: e.signalType,
-          source: e.source,
-          value: e.value as Prisma.InputJsonValue,
-          weight,
-        },
-      });
-      seenIds.add(created.id);
-    }
-
-    const stale = existing.filter((row) => !seenIds.has(row.id));
-    if (stale.length > 0) {
-      await tx.evidence.deleteMany({ where: { id: { in: stale.map((row) => row.id) } } });
-    }
-  });
-
-  // ponytail: simplified weighted-sum confidence, not the real recompute-on-
-  // new-evidence engine (§7.5) — good enough for a zero-network scan to
-  // produce a meaningful, derived number instead of an authored one.
-  const confidence = Math.min(1, evidence.reduce((sum, e) => sum + (SIGNAL_WEIGHT[e.signalType] ?? 0.5), 0) / 2);
-  await db.mediaItem.update({ where: { id: mediaItemId }, data: { confidence } });
+  // Contradiction (§7.5): runtime clustering resolved this file as MOVIE, but
+  // its own filename evidence unambiguously parses as a numbered episode —
+  // the two signals disagree about what this item even is. Noisy-OR alone
+  // can't express that; it only ever combines weights upward.
+  const contradictsKind = kind === "MOVIE" && (parsed.season !== null || parsed.episode !== null);
+  await syncEvidenceAndConfidence(db, mediaItemId, evidence, contradictsKind);
 
   for (const uid of nfo?.uniqueIds ?? []) {
     await db.externalId
@@ -230,7 +203,32 @@ async function ingestLeafItem(
       .catch(() => {});
   }
 
-  const artworkList = await resolveArtwork(dir, file.path, probe?.attachedPics ?? [], probe?.durationMs ?? null);
+  // Job infra (§9.6): artwork resolution shells out to ffmpeg and is the
+  // crash/CPU-heavy risk, so it's split into its own queue with its own
+  // concurrency limit and poison-pill handling. Direct/offline invocation
+  // (scripts/scan.ts, no deferArtwork) keeps resolving it inline, unchanged.
+  if (deferArtwork) {
+    return {
+      mediaItemId,
+      artworkStored: 0,
+      needsArtwork: { mediaItemId, filePath: file.path, dir, durationMs: probe?.durationMs ?? null },
+    };
+  }
+
+  const artworkStored = await storeArtwork(db, mediaItemId, dir, file.path, probe?.attachedPics ?? [], probe?.durationMs ?? null);
+  return { mediaItemId, artworkStored, needsArtwork: null };
+}
+
+/** Resolves and upserts artwork for one media item — shared by inline (CLI) and queued (worker) paths. */
+export async function storeArtwork(
+  db: PrismaClient,
+  mediaItemId: string,
+  dir: string,
+  filePath: string,
+  attachedPics: Parameters<typeof resolveArtwork>[2],
+  durationMs: number | null,
+): Promise<number> {
+  const artworkList = await resolveArtwork(dir, filePath, attachedPics, durationMs);
   let artworkStored = 0;
   for (const art of artworkList) {
     await db.artwork
@@ -256,13 +254,34 @@ async function ingestLeafItem(
       .catch(() => {});
     artworkStored += 1;
   }
-
   return artworkStored;
 }
 
-export async function ingestLibrary(db: PrismaClient, libraryId: string, rootPath: string): Promise<IngestSummary> {
+export interface IngestOptions {
+  /** Skip directories at/before this sorted path — resume after a checkpointed interruption (§9.6.3). */
+  resumeFromCursor?: string | null;
+  /** Called after a directory's MediaItem/Evidence work is fully committed — persist as the new scanCursor. */
+  onDirectoryComplete?: (dir: string) => Promise<void>;
+  /** When set, artwork is not resolved inline — each file needing it is handed to this callback instead (queued). */
+  onArtworkNeeded?: (job: ArtworkNeeded) => Promise<void>;
+  /** Forks the parser registry (§9.3). Defaults to the library's own profile when omitted. */
+  contentProfile?: ContentProfile;
+}
+
+export async function ingestLibrary(
+  db: PrismaClient,
+  libraryId: string,
+  rootPath: string,
+  opts: IngestOptions = {},
+): Promise<IngestSummary> {
+  const profile = opts.contentProfile ?? "GENERAL";
   const files = await walkVideoFiles(rootPath);
   const byDir = groupByDirectory(files);
+  const deferArtwork = opts.onArtworkNeeded !== undefined;
+
+  // Global, deterministic order independent of filesystem readdir order —
+  // required for scanCursor resume to mean anything (§9.6.3).
+  const sortedDirs = Array.from(byDir.keys()).sort();
 
   const summary: IngestSummary = {
     directoriesScanned: byDir.size,
@@ -273,22 +292,29 @@ export async function ingestLibrary(db: PrismaClient, libraryId: string, rootPat
     artworkStored: 0,
   };
 
-  for (const [dir, dirFiles] of byDir) {
+  for (const dir of sortedDirs) {
+    if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) continue;
+    const dirFiles = [...(byDir.get(dir) ?? [])].sort((a, b) => a.path.localeCompare(b.path));
     const probes = new Map<string, ProbeResult | null>();
     for (const f of dirFiles) probes.set(f.path, await probeFile(f.path));
 
-    if (!isSeasonLikeDirectory(dirFiles)) {
+    if (!isSeasonLikeDirectory(dirFiles, profile)) {
       for (const file of dirFiles) {
-        summary.artworkStored += await ingestLeafItem(
+        const result = await ingestLeafItem(
           db,
           libraryId,
           { file, dir, probe: probes.get(file.path) ?? null },
           "MOVIE",
           null,
           null,
+          deferArtwork,
+          profile,
         );
+        summary.artworkStored += result.artworkStored;
+        if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
         summary.moviesCreated += 1;
       }
+      await opts.onDirectoryComplete?.(dir);
       continue;
     }
 
@@ -312,16 +338,66 @@ export async function ingestLibrary(db: PrismaClient, libraryId: string, rootPat
       dirFiles.map((f) => ({ path: f.path, durationMs: probes.get(f.path)?.durationMs ?? null })),
     );
 
+    const outlierMediaItemIds: string[] = [];
+    let agreeingTitles = 0;
+
     for (const file of dirFiles) {
       const ctx: FileContext = { file, dir, probe: probes.get(file.path) ?? null };
+      let result: LeafResult | null = null;
       if (outliers.includes(file.path)) {
-        summary.artworkStored += await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null);
+        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null, deferArtwork, profile);
         summary.moviesCreated += 1;
+        outlierMediaItemIds.push(result.mediaItemId);
       } else if (main.includes(file.path)) {
-        summary.artworkStored += await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber);
+        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber, deferArtwork, profile);
         summary.episodesCreated += 1;
       }
+      if (result) {
+        summary.artworkStored += result.artworkStored;
+        if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
+      }
+      const parsedTitle = parseFilename(path.basename(file.path), profile).title;
+      if (parsedTitle && parsedTitle.toLowerCase() === seriesTitle.toLowerCase()) agreeingTitles += 1;
     }
+
+    // Container-level confidence (§7.5, the Step 2 gap this closes): SERIES
+    // identity is stable across all its season directories, so it only ever
+    // carries FOLDER_NAME — a per-season SIBLING_CONSISTENCY signal on the
+    // series would get wiped by the next season directory's sync pass (each
+    // sync call is a full snapshot for that MediaItem, not a delta). SEASON
+    // is 1:1 with this directory, so it can safely carry both.
+    await syncEvidenceAndConfidence(db, series.id, [
+      { signalType: "FOLDER_NAME", source: seriesDir, value: { title: seriesTitle } },
+    ]);
+    await syncEvidenceAndConfidence(db, season.id, [
+      { signalType: "FOLDER_NAME", source: dir, value: { title: `Season ${seasonNumber}` } },
+      {
+        signalType: "SIBLING_CONSISTENCY",
+        source: dir,
+        value: { agreement: dirFiles.length > 0 ? agreeingTitles / dirFiles.length : 0, childCount: dirFiles.length },
+      },
+    ]);
+
+    // Collections (§7.3): the Mugen Train shape. clusterByRuntime's outliers
+    // are movies that live inside a series folder — link them and the series
+    // into one franchise collection instead of leaving them unconnected.
+    if (outlierMediaItemIds.length > 0) {
+      const collection = await findOrCreateCollection(db, { name: seriesTitle, kind: "FRANCHISE" });
+      await db.collectionEntry.upsert({
+        where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId: series.id } },
+        create: { collectionId: collection.id, mediaItemId: series.id, relationType: "MAIN" },
+        update: {},
+      });
+      for (const mediaItemId of outlierMediaItemIds) {
+        await db.collectionEntry.upsert({
+          where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId } },
+          create: { collectionId: collection.id, mediaItemId, relationType: "MOVIE" },
+          update: {},
+        });
+      }
+    }
+
+    await opts.onDirectoryComplete?.(dir);
   }
 
   return summary;

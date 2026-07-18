@@ -30,7 +30,7 @@ async function main() {
     });
 
     console.log(`Scanning "${library.name}" at ${rootPath}...`);
-    const summary = await ingestLibrary(db, library.id, rootPath);
+    const summary = await ingestLibrary(db, library.id, rootPath, { contentProfile: library.contentProfile });
 
     console.log("");
     console.log("Scan complete:");

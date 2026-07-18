@@ -14,7 +14,7 @@ export async function walkVideoFiles(root: string): Promise<DiscoveredFile[]> {
   const out: DiscoveredFile[] = [];
 
   async function walk(dir: string): Promise<void> {
-    const entries = await readdir(dir, { withFileTypes: true });
+    const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
       const full = path.join(dir, entry.name);

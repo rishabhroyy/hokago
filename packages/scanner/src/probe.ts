@@ -1,7 +1,21 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { trackPid, untrackPid } from "./child-registry.js";
 
-const execFileAsync = promisify(execFile);
+/** Like promisify(execFile), but registers the child's PID so a worker's SIGTERM handler can reap it (§9.6.4). */
+function execFileAsync(
+  file: string,
+  args: string[],
+  options: { maxBuffer?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, options, (err, stdout, stderr) => {
+      untrackPid(child.pid);
+      if (err) reject(err);
+      else resolve({ stdout, stderr });
+    });
+    trackPid(child.pid);
+  });
+}
 
 export interface AttachedPic {
   streamIndex: number;

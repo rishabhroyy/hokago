@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "exports": {
+    "./ingest": "./dist/ingest.js",
+    "./probe": "./dist/probe.js",
+    "./child-registry": "./dist/child-registry.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -10,6 +15,7 @@
   },
   "dependencies": {
     "@hokago/db": "workspace:*",
+    "anitomy": "^0.0.35",
     "fast-xml-parser": "^4.5.1"
   }
 }

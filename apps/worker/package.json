@@ -8,5 +8,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hokago/db": "workspace:*",
+    "@hokago/queue": "workspace:*",
+    "@hokago/scanner": "workspace:*"
   }
 }

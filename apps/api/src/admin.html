@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>hokago — queues</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
+  h1 { font-size: 1.1rem; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
+  th, td { border: 1px solid #444; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.85rem; }
+  th { background: #222; }
+  button { font-size: 0.8rem; margin-right: 0.3rem; cursor: pointer; }
+  pre { background: #1a1a1a; padding: 0.5rem; overflow-x: auto; font-size: 0.75rem; }
+</style>
+</head>
+<body>
+<h1>hokago — job queues</h1>
+<div id="queues"></div>
+
+<script>
+async function api(path, opts) {
+  const res = await fetch(path, { headers: { "content-type": "application/json" }, ...opts });
+  return res.json();
+}
+
+async function render() {
+  const queues = await api("/admin/queues");
+  const root = document.getElementById("queues");
+  root.innerHTML = "";
+  for (const q of queues) {
+    const section = document.createElement("div");
+    section.innerHTML = `
+      <h2>${q.name} ${q.paused ? "(paused)" : ""}</h2>
+      <table>
+        <tr>${Object.keys(q.counts).map((k) => `<th>${k}</th>`).join("")}</tr>
+        <tr>${Object.values(q.counts).map((v) => `<td>${v}</td>`).join("")}</tr>
+      </table>
+      <button data-act="pause" data-q="${q.name}">Pause</button>
+      <button data-act="resume" data-q="${q.name}">Resume</button>
+      <button data-act="retry-failed" data-q="${q.name}">Retry failed</button>
+      <button data-act="clean" data-q="${q.name}">Clean completed</button>
+      <button data-act="jobs" data-q="${q.name}">Show failed jobs</button>
+      <pre id="jobs-${q.name}" style="display:none"></pre>
+    `;
+    root.appendChild(section);
+  }
+
+  root.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const q = btn.dataset.q;
+      const act = btn.dataset.act;
+      if (act === "jobs") {
+        const jobs = await api(`/admin/queues/${q}/jobs?state=failed`);
+        const pre = document.getElementById(`jobs-${q}`);
+        pre.style.display = "block";
+        pre.textContent = JSON.stringify(jobs, null, 2);
+        return;
+      }
+      await api(`/admin/queues/${q}/${act}`, { method: "POST" });
+      render();
+    });
+  });
+}
+
+render();
+setInterval(render, 5000);
+</script>
+</body>
+</html>

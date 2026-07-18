@@ -37,6 +37,11 @@ services:
   valkey:
     image: valkey/valkey:8-bookworm
     restart: unless-stopped
+    ports:
+      # Published for local dev (running apps/worker or apps/api directly on
+      # the host, outside compose). Not required by any container — safe to
+      # remove for a locked-down deploy, same rationale as postgres above.
+      - "${VALKEY_PORT:-6379}:6379"
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}/cache/valkey:/data
 

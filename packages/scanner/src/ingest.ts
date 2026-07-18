@@ -1,8 +1,8 @@
 import path from "node:path";
 
-import { Prisma, PrismaClient, type ContentProfile } from "@hokago/db";
+import { PrismaClient, type ContentProfile } from "@hokago/db";
 
-import { resolveArtwork } from "./artwork.js";
+import { resolveArtwork, upsertArtworkDescriptor } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
 import { parseSeasonDirName } from "./constants.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
@@ -97,10 +97,21 @@ export interface ArtworkNeeded {
   durationMs: number | null;
 }
 
+/** A MOVIE or SERIES item whose network-provider metadata (§8, §19 Step 6) hasn't been resolved yet. */
+export interface MetadataNeeded {
+  mediaItemId: string;
+  libraryId: string;
+  kind: "MOVIE" | "SERIES";
+  title: string;
+  year: number | null;
+}
+
 interface LeafResult {
   mediaItemId: string;
   artworkStored: number;
   needsArtwork: ArtworkNeeded | null;
+  title: string;
+  year: number | null;
 }
 
 async function ingestLeafItem(
@@ -177,6 +188,12 @@ async function ingestLeafItem(
     await db.mediaItem.update({ where: { id: mediaItemId }, data: { runtimeMs: probe.durationMs } });
   }
 
+  // Local NFO always outranks network providers (§8.3 resolution chain) — only
+  // fill overview when still unset, so a later provider fetch never clobbers it.
+  if (nfo?.plot) {
+    await db.mediaItem.updateMany({ where: { id: mediaItemId, overview: null }, data: { overview: nfo.plot } });
+  }
+
   // Probe + fonts + subtitles (§19 Step 5): streams carry HDR gate data
   // (§11.3), subtitle tracks carry the burn-in flag (§13.4), fonts land in
   // the shared hash-deduped store regardless of which of the three sources
@@ -225,11 +242,13 @@ async function ingestLeafItem(
       mediaItemId,
       artworkStored: 0,
       needsArtwork: { mediaItemId, filePath: file.path, dir, durationMs: probe?.durationMs ?? null },
+      title,
+      year: parsed.year,
     };
   }
 
   const artworkStored = await storeArtwork(db, mediaItemId, dir, file.path, probe?.attachedPics ?? [], probe?.durationMs ?? null);
-  return { mediaItemId, artworkStored, needsArtwork: null };
+  return { mediaItemId, artworkStored, needsArtwork: null, title, year: parsed.year };
 }
 
 /** Resolves and upserts artwork for one media item — shared by inline (CLI) and queued (worker) paths. */
@@ -244,35 +263,7 @@ export async function storeArtwork(
   const artworkList = await resolveArtwork(dir, filePath, attachedPics, durationMs);
   let artworkStored = 0;
   for (const art of artworkList) {
-    await db.artwork
-      .upsert({
-        where: { mediaItemId_kind_source: { mediaItemId, kind: art.kind, source: art.source } },
-        create: {
-          mediaItemId,
-          kind: art.kind,
-          source: art.source,
-          priority: art.priority,
-          bytesPath: art.bytesPath,
-          hash: art.hash,
-          sizeBytes: art.sizeBytes,
-          meta: (art.meta as Prisma.InputJsonValue) ?? undefined,
-        },
-        update: {
-          bytesPath: art.bytesPath,
-          hash: art.hash,
-          sizeBytes: art.sizeBytes,
-          meta: (art.meta as Prisma.InputJsonValue) ?? undefined,
-        },
-      })
-      .catch(() => {});
-
-    // Self-healing (§8.7.4, §3.4): a higher-priority source resolved this
-    // scan (e.g. a real poster.jpg dropped in beside a GENERATED fallback)
-    // permanently supersedes whatever this kind previously resolved to.
-    // Without this, the old row survives forever under its own [kind,
-    // source] key since the upsert above only ever touches this scan's
-    // winning source.
-    await db.artwork.deleteMany({ where: { mediaItemId, kind: art.kind, source: { not: art.source } } });
+    await upsertArtworkDescriptor(db, mediaItemId, art);
     artworkStored += 1;
   }
   return artworkStored;
@@ -285,6 +276,8 @@ export interface IngestOptions {
   onDirectoryComplete?: (dir: string) => Promise<void>;
   /** When set, artwork is not resolved inline — each file needing it is handed to this callback instead (queued). */
   onArtworkNeeded?: (job: ArtworkNeeded) => Promise<void>;
+  /** Called for every MOVIE/SERIES item so network-provider metadata (§8, §19 Step 6) can be queued. */
+  onMetadataNeeded?: (job: MetadataNeeded) => Promise<void>;
   /** Forks the parser registry (§9.3). Defaults to the library's own profile when omitted. */
   contentProfile?: ContentProfile;
 }
@@ -333,6 +326,7 @@ export async function ingestLibrary(
         );
         summary.artworkStored += result.artworkStored;
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
+        await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
         summary.moviesCreated += 1;
       }
       await opts.onDirectoryComplete?.(dir);
@@ -376,6 +370,11 @@ export async function ingestLibrary(
       if (result) {
         summary.artworkStored += result.artworkStored;
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
+        // Outliers are movies (§7.3 the Mugen Train shape) — §8.7.6 tries the
+        // anime provider chain for these regardless of the library's profile.
+        if (outliers.includes(file.path)) {
+          await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
+        }
       }
       const parsedTitle = parseFilename(path.basename(file.path), profile).title;
       if (parsedTitle && parsedTitle.toLowerCase() === seriesTitle.toLowerCase()) agreeingTitles += 1;
@@ -390,6 +389,7 @@ export async function ingestLibrary(
     await syncEvidenceAndConfidence(db, series.id, [
       { signalType: "FOLDER_NAME", source: seriesDir, value: { title: seriesTitle } },
     ]);
+    await opts.onMetadataNeeded?.({ mediaItemId: series.id, libraryId, kind: "SERIES", title: seriesTitle, year: null });
     await syncEvidenceAndConfidence(db, season.id, [
       { signalType: "FOLDER_NAME", source: dir, value: { title: `Season ${seasonNumber}` } },
       {

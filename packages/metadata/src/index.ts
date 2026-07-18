@@ -32,7 +32,8 @@ export type SignalType =
   | "PROBE_RUNTIME"
   | "FILENAME_PARSE"
   | "TRACK_LANGUAGE"
-  | "RESOLUTION_CODEC";
+  | "RESOLUTION_CODEC"
+  | "PROVIDER_MATCH";
 
 export interface MetadataQuery {
   title: string;
@@ -51,9 +52,55 @@ export interface MetadataSignal {
   weight: number;
 }
 
+export type MetadataTitleType = "PRIMARY" | "ROMAJI" | "ENGLISH" | "NATIVE" | "SYNONYM";
+
+export interface MetadataTitle {
+  type: MetadataTitleType;
+  value: string;
+}
+
+export type MetadataLifecycleState = "ENDED" | "ONGOING" | "UNKNOWN" | "UNRELEASED";
+
+export interface MetadataArtworkCandidate {
+  kind: "POSTER" | "BACKDROP" | "STILL" | "BANNER" | "LOGO" | "THUMB";
+  /** Remote URL — the provider client fetches these bytes once; never stored as a URL (§1.1). */
+  url: string;
+}
+
+/**
+ * One candidate identity match from a provider's search — not yet accepted.
+ * The resolver runs its own title+year sanity check (§8.7.2) before treating
+ * this as a real match; the provider does no matching-confidence math itself.
+ */
+export interface MetadataMatch {
+  providerId: string;
+  title: string;
+  year?: number;
+  overview?: string;
+  premieredAt?: string;
+  lifecycleState?: MetadataLifecycleState;
+  titles?: MetadataTitle[];
+  artwork?: MetadataArtworkCandidate[];
+}
+
+export interface MetadataSearchOptions {
+  /** Last-Modified value from a prior fetch (§8.3), sent back as If-Modified-Since — only Jikan currently honors this. */
+  lastModified?: string;
+  /** This mediaItem's existing providerId from a prior match — lets a provider revalidate directly instead of re-searching by title (§8.3; TVmaze's /updates/shows). */
+  existingProviderId?: string;
+}
+
+export interface MetadataSearchResult {
+  matches: MetadataMatch[];
+  /** New Last-Modified value to persist for next time, if the provider's transport exposes one. */
+  lastModified?: string;
+  /** True when the server confirmed no change via 304 — matches is empty and should be ignored. */
+  notModified?: boolean;
+}
+
 export interface MetadataProvider {
   readonly provider: ProviderName;
-  search(query: MetadataQuery): Promise<MetadataSignal[]>;
+  search(query: MetadataQuery, options?: MetadataSearchOptions): Promise<MetadataSearchResult>;
 }
 
 /**

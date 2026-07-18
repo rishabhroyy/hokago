@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { Prisma, type PrismaClient } from "@hokago/db";
+
 import { ARTWORK_SOURCE_PRIORITY, SIDECAR_ART_FILENAMES, SIDECAR_ART_SUFFIXES } from "./constants.js";
 import { composePoster, selectBestFrame } from "./generate-art.js";
 import { extractAttachedPic, type AttachedPic } from "./probe.js";
@@ -28,7 +30,7 @@ function artworkStoreDir(): string {
 }
 
 /** Content-addressed store under /config/artwork — same bytes, same path, idempotent (§9.6.1). */
-async function storeBytes(bytes: Buffer, ext: string): Promise<{ bytesPath: string; hash: string }> {
+export async function storeBytes(bytes: Buffer, ext: string): Promise<{ bytesPath: string; hash: string }> {
   const hash = createHash("sha256").update(bytes).digest("hex");
   const dir = artworkStoreDir();
   await mkdir(dir, { recursive: true });
@@ -157,6 +159,44 @@ export async function generateArt(filePath: string, durationMs: number): Promise
     await rm(frame.path, { force: true }).catch(() => {});
   }
   return results;
+}
+
+/**
+ * Upsert one artwork candidate and self-heal the [mediaItemId, kind] slot
+ * (§8.7.4, §3.4): a higher-priority source resolved this run permanently
+ * supersedes whatever this kind previously resolved to. Shared by the
+ * local-file resolution path (`storeArtwork` in ingest.ts) and the network
+ * provider path (`resolveMetadata` in metadata.ts) so the self-healing
+ * `deleteMany` logic exists in exactly one place.
+ */
+export async function upsertArtworkDescriptor(
+  db: PrismaClient,
+  mediaItemId: string,
+  art: ArtworkDescriptor,
+): Promise<void> {
+  await db.artwork
+    .upsert({
+      where: { mediaItemId_kind_source: { mediaItemId, kind: art.kind, source: art.source } },
+      create: {
+        mediaItemId,
+        kind: art.kind,
+        source: art.source,
+        priority: art.priority,
+        bytesPath: art.bytesPath,
+        hash: art.hash,
+        sizeBytes: art.sizeBytes,
+        meta: (art.meta as Prisma.InputJsonValue) ?? undefined,
+      },
+      update: {
+        bytesPath: art.bytesPath,
+        hash: art.hash,
+        sizeBytes: art.sizeBytes,
+        meta: (art.meta as Prisma.InputJsonValue) ?? undefined,
+      },
+    })
+    .catch(() => {});
+
+  await db.artwork.deleteMany({ where: { mediaItemId, kind: art.kind, source: { not: art.source } } });
 }
 
 /** Full artwork resolution for one media item: sidecar > embedded > generated, in priority order. */

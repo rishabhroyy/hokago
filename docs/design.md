@@ -130,7 +130,7 @@ These override local convenience.
 2. **Degrade, never error.** The user never sees a provider name, a rate-limit message, a 429, or a retry button. Failures are invisible and retried in the background.
 3. **Never block, but stay fixable.** Everything imports and plays immediately, even at low confidence. Nothing is quarantined. But every match is correctable, always, everywhere — an uncorrectable wrong match is the worst outcome in the product.
 4. **Self-healing.** When new evidence arrives (dataset refresh, provider returns, file renamed, NFO appears), low-confidence items are silently re-resolved. The library gets more correct over time without user action.
-5. **Fetch once.** Every byte of metadata and artwork stored locally on first fetch. Artwork downloaded, never hotlinked. Re-fetch only on lifecycle TTL or an ETag/incremental signal.
+5. **Fetch once.** Every byte of metadata and artwork stored locally on first fetch. Artwork downloaded, never hotlinked. Re-fetch only on lifecycle TTL or a Last-Modified/incremental signal.
 6. **Crash-only.** Any process can be killed at any moment without data loss or corruption. State lives in Postgres, never in worker memory. §9.6.
 7. **LLM-buildable.** One language, conventional frameworks, explicit over magic, schema as source of truth. §5.
 
@@ -319,7 +319,7 @@ Confidence is **derived, never stored as a magic number**. Makes re-resolution c
 ### 7.6 Metadata cache
 
 ```
-metadata_cache  provider, external_id, payload (jsonb), etag, fetched_at,
+metadata_cache  provider, external_id, payload (jsonb), last_modified, fetched_at,
                 ttl_policy, lifecycle_state
 artwork         id, entity_id, kind, source, bytes_path, width, height, hash
 ```
@@ -386,7 +386,7 @@ Local image assets always beat NFO-referenced URLs (Plex's rule; it's right).
 | Unmatched / low confidence | scheduled retry w/ backoff |
 
 Use the cheap paths:
-- **Jikan** returns an ETag per request → `If-None-Match` → 304, zero work.
+- **Jikan** returns a `Last-Modified` header → send it back as `If-Modified-Since` next time → 304, zero work.
 - **TVmaze** has an incremental updates endpoint → poll *that* once to learn which of 400 shows changed, instead of polling 400 shows. `?embed=` folds cast/episodes/seasons into one response — the rate-limit survival mechanism.
 - **TVmaze** limits on the backend but not the edge cache → cache-friendly patterns are literally cheaper.
 
@@ -944,7 +944,7 @@ Same two structural problems, weaker form:
 3. **Job infrastructure done right** (§9.6). Reconciler, idempotency, checkpointing, graceful shutdown, admin queue UI. *Do this early — retrofitting fault tolerance is a rewrite.*
 4. **Parser registry + evidence engine + resolution + collections** (§7.3).
 5. **Probe + fonts + subtitles + artwork store.** Eager font extraction, `.mks`, `fonts/`, `/config/fonts`, PGS flagging.
-6. **Keyless network providers as enrichment.** TVmaze, AniList/Jikan, Wikidata bridge. Per-provider limiters, ETag/incremental, lifecycle TTL, self-healing.
+6. **Keyless network providers as enrichment.** TVmaze, AniList/Jikan, Wikidata bridge. Per-provider limiters, Last-Modified/incremental, lifecycle TTL, self-healing.
 7. **Playback decision engine + on-demand HLS + seek-restart.**
 8. **Player.** Vidstack + JASSUB + fonts + track switching + COOP/COEP. *First moment it feels real.*
 9. **Auth, profiles, watch state, continue-watching.** WS layer lands here.
@@ -994,7 +994,7 @@ Evidence behind the decisions. Verify anything load-bearing before building on i
 ### Metadata providers
 - **AniList** — free GraphQL, no key. 90/min + burst limiter; **currently degraded to 30/min**. 1-min timeout on breach. Explicitly does not guarantee availability; has disabled the API entirely during outages; may IP-block. Exposes relationships (prequels/sequels/side stories) → collection graph. Format enum `TV|MOVIE|OVA|ONA|SPECIAL`. → `docs.anilist.co/guide/rate-limiting`, `/guide/considerations`
 - **TVmaze** — anonymous, free, CORS-enabled. CC BY-SA 4.0. ≥20 calls/10s per IP. Backend-limited but not edge-cache-limited. `?embed=` folds cast/episodes/seasons into one response. Incremental updates endpoint. Resolves by TVRage/TheTVDB/IMDb ID. Images `medium`/`original`, poster for shows/people, landscape for episodes; hotlinking permitted (we decline). → `tvmaze.com/api`, `apis.io/providers/tvmaze`
-- **Jikan** — unofficial MAL API; scrapes MAL. No key. Self-hostable: `docker run jikanme/jikan-rest`. **ETag per request** → `If-None-Match` → 304. 24h cache. Can be limited by MAL upstream. Read-only. → `docs.api.jikan.moe`
+- **Jikan** — unofficial MAL API; scrapes MAL. No key. Self-hostable: `docker run jikanme/jikan-rest`. **`Last-Modified` header per request** → send back as `If-Modified-Since` → 304. 24h cache. Can be limited by MAL upstream. Read-only. → `docs.api.jikan.moe`
 - **TheTVDB** — v4 keys per-project; negotiated contract (generally requiring attribution) or user-supported requiring each end user to hold a **$12/yr subscription + PIN**. → **excluded.** `github.com/thetvdb/v4-api`
 - **TMDB** — free key required. Jellyfin ships one project-wide key public in their repo; TMDB staff never clearly blessed it; Jellyfin maintainers noted the Trakt fix was revoking the project key. → **excluded from core; optional user-supplied only.** `github.com/jellyfin/jellyfin/pull/10737`
 - **IMDb datasets** — `datasets.imdbws.com`, daily, TSV, no key. **Personal/non-commercial only.** No images. ~6.2M titles / 9.6M people. `isAdult` provided. → `developer.imdb.com/non-commercial-datasets`

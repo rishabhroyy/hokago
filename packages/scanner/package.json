@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./ingest": "./dist/ingest.js",
+    "./metadata": "./dist/metadata.js",
     "./probe": "./dist/probe.js",
     "./child-registry": "./dist/child-registry.js"
   },
@@ -15,6 +16,8 @@
   },
   "dependencies": {
     "@hokago/db": "workspace:*",
+    "@hokago/metadata": "workspace:*",
+    "@hokago/providers": "workspace:*",
     "anitomy": "^0.0.35",
     "fast-xml-parser": "^4.5.1"
   }

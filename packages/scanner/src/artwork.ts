@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { ARTWORK_SOURCE_PRIORITY, SIDECAR_ART_FILENAMES } from "./constants.js";
+import { ARTWORK_SOURCE_PRIORITY, SIDECAR_ART_FILENAMES, SIDECAR_ART_SUFFIXES } from "./constants.js";
 import { composePoster, selectBestFrame } from "./generate-art.js";
 import { extractAttachedPic, type AttachedPic } from "./probe.js";
 
@@ -46,13 +46,30 @@ async function writeIfMissing(filePath: string, bytes: Buffer): Promise<void> {
 }
 
 /** Discovers Kodi + Radarr/Sonarr sidecar art files in a directory (§10.1). */
-export async function findSidecarArt(dir: string): Promise<ArtworkDescriptor[]> {
+export async function findSidecarArt(dir: string, filePath?: string): Promise<ArtworkDescriptor[]> {
   const results: ArtworkDescriptor[] = [];
+  const foundKinds = new Set<ArtworkKind>();
+
+  // Kodi's per-file <basename>-poster.jpg is checked first (more specific —
+  // matters when several movies share one folder), then Radarr/Sonarr's
+  // plain, folder-wide poster.jpg as fallback (§10.1, §8.6). At most one
+  // sidecar file wins per kind.
+  const candidates: { path: string; kind: ArtworkKind }[] = [];
+  if (filePath) {
+    const base = path.basename(filePath, path.extname(filePath));
+    for (const { suffix, kind } of SIDECAR_ART_SUFFIXES) {
+      candidates.push({ path: path.join(dir, `${base}${suffix}`), kind });
+    }
+  }
   for (const { file, kind } of SIDECAR_ART_FILENAMES) {
-    const candidate = path.join(dir, file);
+    candidates.push({ path: path.join(dir, file), kind });
+  }
+
+  for (const { path: candidate, kind } of candidates) {
+    if (foundKinds.has(kind)) continue;
     try {
       const bytes = await readFile(candidate);
-      const ext = path.extname(file);
+      const ext = path.extname(candidate);
       const { bytesPath, hash } = await storeBytes(bytes, ext);
       results.push({
         kind,
@@ -63,8 +80,9 @@ export async function findSidecarArt(dir: string): Promise<ArtworkDescriptor[]> 
         sizeBytes: bytes.length,
         meta: null,
       });
+      foundKinds.add(kind);
     } catch {
-      // not present — try the next filename
+      // not present — try the next candidate
     }
   }
   return results;
@@ -148,7 +166,7 @@ export async function resolveArtwork(
   attachedPics: AttachedPic[],
   durationMs: number | null,
 ): Promise<ArtworkDescriptor[]> {
-  const sidecar = await findSidecarArt(dir);
+  const sidecar = await findSidecarArt(dir, filePath);
   const embedded = sidecar.some((a) => a.kind === "POSTER") ? null : await extractEmbeddedArt(filePath, attachedPics);
 
   const have = new Set(sidecar.map((a) => a.kind));

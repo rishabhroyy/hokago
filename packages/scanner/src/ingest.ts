@@ -6,10 +6,12 @@ import { resolveArtwork } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
 import { parseSeasonDirName } from "./constants.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
+import { extractFonts } from "./fonts.js";
 import { partialHash } from "./hash.js";
 import { findNfoForFile } from "./nfo.js";
 import { parseFilename } from "./parse-filename.js";
 import { probeFile, type ProbeResult } from "./probe.js";
+import { syncMediaStreams, syncSubtitleTracks } from "./streams.js";
 import { type DiscoveredFile, groupByDirectory, walkVideoFiles } from "./walk.js";
 
 export interface IngestSummary {
@@ -161,16 +163,27 @@ async function ingestLeafItem(
     probeFailed: probe === null,
   };
 
+  let mediaFileId: string;
   if (existingFile) {
     // Update by id, not by path — the path itself may be what changed (rename/move).
-    await db.mediaFile.update({ where: { id: existingFile.id }, data: fileFields });
+    mediaFileId = existingFile.id;
+    await db.mediaFile.update({ where: { id: mediaFileId }, data: fileFields });
   } else {
-    await db.mediaFile.create({ data: { mediaItemId, ...fileFields } });
+    const created = await db.mediaFile.create({ data: { mediaItemId, ...fileFields } });
+    mediaFileId = created.id;
   }
 
   if (probe?.durationMs) {
     await db.mediaItem.update({ where: { id: mediaItemId }, data: { runtimeMs: probe.durationMs } });
   }
+
+  // Probe + fonts + subtitles (§19 Step 5): streams carry HDR gate data
+  // (§11.3), subtitle tracks carry the burn-in flag (§13.4), fonts land in
+  // the shared hash-deduped store regardless of which of the three sources
+  // they came from (§1.1, §13.2).
+  await syncMediaStreams(db, mediaFileId, probe?.streams ?? []);
+  await syncSubtitleTracks(db, mediaFileId, probe?.streams ?? []);
+  await extractFonts(db, mediaFileId, file.path, dir);
 
   const evidence: EvidenceInput[] = [{ signalType: "FOLDER_NAME", source: dir, value: { title } }];
   if (parsed.episode !== null || parsed.title) {
@@ -252,6 +265,14 @@ export async function storeArtwork(
         },
       })
       .catch(() => {});
+
+    // Self-healing (§8.7.4, §3.4): a higher-priority source resolved this
+    // scan (e.g. a real poster.jpg dropped in beside a GENERATED fallback)
+    // permanently supersedes whatever this kind previously resolved to.
+    // Without this, the old row survives forever under its own [kind,
+    // source] key since the upsert above only ever touches this scan's
+    // winning source.
+    await db.artwork.deleteMany({ where: { mediaItemId, kind: art.kind, source: { not: art.source } } });
     artworkStored += 1;
   }
   return artworkStored;

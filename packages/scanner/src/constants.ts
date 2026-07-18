@@ -22,6 +22,16 @@ export const SIDECAR_ART_FILENAMES: { file: string; kind: "POSTER" | "BACKDROP" 
   { file: "logo.png", kind: "LOGO" },
 ];
 
+// folder.jpg/background.jpg are folder-wide only — no per-file equivalent, so
+// Kodi's <video-basename>-poster.jpg convention is derived from the same
+// list rather than hand-maintained separately (§10.1).
+const FOLDER_ONLY_ART_FILENAMES = new Set(["folder.jpg", "background.jpg"]);
+export const SIDECAR_ART_SUFFIXES: { suffix: string; kind: "POSTER" | "BACKDROP" | "BANNER" | "LOGO" }[] =
+  SIDECAR_ART_FILENAMES.filter(({ file }) => !FOLDER_ONLY_ART_FILENAMES.has(file)).map(({ file, kind }) => ({
+    suffix: `-${file}`,
+    kind,
+  }));
+
 // Lower wins (Artwork.priority, §7.6). GENERATED always loses to everything.
 export const ARTWORK_SOURCE_PRIORITY: Record<string, number> = {
   LOCAL_SIDECAR: 0,

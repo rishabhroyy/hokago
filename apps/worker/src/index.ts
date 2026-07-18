@@ -19,7 +19,7 @@ import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
 import { probeFile } from "@hokago/scanner/probe";
 import { killTrackedChildren, trackedPidCount } from "@hokago/scanner/child-registry";
-import { AniListProvider, JikanProvider, TvMazeProvider } from "@hokago/providers";
+import { AniListProvider, JikanProvider, TvMazeProvider, WikidataBridge } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
@@ -44,7 +44,10 @@ const METADATA_PROVIDERS: Record<string, MetadataProvider> = {
   TVMAZE: new TvMazeProvider(),
   ANILIST: new AniListProvider(),
   MAL: new JikanProvider(),
-};
+} as const;
+
+const wikidataBridge = new WikidataBridge();
+
 const METADATA_QUEUE_NAME: Record<string, string> = {
   TVMAZE: QUEUE_NAMES.METADATA_TVMAZE,
   ANILIST: QUEUE_NAMES.METADATA_ANILIST,
@@ -53,15 +56,35 @@ const METADATA_QUEUE_NAME: Record<string, string> = {
 const metadataQueues: Record<string, Queue<MetadataJobData>> = {
   TVMAZE: new Queue<MetadataJobData>(QUEUE_NAMES.METADATA_TVMAZE, {
     connection,
-    defaultJobOptions: { attempts: JOB_FAILURE_THRESHOLD, backoff: { type: "exponential", delay: 2000 } },
+    defaultJobOptions: {
+      attempts: JOB_FAILURE_THRESHOLD,
+      backoff: { type: "exponential", delay: 2000 },
+      // Postgres (ExternalId/JobFailure), not this terminal job's Redis key, is
+      // the source of truth for "does this item still need resolving" (§9.6.2
+      // self-healing, non-negotiable #9). Without this, the deterministic jobId
+      // (metadataJobId) permanently blocks any later re-enqueue for the same
+      // provider+item once the first attempt reaches a terminal state.
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
   }),
   ANILIST: new Queue<MetadataJobData>(QUEUE_NAMES.METADATA_ANILIST, {
     connection,
-    defaultJobOptions: { attempts: JOB_FAILURE_THRESHOLD, backoff: { type: "exponential", delay: 2000 } },
+    defaultJobOptions: {
+      attempts: JOB_FAILURE_THRESHOLD,
+      backoff: { type: "exponential", delay: 2000 },
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
   }),
   MAL: new Queue<MetadataJobData>(QUEUE_NAMES.METADATA_MAL, {
     connection,
-    defaultJobOptions: { attempts: JOB_FAILURE_THRESHOLD, backoff: { type: "exponential", delay: 2000 } },
+    defaultJobOptions: {
+      attempts: JOB_FAILURE_THRESHOLD,
+      backoff: { type: "exponential", delay: 2000 },
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
   }),
 };
 
@@ -152,7 +175,13 @@ function makeProcessMetadata(providerName: string) {
     try {
       const provider = METADATA_PROVIDERS[providerName];
       if (!provider) return;
-      const matched = await resolveMetadataStep(db, { mediaItemId, libraryId, kind, title, year }, providerName, provider);
+      const matched = await resolveMetadataStep(
+        db,
+        { mediaItemId, libraryId, kind, title, year },
+        providerName,
+        provider,
+        wikidataBridge,
+      );
       await db.jobFailure.deleteMany({ where: { mediaItemId, jobType } });
       if (!matched) {
         const library = await db.library.findUniqueOrThrow({ where: { id: libraryId } });

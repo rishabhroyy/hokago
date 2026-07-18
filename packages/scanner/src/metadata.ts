@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { Prisma, type PrismaClient, type LifecycleState, type TitleType } from "@hokago/db";
 import type {
+  MappingSource,
   MetadataArtworkCandidate,
   MetadataLifecycleState,
   MetadataMatch,
@@ -165,12 +166,50 @@ async function refreshMetadataCacheExpiry(
   });
 }
 
+/**
+ * Wikidata is an ID bridge only (§8.2: "✅ (ID bridge)", not descriptive/artwork)
+ * — it turns this provider's own item ID into an IMDb ID. `IdMapping` is the
+ * dataset-level cache (reusable across any item sharing this provider+ID, so a
+ * second item never re-queries Wikidata for the same show); `ExternalId` is
+ * what the rest of the pipeline actually reads. Best-effort: Wikidata being
+ * unreachable must never fail the real match that already succeeded above.
+ */
+async function bridgeToWikidata(
+  db: PrismaClient,
+  mediaItemId: string,
+  providerName: string,
+  providerId: string,
+  bridge: MappingSource | undefined,
+): Promise<void> {
+  if (!bridge) return;
+  try {
+    const existing = await db.idMapping.findFirst({
+      where: { sourceProvider: providerName, sourceId: providerId, targetProvider: "IMDB" },
+    });
+    const mapping = existing ?? (await bridge.mappingsFor(providerName, providerId))[0];
+    if (!mapping) return;
+    if (!existing) {
+      await db.idMapping.create({ data: { ...mapping, datasetSource: bridge.datasetSource } }).catch(() => {});
+    }
+    await db.externalId
+      .upsert({
+        where: { mediaItemId_provider: { mediaItemId, provider: "IMDB" } },
+        create: { mediaItemId, provider: "IMDB", providerId: mapping.targetId, confidence: 0.9 },
+        update: { providerId: mapping.targetId },
+      })
+      .catch(() => {});
+  } catch {
+    // degrade, never error — Wikidata is enrichment, never a dependency
+  }
+}
+
 async function applyMatch(
   db: PrismaClient,
   target: MetadataNeeded,
   providerName: string,
   match: MetadataMatch,
   lastModified: string | undefined,
+  wikidataBridge: MappingSource | undefined,
 ): Promise<void> {
   await db.externalId
     .upsert({
@@ -184,6 +223,7 @@ async function applyMatch(
   await fillDescriptiveFields(db, target.mediaItemId, match);
   await fetchAndStoreProviderArtwork(db, target.mediaItemId, match.artwork);
   await upsertMetadataCache(db, providerName, match, lastModified);
+  await bridgeToWikidata(db, target.mediaItemId, providerName, match.providerId, wikidataBridge);
 }
 
 /**
@@ -204,6 +244,7 @@ export async function resolveMetadataStep(
   target: MetadataNeeded,
   providerName: string,
   provider: MetadataProvider,
+  wikidataBridge?: MappingSource,
 ): Promise<boolean> {
   const query: MetadataQuery = { title: target.title, year: target.year ?? undefined, kind: target.kind };
 
@@ -219,14 +260,17 @@ export async function resolveMetadataStep(
       const isFresh = cached.expiresAt === null || cached.expiresAt > new Date();
       if (isFresh) return true; // cache hit, zero network (§8.3)
 
-      const result = await provider.search(query, cached.lastModified ? { lastModified: cached.lastModified } : undefined);
+      const result = await provider.search(query, {
+        existingProviderId: existing.providerId,
+        lastModified: cached.lastModified ?? undefined,
+      });
       if (result.notModified) {
         await refreshMetadataCacheExpiry(db, providerName, existing.providerId, cached.lifecycleState);
         return true;
       }
       const revalidated = findAcceptedMatch(query, result.matches);
       if (revalidated) {
-        await applyMatch(db, target, providerName, revalidated, result.lastModified);
+        await applyMatch(db, target, providerName, revalidated, result.lastModified, wikidataBridge);
         return true;
       }
       return false; // no longer confirmed — caller tries the next provider
@@ -236,6 +280,6 @@ export async function resolveMetadataStep(
   const result = await provider.search(query);
   const match = findAcceptedMatch(query, result.matches);
   if (!match) return false;
-  await applyMatch(db, target, providerName, match, result.lastModified);
+  await applyMatch(db, target, providerName, match, result.lastModified, wikidataBridge);
   return true;
 }

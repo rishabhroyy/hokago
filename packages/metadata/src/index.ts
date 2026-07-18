@@ -86,6 +86,8 @@ export interface MetadataMatch {
 export interface MetadataSearchOptions {
   /** Last-Modified value from a prior fetch (§8.3), sent back as If-Modified-Since — only Jikan currently honors this. */
   lastModified?: string;
+  /** This mediaItem's existing providerId from a prior match — lets a provider revalidate directly instead of re-searching by title (§8.3; TVmaze's /updates/shows). */
+  existingProviderId?: string;
 }
 
 export interface MetadataSearchResult {

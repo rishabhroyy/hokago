@@ -60,14 +60,4 @@ export async function registerProfileRoutes(app: FastifyInstance): Promise<void>
     await db.profile.delete({ where: { id: req.params.id } });
     return reply.code(204).send();
   });
-
-  // Theme tokens aren't sensitive (colors/fonts) — left unauthenticated so the
-  // player/profile-select screens can resolve a profile's theme before login
-  // state is necessarily wired up client-side. Full switcher UI is Step 10;
-  // this is just what makes Profile.themeId take effect at all.
-  app.get<{ Params: { id: string } }>("/themes/:id", async (req, reply) => {
-    const theme = await db.theme.findUnique({ where: { id: req.params.id } });
-    if (!theme) return reply.code(404).send({ error: "theme not found" });
-    return theme;
-  });
 }

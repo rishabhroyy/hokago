@@ -4,6 +4,8 @@ import { cssVarBlock, defaultTheme, type ThemeTokens } from "@hokago/theme";
 
 import "./app.css";
 import { WatchPage } from "./WatchPage";
+import { ThemeDemo } from "./ThemeDemo";
+import { THEME_STYLE_TAG_ID } from "./theme-runtime";
 
 // Non-negotiable #6: every value the page uses comes from theme tokens, not a
 // hardcoded color/font/radius. Full theme switcher UI is Step 10 — this just
@@ -34,18 +36,13 @@ const profileId = params.get("profileId");
 
 const { slug, tokens } = await resolveTokens(profileId);
 const style = document.createElement("style");
+style.id = THEME_STYLE_TAG_ID;
 style.textContent = cssVarBlock(slug, tokens);
 document.head.appendChild(style);
 document.documentElement.dataset.theme = slug;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {mediaFileId ? (
-      <WatchPage mediaFileId={mediaFileId} />
-    ) : (
-      <p style={{ padding: "var(--hk-space-lg)", color: "var(--hk-color-text)" }}>
-        Add <code>?mediaFileId=&lt;id&gt;</code> to the URL.
-      </p>
-    )}
+    {mediaFileId ? <WatchPage mediaFileId={mediaFileId} /> : <ThemeDemo initialSlug={slug} initialTokens={tokens} />}
   </StrictMode>,
 );

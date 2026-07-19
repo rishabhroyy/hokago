@@ -6,9 +6,16 @@ import {
 } from "fastify-type-provider-zod";
 import { HealthResponse } from "@hokago/contract/health";
 import { killTrackedChildren, trackedPidCount } from "@hokago/ffmpeg/child-registry";
+import { PrismaClient } from "@hokago/db";
+import { defaultTheme } from "@hokago/theme";
 import { registerAdminRoutes } from "./admin-routes.js";
 import { registerPlaybackRoutes } from "./playback-routes.js";
 import { registerStaticRoutes } from "./static-routes.js";
+import { registerAuth } from "./auth.js";
+import { registerAuthRoutes } from "./auth-routes.js";
+import { registerProfileRoutes } from "./profile-routes.js";
+import { registerWatchStateRoutes } from "./watch-state-routes.js";
+import { registerPresence } from "./presence.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -19,8 +26,29 @@ app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () =
   version: "0.0.0",
 }));
 
+// Boot reconciler, same spirit as §9.6's job reconciler: the bundled default
+// theme must exist as a real Theme row for any Profile to reference, on every
+// boot, idempotently — not a one-off manual seed step an operator can forget.
+const db = new PrismaClient();
+await db.theme.upsert({
+  where: { slug: defaultTheme.slug },
+  create: {
+    slug: defaultTheme.slug,
+    name: defaultTheme.name,
+    source: "BUILTIN",
+    colorScheme: defaultTheme.colorScheme.toUpperCase() as "DARK" | "LIGHT",
+    tokens: defaultTheme.tokens,
+  },
+  update: { tokens: defaultTheme.tokens, colorScheme: defaultTheme.colorScheme.toUpperCase() as "DARK" | "LIGHT" },
+});
+
+await registerAuth(app);
+await registerPresence(app);
 await registerAdminRoutes(app);
+await registerAuthRoutes(app);
+await registerProfileRoutes(app);
 await registerPlaybackRoutes(app);
+await registerWatchStateRoutes(app);
 await registerStaticRoutes(app);
 
 const port = Number(process.env.PORT ?? 3000);

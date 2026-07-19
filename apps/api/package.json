@@ -10,12 +10,19 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@fastify/jwt": "^10.2.0",
+    "@fastify/websocket": "^11.3.0",
     "@hokago/contract": "workspace:*",
     "@hokago/db": "workspace:*",
     "@hokago/ffmpeg": "workspace:*",
     "@hokago/queue": "workspace:*",
+    "@hokago/theme": "workspace:*",
     "fastify": "^5.2.1",
     "fastify-type-provider-zod": "^4.0.2",
+    "hash-wasm": "^4.12.0",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

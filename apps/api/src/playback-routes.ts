@@ -16,6 +16,7 @@ import {
 } from "@hokago/ffmpeg/device-profile";
 import { buildM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
+import { broadcastPresence } from "./presence.js";
 
 function configDir(): string {
   return process.env.HOKAGO_CONFIG_DIR ?? "./data/config";
@@ -154,6 +155,7 @@ export async function registerPlaybackRoutes(app: FastifyInstance): Promise<void
         deviceProfile: deviceProfile as object,
       },
     });
+    await broadcastPresence();
 
     if (decision.method === "DIRECT_PLAY") {
       return { sessionId: session.id, method: decision.method, reasons: decision.reasons, playlistUrl: null };

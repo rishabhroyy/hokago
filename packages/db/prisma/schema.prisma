@@ -528,6 +528,11 @@ model ExternalId {
   providerId String
   confidence Float  @default(1)
   createdAt  DateTime @default(now())
+  // Last time resolveMetadataStep actually evaluated this (mediaItemId,
+  // provider) pair against the network — matched, revalidated, or checked and
+  // left alone. Drives §3.4 self-healing's "new evidence since we last looked"
+  // and backoff gates; distinct from createdAt (which never changes).
+  lastResolvedAt DateTime @default(now())
 
   @@unique([mediaItemId, provider])
   @@unique([collectionId, provider])

@@ -11,7 +11,13 @@ import type {
 } from "@hokago/metadata";
 import { findAcceptedMatch } from "@hokago/providers";
 
-import { ARTWORK_SOURCE_PRIORITY, ANIME_MOVIE_CARVEOUT, DEFAULT_PROVIDER_ORDER } from "./constants.js";
+import {
+  ARTWORK_SOURCE_PRIORITY,
+  ANIME_MOVIE_CARVEOUT,
+  DEFAULT_PROVIDER_ORDER,
+  SELF_HEALING_CONFIDENCE_THRESHOLD,
+  SELF_HEALING_RETRY_BACKOFF_MS,
+} from "./constants.js";
 import { storeBytes, upsertArtworkDescriptor } from "./artwork.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import type { MetadataNeeded } from "./ingest.js";
@@ -35,17 +41,11 @@ function ttlPolicyAndExpiry(lifecycleState: MetadataLifecycleState): { ttlPolicy
     case "ONGOING":
       return { ttlPolicy: "6h", expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000) };
     default: // UNKNOWN, UNRELEASED — retry-with-backoff surrogate (§8.3)
-      return { ttlPolicy: "24h", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) };
+      return { ttlPolicy: "24h", expiresAt: new Date(Date.now() + SELF_HEALING_RETRY_BACKOFF_MS) };
   }
 }
 
-/**
- * Reconstructs the full evidence snapshot before adding/replacing this
- * provider's PROVIDER_MATCH row — syncEvidenceAndConfidence replaces *all*
- * evidence for a mediaItem in one call, so passing only the new signal would
- * silently wipe every local signal ingest.ts already wrote (§7.5).
- */
-/** syncEvidenceAndConfidence never deletes a PROVIDER_MATCH row it isn't explicitly given, so this only needs its own entry. */
+/** Only ever declares the PROVIDER_MATCH domain, so this never prunes a local signal ingest.ts wrote (§7.5, see ownedTypes doc on syncEvidenceAndConfidence). */
 async function addProviderMatchEvidence(
   db: PrismaClient,
   mediaItemId: string,
@@ -59,7 +59,7 @@ async function addProviderMatchEvidence(
       value: { providerId: match.providerId, title: match.title, year: match.year ?? null },
     },
   ];
-  await syncEvidenceAndConfidence(db, mediaItemId, evidence);
+  await syncEvidenceAndConfidence(db, mediaItemId, evidence, ["PROVIDER_MATCH"]);
 }
 
 /** Title sync (§20.2): each metadata run replaces all titles of a type it just fetched, per (mediaItemId, type). */
@@ -153,6 +153,45 @@ async function upsertMetadataCache(
   });
 }
 
+/**
+ * §3.4 self-healing for the "matched but low-confidence" case (the "never
+ * matched at all" case already retries every scan via the `!existing` branch
+ * below `resolveMetadataStep` — this closes the other half). Bypassing the
+ * cache-freshness shortcut is only worth it when something suggests the match
+ * could improve, never unconditionally on every scan (that would reintroduce
+ * the unbounded-burst problem Step 3's backpressure work solved):
+ *
+ * - New local Evidence recorded since we last actually checked this provider
+ *   → always worth a look (the "NFO appears, file renamed" case named in
+ *   §3.4) — this only fires when something on disk genuinely changed, not on
+ *   every routine scan.
+ * - Confidence still below SELF_HEALING_CONFIDENCE_THRESHOLD with no new
+ *   evidence → still worth a periodic look (the provider's own data could
+ *   have changed), but throttled to the same 24h retry-with-backoff cadence
+ *   already used for UNKNOWN/UNRELEASED lifecycle TTLs, not every scan.
+ */
+async function dueForSelfHealing(db: PrismaClient, mediaItemId: string, lastResolvedAt: Date): Promise<boolean> {
+  const [item, latestEvidence] = await Promise.all([
+    db.mediaItem.findUnique({ where: { id: mediaItemId }, select: { confidence: true } }),
+    db.evidence.findFirst({ where: { mediaItemId }, orderBy: { observedAt: "desc" }, select: { observedAt: true } }),
+  ]);
+  if (!item) return false;
+
+  if (latestEvidence && latestEvidence.observedAt > lastResolvedAt) return true;
+
+  const dueForBackoffRetry = Date.now() - lastResolvedAt.getTime() > SELF_HEALING_RETRY_BACKOFF_MS;
+  return item.confidence < SELF_HEALING_CONFIDENCE_THRESHOLD && dueForBackoffRetry;
+}
+
+async function touchLastResolvedAt(db: PrismaClient, mediaItemId: string, providerName: string): Promise<void> {
+  await db.externalId
+    .update({
+      where: { mediaItemId_provider: { mediaItemId, provider: providerName } },
+      data: { lastResolvedAt: new Date() },
+    })
+    .catch(() => {});
+}
+
 async function refreshMetadataCacheExpiry(
   db: PrismaClient,
   providerName: string,
@@ -214,8 +253,14 @@ async function applyMatch(
   await db.externalId
     .upsert({
       where: { mediaItemId_provider: { mediaItemId: target.mediaItemId, provider: providerName } },
-      create: { mediaItemId: target.mediaItemId, provider: providerName, providerId: match.providerId, confidence: 1 },
-      update: { providerId: match.providerId },
+      create: {
+        mediaItemId: target.mediaItemId,
+        provider: providerName,
+        providerId: match.providerId,
+        confidence: 1,
+        lastResolvedAt: new Date(),
+      },
+      update: { providerId: match.providerId, lastResolvedAt: new Date() },
     })
     .catch(() => {});
   await addProviderMatchEvidence(db, target.mediaItemId, providerName, match);
@@ -236,8 +281,9 @@ async function applyMatch(
  * once" promise (§8.3).
  *
  * Returns true once a match is accepted and fully written (or the existing
- * cache is still fresh) — the chain stops there. Returns false when this
- * provider found nothing acceptable and the caller should try the next one.
+ * cache is still fresh and not due for §3.4 self-healing) — the chain stops
+ * there. Returns false when this provider found nothing acceptable and the
+ * caller should try the next one.
  */
 export async function resolveMetadataStep(
   db: PrismaClient,
@@ -258,7 +304,9 @@ export async function resolveMetadataStep(
     });
     if (cached) {
       const isFresh = cached.expiresAt === null || cached.expiresAt > new Date();
-      if (isFresh) return true; // cache hit, zero network (§8.3)
+      if (isFresh && !(await dueForSelfHealing(db, target.mediaItemId, existing.lastResolvedAt))) {
+        return true; // cache hit, zero network (§8.3)
+      }
 
       const result = await provider.search(query, {
         existingProviderId: existing.providerId,
@@ -266,6 +314,7 @@ export async function resolveMetadataStep(
       });
       if (result.notModified) {
         await refreshMetadataCacheExpiry(db, providerName, existing.providerId, cached.lifecycleState);
+        await touchLastResolvedAt(db, target.mediaItemId, providerName);
         return true;
       }
       const revalidated = findAcceptedMatch(query, result.matches);
@@ -273,6 +322,7 @@ export async function resolveMetadataStep(
         await applyMatch(db, target, providerName, revalidated, result.lastModified, wikidataBridge);
         return true;
       }
+      await touchLastResolvedAt(db, target.mediaItemId, providerName);
       return false; // no longer confirmed — caller tries the next provider
     }
   }

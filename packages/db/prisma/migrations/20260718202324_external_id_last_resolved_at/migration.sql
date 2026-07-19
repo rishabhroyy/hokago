@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "external_ids" ADD COLUMN     "lastResolvedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;

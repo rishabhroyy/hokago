@@ -4,7 +4,7 @@ import { PrismaClient, type ContentProfile } from "@hokago/db";
 
 import { resolveArtwork, upsertArtworkDescriptor } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
-import { parseSeasonDirName } from "./constants.js";
+import { LOCAL_SIGNAL_TYPES, parseSeasonDirName } from "./constants.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import { extractFonts } from "./fonts.js";
 import { partialHash } from "./hash.js";
@@ -221,7 +221,7 @@ async function ingestLeafItem(
   // the two signals disagree about what this item even is. Noisy-OR alone
   // can't express that; it only ever combines weights upward.
   const contradictsKind = kind === "MOVIE" && (parsed.season !== null || parsed.episode !== null);
-  await syncEvidenceAndConfidence(db, mediaItemId, evidence, contradictsKind);
+  await syncEvidenceAndConfidence(db, mediaItemId, evidence, LOCAL_SIGNAL_TYPES, contradictsKind);
 
   for (const uid of nfo?.uniqueIds ?? []) {
     await db.externalId
@@ -386,18 +386,26 @@ export async function ingestLibrary(
     // series would get wiped by the next season directory's sync pass (each
     // sync call is a full snapshot for that MediaItem, not a delta). SEASON
     // is 1:1 with this directory, so it can safely carry both.
-    await syncEvidenceAndConfidence(db, series.id, [
-      { signalType: "FOLDER_NAME", source: seriesDir, value: { title: seriesTitle } },
-    ]);
+    await syncEvidenceAndConfidence(
+      db,
+      series.id,
+      [{ signalType: "FOLDER_NAME", source: seriesDir, value: { title: seriesTitle } }],
+      LOCAL_SIGNAL_TYPES,
+    );
     await opts.onMetadataNeeded?.({ mediaItemId: series.id, libraryId, kind: "SERIES", title: seriesTitle, year: null });
-    await syncEvidenceAndConfidence(db, season.id, [
-      { signalType: "FOLDER_NAME", source: dir, value: { title: `Season ${seasonNumber}` } },
-      {
-        signalType: "SIBLING_CONSISTENCY",
-        source: dir,
-        value: { agreement: dirFiles.length > 0 ? agreeingTitles / dirFiles.length : 0, childCount: dirFiles.length },
-      },
-    ]);
+    await syncEvidenceAndConfidence(
+      db,
+      season.id,
+      [
+        { signalType: "FOLDER_NAME", source: dir, value: { title: `Season ${seasonNumber}` } },
+        {
+          signalType: "SIBLING_CONSISTENCY",
+          source: dir,
+          value: { agreement: dirFiles.length > 0 ? agreeingTitles / dirFiles.length : 0, childCount: dirFiles.length },
+        },
+      ],
+      LOCAL_SIGNAL_TYPES,
+    );
 
     // Collections (§7.3): the Mugen Train shape. clusterByRuntime's outliers
     // are movies that live inside a series folder — link them and the series

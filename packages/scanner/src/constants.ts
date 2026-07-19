@@ -65,6 +65,36 @@ export const DEFAULT_PROVIDER_ORDER: Record<string, { SERIES: string[]; MOVIE: s
 };
 export const ANIME_MOVIE_CARVEOUT = ["ANILIST", "MAL"];
 
+// Every signal type local ingest can produce -- the domain it owns when
+// syncing evidence (§7.5). PROVIDER_MATCH belongs to the metadata resolver
+// instead (see addProviderMatchEvidence in metadata.ts) -- syncEvidenceAndConfidence
+// only prunes a stale row within the calling subsystem's own declared domain,
+// so neither side ever deletes evidence it doesn't own.
+export const LOCAL_SIGNAL_TYPES = [
+  "NFO_UNIQUEID",
+  "EMBEDDED_TAG",
+  "SIBLING_CONSISTENCY",
+  "FOLDER_NAME",
+  "PROBE_RUNTIME",
+  "FILENAME_PARSE",
+  "TRACK_LANGUAGE",
+  "RESOLUTION_CODEC",
+] as const;
+
+// §3.4 self-healing thresholds. Noisy-OR math on the weights above gives a
+// real, non-arbitrary gap to sit in: a bare PROVIDER_MATCH with zero local
+// corroboration computes to exactly 0.9; adding any real signal (even weak
+// FILENAME_PARSE at 0.45) pushes it to ~0.94+, and a normal FOLDER_NAME-
+// corroborated match lands at 0.97; a contradicted match (×0.5 penalty)
+// collapses to ~0.485-0.50. 0.9 sits right at the top of that gap: it flags
+// "provider says so and nothing else backs it up" as still worth another
+// look, while never flagging anything with real corroboration.
+export const SELF_HEALING_CONFIDENCE_THRESHOLD = 0.9;
+// Reuses the same retry-with-backoff cadence already used for UNKNOWN/
+// UNRELEASED MetadataCache TTLs (ttlPolicyAndExpiry) — a low-confidence item
+// with no new local evidence gets rechecked periodically, not every scan.
+export const SELF_HEALING_RETRY_BACKOFF_MS = 24 * 60 * 60 * 1000;
+
 const SEASON_DIR = /^season\s*0*(\d{1,3})$/i;
 const SEASON_DIR_SHORT = /^s0*(\d{1,3})$/i;
 const SPECIALS_DIR = /^specials?$/i;

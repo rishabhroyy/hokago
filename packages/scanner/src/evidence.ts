@@ -52,6 +52,12 @@ export function computeConfidence(rows: { weight: number }[], contradicted = fal
  * fresh one, and vanished sources are removed. All in one transaction so a
  * crash mid-sync can never leave a MediaItem with zero evidence rows.
  *
+ * `ownedTypes` bounds pruning to the calling subsystem's own domain: local
+ * ingest syncs every `LOCAL_SIGNAL_TYPES` entry together (so a genuinely
+ * vanished NFO/tag/etc. is correctly dropped), while the metadata resolver
+ * syncs only `["PROVIDER_MATCH"]` — each call only ever deletes stale rows
+ * within the type(s) it declares, never a row owned by the other subsystem.
+ *
  * Shared by leaf items (MOVIE/EPISODE) and containers (SERIES/SEASON) —
  * container-level confidence was the Step 2 gap this closes (§19 Step 4).
  */
@@ -59,8 +65,10 @@ export async function syncEvidenceAndConfidence(
   db: PrismaClient,
   mediaItemId: string,
   evidence: EvidenceInput[],
+  ownedTypes: readonly SignalType[],
   contradicted = false,
 ): Promise<number> {
+  const owned = new Set<SignalType>(ownedTypes);
   const finalRows = await db.$transaction(async (tx) => {
     const existing = await tx.evidence.findMany({ where: { mediaItemId } });
     const existingByKey = new Map(existing.map((row) => [`${row.signalType}::${row.source}`, row]));
@@ -94,12 +102,11 @@ export async function syncEvidenceAndConfidence(
       seenIds.add(created.id);
     }
 
-    // PROVIDER_MATCH rows belong to a separate subsystem (the metadata
-    // pipeline) from whichever caller is syncing here (e.g. a local rescan) —
-    // never delete one just because this caller's snapshot doesn't mention
-    // it. A provider entry is only ever replaced by passing the same
-    // signalType+source key back in, which goes through the update path above.
-    const stale = existing.filter((row) => !seenIds.has(row.id) && row.signalType !== "PROVIDER_MATCH");
+    // Only prune within this caller's own declared domain (see ownedTypes
+    // doc above) — a row of a type this call doesn't own belongs to a
+    // different subsystem and must never be deleted just because this
+    // caller's snapshot doesn't mention it.
+    const stale = existing.filter((row) => !seenIds.has(row.id) && owned.has(row.signalType));
     if (stale.length > 0) {
       await tx.evidence.deleteMany({ where: { id: { in: stale.map((row) => row.id) } } });
     }

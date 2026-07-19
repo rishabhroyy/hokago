@@ -8,6 +8,7 @@ import { HealthResponse } from "@hokago/contract/health";
 import { killTrackedChildren, trackedPidCount } from "@hokago/ffmpeg/child-registry";
 import { registerAdminRoutes } from "./admin-routes.js";
 import { registerPlaybackRoutes } from "./playback-routes.js";
+import { registerStaticRoutes } from "./static-routes.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -20,6 +21,7 @@ app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () =
 
 await registerAdminRoutes(app);
 await registerPlaybackRoutes(app);
+await registerStaticRoutes(app);
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

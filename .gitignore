@@ -11,4 +11,5 @@ packages/fonts/vendor/
 packages/contract/generated/
 /config/
 /data/
+apps/api/data/
 .env

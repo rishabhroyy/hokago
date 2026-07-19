@@ -1,0 +1,32 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--hk-color-bg);
+  color: var(--hk-color-text);
+  font-family: var(--hk-font-ui);
+  font-size: var(--hk-text-base);
+}
+
+.watch-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hk-space-base);
+  padding: var(--hk-space-lg);
+}
+
+.watch-page__player {
+  position: relative;
+  background: var(--hk-color-player-bg);
+  border-radius: var(--hk-radius-lg);
+  overflow: hidden;
+}
+
+.watch-page__meta {
+  color: var(--hk-color-text-muted);
+  font-size: var(--hk-text-sm);
+}

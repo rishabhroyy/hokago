@@ -36,6 +36,8 @@ export interface SegmentJobInput {
   segmentSeconds: number;
   videoCodec?: string;
   audioCodec?: string;
+  /** Which audio stream to map (§11.4 track switching) — index among audio-type streams, not absolute container index. Defaults to 0. */
+  audioStreamIndex?: number;
   maxWidth?: number;
   maxHeight?: number;
   maxVideoBitrateKbps?: number;
@@ -76,6 +78,7 @@ function escapeFilterPath(p: string): string {
  */
 export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   const startSeconds = input.startSegment * input.segmentSeconds;
+  const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y"];
   if (startSeconds > 0) args.push("-ss", String(startSeconds));
   args.push("-i", input.inputPath);
@@ -87,7 +90,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     // not (honest limitation, §11.2). Same reason tone-map/burn-in can't
     // apply here either — decision.ts never selects DIRECT_STREAM when either
     // is required, so this branch never needs to carry them.
-    args.push("-map", "0:v:0", "-map", "0:a:0?", "-c", "copy");
+    args.push("-map", "0:v:0", "-map", audioMap, "-c", "copy");
   } else {
     const videoFilters: string[] = [];
     if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);
@@ -101,9 +104,9 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
       const graph = bitmap
         ? `[0:v]${preChain}[vpre];[vpre][0:s:${streamIndex}]overlay[vout]`
         : `[0:v]${preChain},subtitles=${escapeFilterPath(input.inputPath)}:si=${streamIndex}[vout]`;
-      args.push("-filter_complex", graph, "-map", "[vout]", "-map", "0:a:0?");
+      args.push("-filter_complex", graph, "-map", "[vout]", "-map", audioMap);
     } else {
-      args.push("-map", "0:v:0", "-map", "0:a:0?");
+      args.push("-map", "0:v:0", "-map", audioMap);
       if (videoFilters.length > 0) args.push("-vf", videoFilters.join(","));
     }
 

@@ -1,0 +1,18 @@
+{
+  "name": "@hokago/ffmpeg",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./device-profile": "./dist/device-profile.js",
+    "./decision": "./dist/decision.js",
+    "./hls": "./dist/hls.js",
+    "./spawn": "./dist/spawn.js",
+    "./child-registry": "./dist/child-registry.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {}
+}

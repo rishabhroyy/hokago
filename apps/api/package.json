@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@hokago/contract": "workspace:*",
+    "@hokago/db": "workspace:*",
+    "@hokago/ffmpeg": "workspace:*",
     "@hokago/queue": "workspace:*",
     "fastify": "^5.2.1",
     "fastify-type-provider-zod": "^4.0.2",

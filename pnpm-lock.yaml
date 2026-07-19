@@ -23,6 +23,12 @@ importers:
       '@hokago/contract':
         specifier: workspace:*
         version: link:../../packages/contract
+      '@hokago/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@hokago/ffmpeg':
+        specifier: workspace:*
+        version: link:../../packages/ffmpeg
       '@hokago/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -82,6 +88,8 @@ importers:
       prisma:
         specifier: ^6.2.1
         version: 6.19.3(typescript@5.9.3)
+
+  packages/ffmpeg: {}
 
   packages/fonts:
     dependencies:

@@ -44,6 +44,11 @@ RUN git clone --depth 1 --branch v1.5.2 https://github.com/xiph/opus.git \
     && cd opus && ./autogen.sh && ./configure --enable-static --disable-shared \
     && make -j"$(nproc)" && make install
 
+# zimg — backs the zscale filter, load-bearing for §11.3 HDR->SDR tone-mapping.
+RUN git clone --depth 1 --branch release-3.0.6 https://github.com/sekrit-twc/zimg.git \
+    && cd zimg && ./autogen.sh && ./configure --enable-static --disable-shared \
+    && make -j"$(nproc)" && make install
+
 # ffmpeg itself — CPU only, no vaapi/qsv/nvenc/rkmpp (those are the §14 hwaccel
 # overlay, step 14; this is the always-works floor per §19 ordering principle).
 RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
@@ -61,6 +66,7 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
          --enable-libx265 \
          --enable-libvpx \
          --enable-libopus \
+         --enable-libzimg \
     && make -j"$(nproc)" && make install
 
 # ── Stage: node-builder — pnpm workspace build ──

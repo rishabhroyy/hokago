@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ThemeTokens } from "@hokago/theme";
-import { applyTheme, fetchTheme, fetchThemeList, type ThemeSummary } from "./theme-runtime";
+import { applyTheme, applyThemeFonts, fetchTheme, fetchThemeFonts, fetchThemeList, type ThemeSummary } from "./theme-runtime";
 
 interface ThemeDemoProps {
   initialSlug: string;
@@ -23,6 +23,7 @@ export function ThemeDemo({ initialSlug, initialTokens }: ThemeDemoProps) {
     const theme = await fetchTheme(id);
     if (!theme) return;
     applyTheme(theme.slug, theme.tokens);
+    applyThemeFonts(await fetchThemeFonts(id));
     setSlug(theme.slug);
     setTokens(theme.tokens);
   };

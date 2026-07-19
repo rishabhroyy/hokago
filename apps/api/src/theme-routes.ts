@@ -19,6 +19,23 @@ export async function registerThemeRoutes(app: FastifyInstance): Promise<void> {
     return theme;
   });
 
+  // Which fonts this theme's tokens need (§1.1, §15) — same shape as the
+  // media-file font list JASSUB already consumes, so the client-side
+  // @font-face injection logic is identical for both.
+  app.get<{ Params: { id: string } }>("/themes/:id/fonts", async (req, reply) => {
+    const links = await db.themeFont.findMany({
+      where: { themeId: req.params.id },
+      include: { font: true },
+    });
+    return links.map((l) => ({
+      hash: l.font.hash,
+      family: l.font.family,
+      weight: l.font.weight,
+      style: l.font.style,
+      url: `/fonts/${l.font.hash}`,
+    }));
+  });
+
   // Drop-in theme bundles land here eventually (§1.1) — for now, a validated
   // JSON body. Never partially applied: reject entirely or accept entirely.
   app.post<{ Body: unknown }>("/themes/import", { preHandler: app.authenticate }, async (req, reply) => {

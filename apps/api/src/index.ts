@@ -17,6 +17,7 @@ import { registerProfileRoutes } from "./profile-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
 import { registerPresence } from "./presence.js";
 import { registerThemeRoutes } from "./theme-routes.js";
+import { seedVendoredFonts } from "./font-seed.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -45,6 +46,7 @@ for (const theme of referenceThemes) {
     update: { tokens: theme.tokens, colorScheme: theme.colorScheme.toUpperCase() as "DARK" | "LIGHT" },
   });
 }
+await seedVendoredFonts(db, referenceThemes);
 
 await registerAuth(app);
 await registerPresence(app);

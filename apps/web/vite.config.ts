@@ -20,6 +20,8 @@ const API_PATHS = [
   "/profiles",
   "/themes",
   "/continue-watching",
+  "/libraries",
+  "/media-items",
 ];
 
 export default defineConfig({

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ThemeTokens } from "@hokago/theme";
 import { applyTheme, applyThemeFonts, fetchTheme, fetchThemeFonts, fetchThemeList, type ThemeSummary } from "./theme-runtime";
+import { Wordmark } from "./Wordmark";
 
 interface ThemeDemoProps {
   initialSlug: string;
@@ -32,6 +33,7 @@ export function ThemeDemo({ initialSlug, initialTokens }: ThemeDemoProps) {
 
   return (
     <div style={{ padding: "var(--hk-space-lg)", color: "var(--hk-color-text)", fontFamily: "var(--hk-font-ui)" }}>
+      <Wordmark />
       <h1 style={{ fontFamily: "var(--hk-font-display)" }}>hokago — theme demo</h1>
       {/* Arbitrary heading text (not the "hokago" wordmark glyphs) — proves
           font.display renders Zen Maru Gothic generally, not just for the

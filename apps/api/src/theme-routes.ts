@@ -36,6 +36,22 @@ export async function registerThemeRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
+  // The wordmark face (§1) is fixed brand identity, not a swappable
+  // font.wordmark token — decoupled from ThemeFont linking so it's always
+  // available regardless of which theme is active.
+  app.get("/fonts/wordmark", async () => {
+    const fonts = await db.font.findMany({
+      where: { family: "Zen Maru Gothic", path: { contains: "wordmark/" } },
+    });
+    return fonts.map((f) => ({
+      hash: f.hash,
+      family: f.family,
+      weight: f.weight,
+      style: f.style,
+      url: `/fonts/${f.hash}`,
+    }));
+  });
+
   // Drop-in theme bundles land here eventually (§1.1) — for now, a validated
   // JSON body. Never partially applied: reject entirely or accept entirely.
   app.post<{ Body: unknown }>("/themes/import", { preHandler: app.authenticate }, async (req, reply) => {

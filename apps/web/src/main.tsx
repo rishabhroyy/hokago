@@ -5,7 +5,17 @@ import { cssVarBlock, defaultTheme, type ThemeTokens } from "@hokago/theme";
 import "./app.css";
 import { WatchPage } from "./WatchPage";
 import { ThemeDemo } from "./ThemeDemo";
-import { applyThemeFonts, fetchThemeFonts, fetchThemeList, THEME_FONTS_TAG_ID, THEME_STYLE_TAG_ID } from "./theme-runtime";
+import { BrowsePage } from "./BrowsePage";
+import {
+  applyThemeFonts,
+  applyWordmarkFont,
+  fetchThemeFonts,
+  fetchThemeList,
+  fetchWordmarkFont,
+  THEME_FONTS_TAG_ID,
+  THEME_STYLE_TAG_ID,
+  WORDMARK_FONT_TAG_ID,
+} from "./theme-runtime";
 
 // Non-negotiable #6: every value the page uses comes from theme tokens, not a
 // hardcoded color/font/radius. Full theme switcher UI is Step 10 — this just
@@ -42,6 +52,9 @@ document.head.appendChild(varStyle);
 const fontStyle = document.createElement("style");
 fontStyle.id = THEME_FONTS_TAG_ID;
 document.head.appendChild(fontStyle);
+const wordmarkFontStyle = document.createElement("style");
+wordmarkFontStyle.id = WORDMARK_FONT_TAG_ID;
+document.head.appendChild(wordmarkFontStyle);
 document.documentElement.dataset.theme = slug;
 
 // The vendored default has no DB row until boot-seeded; resolve its id from
@@ -49,13 +62,17 @@ document.documentElement.dataset.theme = slug;
 // profile/theme has ever been assigned.
 const initialThemeId = id ?? (await fetchThemeList()).find((t) => t.slug === slug)?.id ?? null;
 if (initialThemeId) applyThemeFonts(await fetchThemeFonts(initialThemeId));
+// Independent of theme switching (§1) — the wordmark face never changes.
+applyWordmarkFont(await fetchWordmarkFont());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     {mediaFileId ? (
       <WatchPage mediaFileId={mediaFileId} />
-    ) : (
+    ) : params.has("demo") ? (
       <ThemeDemo initialSlug={slug} initialTokens={tokens} />
+    ) : (
+      <BrowsePage tokens={tokens} />
     )}
   </StrictMode>,
 );

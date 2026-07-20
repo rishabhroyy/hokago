@@ -8,10 +8,10 @@ const vendorDir = path.join(root, "vendor");
 const WEIGHTS = [400, 500, 600, 700] as const;
 const SUBSETS = ["latin", "latin-ext"] as const;
 
-async function copyFontsourceFiles(pkg: string, outDir: string) {
+async function copyFontsourceFiles(pkg: string, outDir: string, weights: readonly number[] = WEIGHTS) {
   await mkdir(outDir, { recursive: true });
   const filesDir = path.join(root, "node_modules/@fontsource", pkg, "files");
-  for (const weight of WEIGHTS) {
+  for (const weight of weights) {
     for (const subset of SUBSETS) {
       const name = `${pkg}-${subset}-${weight}-normal.woff2`;
       const buf = await readFile(path.join(filesDir, name));
@@ -38,6 +38,10 @@ async function main() {
   await buildWordmark();
   await copyFontsourceFiles("inter", path.join(vendorDir, "inter"));
   await copyFontsourceFiles("jetbrains-mono", path.join(vendorDir, "jetbrains-mono"));
+  // Default UI tier (§1.1, §15.2): Regular + Medium, full latin/latin-ext
+  // charset (not the 5-glyph wordmark subset) — this is what renders
+  // font.display for arbitrary heading text, not just "hokago".
+  await copyFontsourceFiles("zen-maru-gothic", path.join(vendorDir, "zen-maru-gothic"), [400, 500]);
   console.log("fonts vendored to", vendorDir);
 }
 

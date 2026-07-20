@@ -33,6 +33,12 @@ export function ThemeDemo({ initialSlug, initialTokens }: ThemeDemoProps) {
   return (
     <div style={{ padding: "var(--hk-space-lg)", color: "var(--hk-color-text)", fontFamily: "var(--hk-font-ui)" }}>
       <h1 style={{ fontFamily: "var(--hk-font-display)" }}>hokago — theme demo</h1>
+      {/* Arbitrary heading text (not the "hokago" wordmark glyphs) — proves
+          font.display renders Zen Maru Gothic generally, not just for the
+          5-glyph wordmark subset (§1.1, §15.2). */}
+      <h2 data-testid="display-heading" style={{ fontFamily: "var(--hk-font-display)" }}>
+        Recently Added
+      </h2>
       <p>
         Add <code>?mediaFileId=&lt;id&gt;</code> to the URL to watch instead. Stand-in for the
         profile-menu switcher (§15.3) — swaps <code>data-theme</code> and the injected token block

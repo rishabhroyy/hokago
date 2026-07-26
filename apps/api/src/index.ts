@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import fastifyStatic from "@fastify/static";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -23,6 +24,10 @@ import { seedVendoredFonts } from "./font-seed.js";
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
+// serve:false — no fixed root; static-routes.ts passes a per-file rootPath to
+// reply.sendFile() since media/font/artwork paths live wherever the operator's
+// library roots are, not under one shared static directory.
+await app.register(fastifyStatic, { serve: false });
 
 app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () => ({
   status: "ok" as const,

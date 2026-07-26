@@ -1,9 +1,10 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@hokago/db";
+import { MediaFileParams, MediaFileFontsResponse, MediaFileTracksResponse, ErrorResponse } from "@hokago/contract/media-files";
+import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
 
@@ -62,40 +63,31 @@ async function subtitleRelativeIndex(mediaFileId: string, absoluteStreamIndex: n
  * on all of them is defense-in-depth for any topology where these aren't
  * proxied to the same origin as the app shell.
  */
-export async function registerStaticRoutes(app: FastifyInstance): Promise<void> {
+export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<void> {
   // DIRECT_PLAY (§11.1) — raw bytes, range-enabled like any static video server.
+  // @fastify/static's sendFile does the Range/If-Range/206/416 handling; we
+  // only supply the explicit container MIME type (extension-based sniffing
+  // would get this wrong for e.g. `.mkv`) and skip its cache headers, which
+  // this route never set.
   app.get<{ Params: { id: string } }>("/media-files/:id/direct", async (req, reply) => {
     const mediaFile = await db.mediaFile.findUnique({ where: { id: req.params.id } });
     if (!mediaFile || !existsSync(mediaFile.path)) {
       return reply.code(404).send({ error: "media file not found" });
     }
 
-    const stat = statSync(mediaFile.path);
-    const mime = CONTAINER_MIME[mediaFile.container ?? ""] ?? "application/octet-stream";
     reply.header("Cross-Origin-Resource-Policy", "cross-origin");
-    reply.header("Accept-Ranges", "bytes");
+    reply.type(CONTAINER_MIME[mediaFile.container ?? ""] ?? "application/octet-stream");
+    return reply.sendFile(path.basename(mediaFile.path), path.dirname(mediaFile.path), {
+      contentType: false,
+      cacheControl: false,
+    });
+  });
 
-    const range = req.headers.range;
-    if (!range) {
-      reply.header("Content-Length", stat.size);
-      reply.type(mime);
-      return reply.send(createReadStream(mediaFile.path));
-    }
-
-    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!match) return reply.code(416).send({ error: "invalid range" });
-    const start = match[1] ? parseInt(match[1], 10) : 0;
-    const end = match[2] ? parseInt(match[2], 10) : stat.size - 1;
-    if (start >= stat.size || end >= stat.size || start > end) {
-      reply.header("Content-Range", `bytes */${stat.size}`);
-      return reply.code(416).send({ error: "range not satisfiable" });
-    }
-
-    reply.code(206);
-    reply.header("Content-Range", `bytes ${start}-${end}/${stat.size}`);
-    reply.header("Content-Length", end - start + 1);
-    reply.type(mime);
-    return reply.send(createReadStream(mediaFile.path, { start, end }));
+  // Chrome fonts (§1.1, §15.2) — both shipped themes share one font stack, so
+  // this is just every vendored font, unconditionally, no per-theme lookup.
+  app.get("/fonts", async () => {
+    const fonts = await db.font.findMany({ where: { source: "VENDORED" } });
+    return fonts.map((f) => ({ hash: f.hash, family: f.family, weight: f.weight, style: f.style, url: `/fonts/${f.hash}` }));
   });
 
   // Font store (§1.1, §13.2) — hash-keyed, so the response is safe to cache
@@ -123,22 +115,31 @@ export async function registerStaticRoutes(app: FastifyInstance): Promise<void> 
 
   // Which fonts a media file's ASS track(s) need (§13.2 MediaFileFont join) —
   // JASSUB's `availableFonts` map is built from this on the client.
-  app.get<{ Params: { id: string } }>("/media-files/:id/fonts", async (req, reply) => {
-    const links = await db.mediaFileFont.findMany({
-      where: { mediaFileId: req.params.id },
-      include: { font: true },
-    });
-    return links.map((l) => ({
-      hash: l.font.hash,
-      family: l.font.family,
-      weight: l.font.weight,
-      style: l.font.style,
-      url: `/fonts/${l.font.hash}`,
-    }));
-  });
+  app.get(
+    "/media-files/:id/fonts",
+    { schema: { params: MediaFileParams, response: { 200: MediaFileFontsResponse } } },
+    async (req) => {
+      const links = await db.mediaFileFont.findMany({
+        where: { mediaFileId: req.params.id },
+        include: { font: true },
+      });
+      return links.map((l) => ({
+        hash: l.font.hash,
+        family: l.font.family,
+        weight: l.font.weight,
+        style: l.font.style,
+        url: `/fonts/${l.font.hash}`,
+      }));
+    },
+  );
 
   // Audio + subtitle tracks for the switcher UI (Step 8).
-  app.get<{ Params: { id: string } }>("/media-files/:id/tracks", async (req, reply) => {
+  app.get(
+    "/media-files/:id/tracks",
+    {
+      schema: { params: MediaFileParams, response: { 200: MediaFileTracksResponse, 404: ErrorResponse } },
+    },
+    async (req, reply) => {
     const mediaFile = await db.mediaFile.findUnique({
       where: { id: req.params.id },
       include: { streams: true, subtitleTracks: true },
@@ -159,7 +160,8 @@ export async function registerStaticRoutes(app: FastifyInstance): Promise<void> 
         requiresBurnIn: t.requiresBurnIn,
       })),
     };
-  });
+    },
+  );
 
   // Subtitle text for client-side rendering (§13.1) — external sidecars are
   // read straight off disk; embedded tracks are extracted on demand (no eager

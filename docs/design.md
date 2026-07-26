@@ -100,7 +100,7 @@ A self-hosted media server for **all video media** — movies, TV, anime — tha
 
 1. Works completely offline, with zero API keys, on first run.
 2. Never blocks the user, never shows a provider error, never dead-ends.
-3. Is themeable to the point that a user can make it look like Crunchyroll, Netflix, or anything else, at runtime, per profile.
+3. Is themeable down to the token contract (§15) — every component reads color/font/radius/etc. from theme tokens, never a hardcoded value.
 4. Handles anime properly — ASS subtitles, embedded fonts, absolute vs. seasonal numbering, movies inside series — because that's where every general-purpose media server falls down.
 5. Deploys as a small docker compose stack a normal person can bring up without understanding it.
 
@@ -784,9 +784,9 @@ Hard requirement → **the token contract is written before any UI.**
 packages/theme  →  typed token set  →  CSS custom properties  →  data-theme on <html>
 ```
 
-Themes are **validated JSON**, per profile, in Postgres, importable/exportable. Runtime switch, no rebuild. **Every shadcn component consumes tokens only. Never a hardcoded value.** This rule makes or breaks the requirement.
+Themes are `ThemeManifest` constants in `packages/theme/src/tokens.ts` — no Postgres model, no import/export, no per-profile persistence. hokago ships exactly two: `defaultTheme` (dark) and `lightTheme` (light), switched client-side via a `data-theme` attribute and a `localStorage`-remembered toggle. **Every shadcn component consumes tokens only. Never a hardcoded value.** This rule makes or breaks the requirement.
 
-**Schema note:** `Theme.colorScheme` (dark|light) is its own column, mirroring `ThemeManifest.colorScheme` — not inferred from `color.bg` lightness. The switcher needs it to group reference themes (e.g. `oled` vs `light`) without parsing token values.
+A richer runtime theme-import mechanism (drop in arbitrary validated JSON, per-profile assignment) was built once and removed — it added a Theme/ThemeFont DB layer and a chrome-font-linking system for a feature nobody used ahead of having a single real theme to prove the token contract against. `validateTheme()` and the full token schema remain in `packages/theme` (they're what a future importer would validate against), but nothing in the running app calls them.
 
 ### 15.2 Token surface
 
@@ -805,7 +805,7 @@ Must cover more than color, or "make it look like Netflix" is impossible:
 
 ### 15.3 Ships with
 
-`hokago` (default), `crunchyroll-ish`, `netflix-ish`, `light`, `oled`. Switcher in the profile menu, not buried in settings.
+`hokago` (default, dark) and `light`. A dark/light toggle in the browse nav, not buried in settings — no profile-menu switcher, since there's no per-profile assignment to switch.
 
 ---
 
@@ -948,7 +948,7 @@ Same two structural problems, weaker form:
 7. **Playback decision engine + on-demand HLS + seek-restart.**
 8. **Player.** Vidstack + JASSUB + fonts + track switching + COOP/COEP. *First moment it feels real.*
 9. **Auth, profiles, watch state, continue-watching.** WS layer lands here.
-10. **Theme system + switcher + reference themes.**
+10. **Theme tokens + default/light themes + dark/light toggle.**
 11. **Segments cascade + trickplay.**
 12. **Watch parties** (§17) — rides the WS layer.
 13. **Optional user-key tier** (shipped disabled, pending §8.6 decision).
@@ -981,6 +981,7 @@ Same two structural problems, weaker form:
 - ~~Watch parties~~ — in scope. §17.
 - ~~Movie artwork~~ — **option (b)**, settings-only toggle. §8.6.
 - ~~Chromecast~~ — **permanently out.** No public domain, no path. §18.3.
+- ~~Per-profile runtime theme import/switcher~~ — built, then cut. Two hardcoded themes (`hokago`, `light`) + a client-side dark/light toggle instead. §15.1.
 
 ---
 

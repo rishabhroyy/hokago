@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PrismaClient } from "@hokago/db";
-import type { ThemeManifest } from "@hokago/theme";
 
 const VENDOR_DIR = process.env.HOKAGO_FONTS_VENDOR_DIR ?? path.resolve(import.meta.dirname, "../../../packages/fonts/vendor");
 
@@ -39,11 +38,10 @@ const VENDORED_FONTS: { file: string; family: string; weight: number }[] = [
 /**
  * Registers the build-time-vendored chrome fonts into the same hash-deduped
  * Font store subtitle-extracted fonts already use (packages/scanner/src/
- * fonts.ts), then links each to every reference theme whose font stacks name
- * that family — the missing piece that made §15 font tokens silently
- * degrade to their stack's fallback member in every real browser.
+ * fonts.ts). Both shipped themes (§15) share one font stack, so there's no
+ * per-theme linking — every vendored font is just always served.
  */
-export async function seedVendoredFonts(db: PrismaClient, themes: ThemeManifest[]): Promise<void> {
+export async function seedVendoredFonts(db: PrismaClient): Promise<void> {
   const dir = fontStoreDir();
   await mkdir(dir, { recursive: true });
 
@@ -62,16 +60,5 @@ export async function seedVendoredFonts(db: PrismaClient, themes: ThemeManifest[
       create: { hash, family, weight, style: "normal", format: "WOFF2", source: "VENDORED", path: storedPath, sizeBytes: bytes.length },
       update: {},
     });
-
-    for (const theme of themes) {
-      if (!Object.values(theme.tokens.font).some((stack) => stack[0] === family)) continue;
-      const row = await db.theme.findUnique({ where: { slug: theme.slug } });
-      if (!row) continue;
-      await db.themeFont.upsert({
-        where: { themeId_fontHash: { themeId: row.id, fontHash: hash } },
-        create: { themeId: row.id, fontHash: hash },
-        update: {},
-      });
-    }
   }
 }

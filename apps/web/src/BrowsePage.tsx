@@ -5,6 +5,12 @@ import { fetchLibraries, fetchLibraryItems, type LibrarySummary, type MediaCard 
 
 interface BrowsePageProps {
   tokens: ThemeTokens;
+  colorScheme: "dark" | "light";
+}
+
+function toggleColorScheme(current: "dark" | "light"): void {
+  localStorage.setItem("hokago_color_scheme", current === "light" ? "dark" : "light");
+  location.reload();
 }
 
 interface Shelf {
@@ -16,7 +22,7 @@ interface Shelf {
 // active theme's layout tokens, so a theme switch genuinely reshapes the
 // page (sidebar vs top nav, poster vs episodic aspect, hover treatment)
 // rather than just recoloring it.
-export function BrowsePage({ tokens }: BrowsePageProps) {
+export function BrowsePage({ tokens, colorScheme }: BrowsePageProps) {
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const { layout } = tokens;
 
@@ -48,6 +54,9 @@ export function BrowsePage({ tokens }: BrowsePageProps) {
           ))}
         </div>
         <div className="browse-nav__profile">
+          <button type="button" className="browse-nav__theme-toggle" onClick={() => toggleColorScheme(colorScheme)}>
+            {colorScheme === "light" ? "Dark" : "Light"}
+          </button>
           <span className="browse-nav__avatar" aria-hidden="true" />
           <span className="browse-nav__profile-label">Profile</span>
         </div>

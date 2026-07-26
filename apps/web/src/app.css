@@ -144,6 +144,21 @@ body {
   color: var(--hk-color-text-muted);
 }
 
+.browse-nav__theme-toggle {
+  font-size: var(--hk-text-sm);
+  font-weight: 600;
+  color: var(--hk-color-text-muted);
+  background: none;
+  border: var(--hk-border-thin) solid var(--hk-color-border);
+  border-radius: var(--hk-radius-md);
+  padding: var(--hk-space-xs) var(--hk-space-sm);
+  cursor: pointer;
+}
+
+.browse-nav__theme-toggle:hover {
+  color: var(--hk-color-text);
+}
+
 .browse-page__body {
   flex: 1;
   min-width: 0;

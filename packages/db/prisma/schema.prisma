@@ -170,26 +170,6 @@ enum FontSource {
   USER_DROP // /config/fonts/ (§1.1 source 4)
 }
 
-enum ThemeSource {
-  BUILTIN
-  BUNDLE // dropped into /config/themes/
-  IMPORTED // pasted/uploaded JSON
-}
-
-/// Mirrors ThemeManifest.colorScheme (packages/theme). Explicit column, not
-/// inferred from token lightness — the switcher needs to group reference
-/// themes (e.g. distinguish `oled` from `light`) without parsing color values.
-enum ColorScheme {
-  DARK
-  LIGHT
-}
-
-enum FetchState {
-  PENDING
-  OK
-  FAILED
-}
-
 enum PlaybackMethod {
   DIRECT_PLAY
   DIRECT_STREAM
@@ -244,8 +224,6 @@ model Profile {
   account        Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   name           String
   avatarPath     String?
-  themeId        String?   @db.Uuid
-  theme          Theme?    @relation(fields: [themeId], references: [id], onDelete: SetNull)
   /// Max allowed rating; null = unrestricted.
   maturityRating String?
   /// Free-form UI prefs. Shape owned by packages/contract, not this file.
@@ -695,7 +673,6 @@ model Font {
   createdAt DateTime   @default(now())
 
   mediaFiles MediaFileFont[]
-  themes     ThemeFont[]
 
   @@index([family])
   @@index([source])
@@ -712,62 +689,6 @@ model MediaFileFont {
   @@id([mediaFileId, fontHash])
   @@index([fontHash])
   @@map("media_file_fonts")
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// THEMES  (§15) — tokens validated against packages/theme
-// ─────────────────────────────────────────────────────────────────────────────
-
-model Theme {
-  id      String      @id @default(uuid()) @db.Uuid
-  slug    String      @unique
-  name    String
-  source  ThemeSource @default(BUILTIN)
-  colorScheme ColorScheme @default(DARK)
-  /// Validated against packages/theme ThemeTokens schema. Invalid = rejected on import.
-  tokens  Json
-  /// For BUNDLE: /config/themes/<slug>/
-  bundlePath String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  profiles  Profile[]
-  fonts     ThemeFont[]
-  fontFetches ThemeFontFetch[]
-
-  @@map("themes")
-}
-
-model ThemeFont {
-  themeId  String @db.Uuid
-  theme    Theme  @relation(fields: [themeId], references: [id], onDelete: Cascade)
-  fontHash String
-  font     Font   @relation(fields: [fontHash], references: [hash], onDelete: Cascade)
-
-  @@id([themeId, fontHash])
-  @@index([fontHash])
-  @@map("theme_fonts")
-}
-
-/// Source 3: theme declares a font URL → server fetches ONCE → bytes stored forever.
-/// A background job. Never a browser request. Theme still applies via fallback
-/// stack while PENDING or FAILED — degrade, never error (§1.1, §3.2).
-model ThemeFontFetch {
-  id       String     @id @default(uuid()) @db.Uuid
-  themeId  String     @db.Uuid
-  theme    Theme      @relation(fields: [themeId], references: [id], onDelete: Cascade)
-  url      String
-  family   String
-  state    FetchState @default(PENDING)
-  fontHash String? // set on success
-  attempts Int        @default(0)
-  lastError String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  @@unique([themeId, url])
-  @@index([state])
-  @@map("theme_font_fetches")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -14,40 +14,13 @@ import jassubWorkerUrl from "jassub/dist/worker/worker.js?worker&url";
 import jassubWasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url";
 import jassubModernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url";
 
+import type {
+  StartPlaybackResponse as PlaybackStart,
+  AudioTrackSwitchBody,
+} from "@hokago/contract/playback";
+import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
+import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
-
-interface PlaybackStart {
-  sessionId: string;
-  method: "DIRECT_PLAY" | "DIRECT_STREAM" | "TRANSCODE";
-  reasons: string[];
-  playlistUrl: string | null;
-}
-
-interface SubtitleTrackInfo {
-  id: string;
-  lang: string | null;
-  title: string | null;
-  format: string;
-  forced: boolean;
-  sdh: boolean;
-  requiresBurnIn: boolean;
-}
-
-interface AudioTrackInfo {
-  streamIndex: number;
-  codec: string;
-  lang: string | null;
-  title: string | null;
-  isDefault: boolean;
-}
-
-interface FontInfo {
-  hash: string;
-  family: string;
-  weight: number | null;
-  style: string | null;
-  url: string;
-}
 
 // Chrome/Chromium-only, not in lib.dom.d.ts — DIRECT_PLAY's only way to expose
 // a container's other audio streams to the client (§11.4).
@@ -88,10 +61,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   useEffect(() => {
     if (!mediaFileId) return;
     let cancelled = false;
-    fetch(`/media-files/${mediaFileId}/tracks`)
-      .then((res) => res.json() as Promise<{ audio: AudioTrackInfo[]; subtitles: SubtitleTrackInfo[] }>)
-      .then((data) => {
-        if (cancelled) return;
+    api
+      .GET("/media-files/{id}/tracks", { params: { path: { id: mediaFileId } } })
+      .then(({ data }) => {
+        if (cancelled || !data) return;
         setSubtitles(data.subtitles);
         const firstRenderable = data.subtitles.find((t) => !t.requiresBurnIn);
         setSelectedSubtitleId(firstRenderable?.id ?? null);
@@ -100,10 +73,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         setSelectedAudioIndex(defaultAudio?.streamIndex ?? null);
       })
       .catch(() => {});
-    fetch(`/media-files/${mediaFileId}/fonts`)
-      .then((res) => res.json() as Promise<FontInfo[]>)
-      .then((data) => {
-        if (!cancelled) setFonts(data);
+    api
+      .GET("/media-files/{id}/fonts", { params: { path: { id: mediaFileId } } })
+      .then(({ data }) => {
+        if (!cancelled && data) setFonts(data);
       })
       .catch(() => {});
     return () => {
@@ -160,13 +133,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       setSelectedAudioIndex(absoluteIndex);
       if (!start || start.method === "DIRECT_PLAY") return;
       const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000);
-      fetch(`/playback/${start.sessionId}/audio-track`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audioStreamIndex: absoluteIndex, positionMs }),
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error(`audio-track ${res.status}`);
+      const body: AudioTrackSwitchBody = { audioStreamIndex: absoluteIndex, positionMs };
+      api
+        .POST("/playback/{sessionId}/audio-track", { params: { path: { sessionId: start.sessionId } }, body })
+        .then(({ error }) => {
+          if (error) throw new Error("audio-track switch failed");
           pendingSeekRef.current = positionMs / 1000;
           setReloadNonce((n) => n + 1);
         })
@@ -183,22 +154,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/playback/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        profileId,
-        mediaItemId,
-        mediaFileId,
-        deviceProfile: BROWSER_DEVICE_PROFILE,
-      }),
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`playback/start ${res.status}`);
-        return res.json() as Promise<PlaybackStart>;
-      })
-      .then((data) => {
-        if (!cancelled) setStart(data);
+    api
+      .POST("/playback/start", { body: { profileId, mediaItemId, mediaFileId, deviceProfile: BROWSER_DEVICE_PROFILE } })
+      .then(({ data, error }) => {
+        if (error) throw new Error("playback/start failed");
+        if (!cancelled) setStart(data as PlaybackStart);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);

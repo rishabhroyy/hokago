@@ -1,6 +1,16 @@
-import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@hokago/db";
 import { broadcastPresence } from "./presence.js";
+import {
+  HeartbeatBody,
+  HeartbeatResponse,
+  StopResponse,
+  ContinueWatchingQuery,
+  ContinueWatchingResponse,
+  type ContinueWatchingEntry,
+  ErrorResponse,
+} from "@hokago/contract/playback";
+import { PlaybackSessionParams } from "@hokago/contract/playback";
+import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
 
@@ -8,15 +18,17 @@ const db = new PrismaClient();
 // the industry-standard "credits are rolling" heuristic, not literal 100%.
 const WATCHED_THRESHOLD = 0.9;
 
-interface HeartbeatBody {
-  positionMs: number;
-  durationMs?: number;
-}
-
 /** §7.7/§11.4 — PlaybackState updates live during playback, continue-watching, next-episode rollover. */
-export async function registerWatchStateRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { sessionId: string }; Body: HeartbeatBody }>(
+export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise<void> {
+  app.post(
     "/playback/:sessionId/heartbeat",
+    {
+      schema: {
+        params: PlaybackSessionParams,
+        body: HeartbeatBody,
+        response: { 200: HeartbeatResponse, 404: ErrorResponse },
+      },
+    },
     async (req, reply) => {
       const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
       if (!session) return reply.code(404).send({ error: "session not found" });
@@ -47,18 +59,24 @@ export async function registerWatchStateRoutes(app: FastifyInstance): Promise<vo
     },
   );
 
-  app.post<{ Params: { sessionId: string } }>("/playback/:sessionId/stop", async (req, reply) => {
-    const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
-    if (!session) return reply.code(404).send({ error: "session not found" });
+  app.post(
+    "/playback/:sessionId/stop",
+    { schema: { params: PlaybackSessionParams, response: { 200: StopResponse, 404: ErrorResponse } } },
+    async (req, reply) => {
+      const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
+      if (!session) return reply.code(404).send({ error: "session not found" });
 
-    await db.playbackSession.update({ where: { id: session.id }, data: { endedAt: new Date() } });
-    await broadcastPresence();
-    return { ok: true };
-  });
+      await db.playbackSession.update({ where: { id: session.id }, data: { endedAt: new Date() } });
+      await broadcastPresence();
+      return { ok: true };
+    },
+  );
 
-  app.get<{ Querystring: { profileId: string } }>("/continue-watching", async (req, reply) => {
+  app.get(
+    "/continue-watching",
+    { schema: { querystring: ContinueWatchingQuery, response: { 200: ContinueWatchingResponse } } },
+    async (req) => {
     const { profileId } = req.query;
-    if (!profileId) return reply.code(400).send({ error: "profileId required" });
 
     const states = await db.playbackState.findMany({
       where: { profileId },
@@ -66,7 +84,7 @@ export async function registerWatchStateRoutes(app: FastifyInstance): Promise<vo
       orderBy: { updatedAt: "desc" },
     });
 
-    const bySeries = new Map<string, { updatedAt: Date; entry: unknown }>();
+    const bySeries = new Map<string, { updatedAt: Date; entry: ContinueWatchingEntry }>();
 
     for (const state of states) {
       const item = state.mediaItem;
@@ -103,7 +121,8 @@ export async function registerWatchStateRoutes(app: FastifyInstance): Promise<vo
     }
 
     return [...bySeries.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()).map((v) => v.entry);
-  });
+    },
+  );
 }
 
 async function findNextEpisode(episode: {

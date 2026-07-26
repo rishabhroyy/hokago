@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@hokago/contract": "workspace:*",
     "@hokago/theme": "workspace:*",
     "@vidstack/react": "1.15.6",
     "vidstack": "1.15.6",

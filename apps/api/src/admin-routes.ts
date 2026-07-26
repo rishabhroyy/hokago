@@ -2,8 +2,19 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { FastifyInstance } from "fastify";
 import { Queue, getConnection, QUEUE_NAMES, type QueueName } from "@hokago/queue";
+import {
+  QueueListResponse,
+  QueueParams,
+  QueueJobsQuery,
+  QueueJobsResponse,
+  QueuePausedResponse,
+  QueueRetriedResponse,
+  QueueCleanBody,
+  QueueCleanResponse,
+  ErrorResponse,
+} from "@hokago/contract/admin";
+import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,13 +35,13 @@ function queueOrNotFound(name: string): Queue | null {
 }
 
 /** Admin queue UI (§9.6.8): view/pause/resume/retry-failed/clean per queue, backed directly by BullMQ. */
-export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
+export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void> {
   app.get("/admin", async (_req, reply) => {
     const html = await readFile(path.join(__dirname, "admin.html"), "utf-8");
     reply.type("text/html").send(html);
   });
 
-  app.get("/admin/queues", async () => {
+  app.get("/admin/queues", { schema: { response: { 200: QueueListResponse } } }, async () => {
     const result = await Promise.all(
       Object.entries(queues).map(async ([name, queue]) => ({
         name,
@@ -41,13 +52,19 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return result;
   });
 
-  app.get<{ Params: { name: string }; Querystring: { state?: string } }>(
+  app.get(
     "/admin/queues/:name/jobs",
+    {
+      schema: {
+        params: QueueParams,
+        querystring: QueueJobsQuery,
+        response: { 200: QueueJobsResponse, 404: ErrorResponse },
+      },
+    },
     async (req, reply) => {
       const queue = queueOrNotFound(req.params.name);
       if (!queue) return reply.code(404).send({ error: "unknown queue" });
-      const state = (req.query.state as JobState) ?? "failed";
-      if (!JOB_STATES.includes(state)) return reply.code(400).send({ error: "invalid state" });
+      const state = req.query.state ?? "failed";
 
       const jobs = await queue.getJobs([state], 0, 100);
       return jobs.map((job) => ({
@@ -60,35 +77,53 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Params: { name: string } }>("/admin/queues/:name/pause", async (req, reply) => {
-    const queue = queueOrNotFound(req.params.name);
-    if (!queue) return reply.code(404).send({ error: "unknown queue" });
-    await queue.pause();
-    return { paused: true };
-  });
-
-  app.post<{ Params: { name: string } }>("/admin/queues/:name/resume", async (req, reply) => {
-    const queue = queueOrNotFound(req.params.name);
-    if (!queue) return reply.code(404).send({ error: "unknown queue" });
-    await queue.resume();
-    return { paused: false };
-  });
-
-  app.post<{ Params: { name: string } }>("/admin/queues/:name/retry-failed", async (req, reply) => {
-    const queue = queueOrNotFound(req.params.name);
-    if (!queue) return reply.code(404).send({ error: "unknown queue" });
-    const failed = await queue.getJobs(["failed"], 0, 1000);
-    await Promise.all(failed.map((job) => job.retry()));
-    return { retried: failed.length };
-  });
-
-  app.post<{ Params: { name: string }; Body: { state?: string } }>(
-    "/admin/queues/:name/clean",
+  app.post(
+    "/admin/queues/:name/pause",
+    { schema: { params: QueueParams, response: { 200: QueuePausedResponse, 404: ErrorResponse } } },
     async (req, reply) => {
       const queue = queueOrNotFound(req.params.name);
       if (!queue) return reply.code(404).send({ error: "unknown queue" });
-      const state = (req.body?.state as JobState) ?? "completed";
-      if (!JOB_STATES.includes(state)) return reply.code(400).send({ error: "invalid state" });
+      await queue.pause();
+      return { paused: true };
+    },
+  );
+
+  app.post(
+    "/admin/queues/:name/resume",
+    { schema: { params: QueueParams, response: { 200: QueuePausedResponse, 404: ErrorResponse } } },
+    async (req, reply) => {
+      const queue = queueOrNotFound(req.params.name);
+      if (!queue) return reply.code(404).send({ error: "unknown queue" });
+      await queue.resume();
+      return { paused: false };
+    },
+  );
+
+  app.post(
+    "/admin/queues/:name/retry-failed",
+    { schema: { params: QueueParams, response: { 200: QueueRetriedResponse, 404: ErrorResponse } } },
+    async (req, reply) => {
+      const queue = queueOrNotFound(req.params.name);
+      if (!queue) return reply.code(404).send({ error: "unknown queue" });
+      const failed = await queue.getJobs(["failed"], 0, 1000);
+      await Promise.all(failed.map((job) => job.retry()));
+      return { retried: failed.length };
+    },
+  );
+
+  app.post(
+    "/admin/queues/:name/clean",
+    {
+      schema: {
+        params: QueueParams,
+        body: QueueCleanBody.optional(),
+        response: { 200: QueueCleanResponse, 404: ErrorResponse },
+      },
+    },
+    async (req, reply) => {
+      const queue = queueOrNotFound(req.params.name);
+      if (!queue) return reply.code(404).send({ error: "unknown queue" });
+      const state = req.body?.state ?? "completed";
       const removed = await queue.clean(0, 1000, state);
       return { removed: removed.length };
     },

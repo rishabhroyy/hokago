@@ -5,6 +5,12 @@
   "type": "module",
   "exports": {
     "./health": "./dist/health.js",
+    "./browse": "./dist/browse.js",
+    "./profiles": "./dist/profiles.js",
+    "./auth": "./dist/auth.js",
+    "./playback": "./dist/playback.js",
+    "./admin": "./dist/admin.js",
+    "./media-files": "./dist/media-files.js",
     "./openapi": "./dist/openapi.js",
     "./client": "./dist/client.js"
   },

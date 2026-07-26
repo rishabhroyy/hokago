@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@hokago/db";
 import { decidePlaybackMethod } from "@hokago/ffmpeg/decision";
 import {
@@ -17,6 +16,17 @@ import {
 import { buildM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { broadcastPresence } from "./presence.js";
+import {
+  StartPlaybackBody,
+  StartPlaybackResponse,
+  PlaybackSessionParams,
+  SeekBody,
+  SeekResponse,
+  AudioTrackSwitchBody,
+  AudioTrackSwitchResponse,
+  ErrorResponse,
+} from "@hokago/contract/playback";
+import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 function configDir(): string {
   return process.env.HOKAGO_CONFIG_DIR ?? "./data/config";
@@ -60,15 +70,6 @@ function relativeAudioIndex(streams: { type: string; streamIndex: number }[], ab
 
 const db = new PrismaClient();
 const liveSessions = new Map<string, LiveSession>();
-
-interface StartBody {
-  profileId: string;
-  mediaItemId: string;
-  mediaFileId: string;
-  deviceProfile: DeviceProfile;
-  subtitleTrackId?: string;
-  audioStreamIndex?: number;
-}
 
 async function buildCandidateInput(
   mediaFileId: string,
@@ -138,8 +139,11 @@ async function buildCandidateInput(
 }
 
 /** §11.1/§11.2 — three-tier playback decision, on-demand HLS, seek-restart. apps/api owns the live ffmpeg process directly (separate container/PID namespace from apps/worker). */
-export async function registerPlaybackRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Body: StartBody }>("/playback/start", async (req, reply) => {
+export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<void> {
+  app.post(
+    "/playback/start",
+    { schema: { body: StartPlaybackBody, response: { 200: StartPlaybackResponse, 404: ErrorResponse } } },
+    async (req, reply) => {
     const { profileId, mediaItemId, mediaFileId, deviceProfile, subtitleTrackId, audioStreamIndex } = req.body;
     const candidate = await buildCandidateInput(mediaFileId, subtitleTrackId, audioStreamIndex);
     if (!candidate) return reply.code(404).send({ error: "media file not found" });
@@ -224,7 +228,8 @@ export async function registerPlaybackRoutes(app: FastifyInstance): Promise<void
       reasons: decision.reasons,
       playlistUrl: `/playback/${session.id}/playlist.m3u8`,
     };
-  });
+    },
+  );
 
   app.get<{ Params: { sessionId: string } }>("/playback/:sessionId/playlist.m3u8", async (req, reply) => {
     const live = liveSessions.get(req.params.sessionId);
@@ -251,8 +256,15 @@ export async function registerPlaybackRoutes(app: FastifyInstance): Promise<void
     },
   );
 
-  app.post<{ Params: { sessionId: string }; Body: { positionMs: number } }>(
+  app.post(
     "/playback/:sessionId/seek",
+    {
+      schema: {
+        params: PlaybackSessionParams,
+        body: SeekBody,
+        response: { 200: SeekResponse, 404: ErrorResponse },
+      },
+    },
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
       if (!live) return reply.code(404).send({ error: "no active transcode session" });
@@ -332,8 +344,15 @@ export async function registerPlaybackRoutes(app: FastifyInstance): Promise<void
   // audio track muxed in and reusing it would silently serve the wrong audio.
   // A fresh per-track outDir (audioOutDir) sidesteps that instead of trying to
   // invalidate/overwrite segments a player might still rewind into.
-  app.post<{ Params: { sessionId: string }; Body: { audioStreamIndex: number; positionMs: number } }>(
+  app.post(
     "/playback/:sessionId/audio-track",
+    {
+      schema: {
+        params: PlaybackSessionParams,
+        body: AudioTrackSwitchBody,
+        response: { 200: AudioTrackSwitchResponse, 404: ErrorResponse },
+      },
+    },
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
       if (!live) return reply.code(404).send({ error: "no active transcode session" });

@@ -1,5 +1,7 @@
-import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@hokago/db";
+import { LibrarySummary, MediaCard, MediaItemDetail, LibraryItemsParams, MediaItemDetailParams, NotFoundError } from "@hokago/contract/browse";
+import { z } from "zod";
+import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
 
@@ -36,27 +38,44 @@ function toCard<T extends { artwork: ArtworkRef[] }>(
 }
 
 /** §7.3/§7.6 — library browsing and item detail. No route existed before this. */
-export async function registerBrowseRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/libraries", { preHandler: app.authenticate }, async () => {
-    return db.library.findMany({
-      where: { enabled: true },
-      select: { id: true, name: true, contentProfile: true, mediaKinds: true },
-      orderBy: { name: "asc" },
-    });
-  });
+export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<void> {
+  app.get(
+    "/libraries",
+    { preHandler: app.authenticate, schema: { response: { 200: z.array(LibrarySummary) } } },
+    async () => {
+      return db.library.findMany({
+        where: { enabled: true },
+        select: { id: true, name: true, contentProfile: true, mediaKinds: true },
+        orderBy: { name: "asc" },
+      });
+    },
+  );
 
   // Top-level items only (MOVIE/SERIES) — SEASON/EPISODE nest under their
   // parent and are fetched via the item-detail route below.
-  app.get<{ Params: { id: string } }>("/libraries/:id/items", { preHandler: app.authenticate }, async (req) => {
-    const items = await db.mediaItem.findMany({
-      where: { libraryId: req.params.id, parentId: null, kind: { in: ["MOVIE", "SERIES"] } },
-      select: cardSelect,
-      orderBy: { sortTitle: "asc" },
-    });
-    return items.map(toCard);
-  });
+  app.get(
+    "/libraries/:id/items",
+    {
+      preHandler: app.authenticate,
+      schema: { params: LibraryItemsParams, response: { 200: z.array(MediaCard) } },
+    },
+    async (req) => {
+      const items = await db.mediaItem.findMany({
+        where: { libraryId: req.params.id, parentId: null, kind: { in: ["MOVIE", "SERIES"] } },
+        select: cardSelect,
+        orderBy: { sortTitle: "asc" },
+      });
+      return items.map(toCard);
+    },
+  );
 
-  app.get<{ Params: { id: string } }>("/media-items/:id", { preHandler: app.authenticate }, async (req, reply) => {
+  app.get(
+    "/media-items/:id",
+    {
+      preHandler: app.authenticate,
+      schema: { params: MediaItemDetailParams, response: { 200: MediaItemDetail, 404: NotFoundError } },
+    },
+    async (req, reply) => {
     const item = await db.mediaItem.findUnique({
       where: { id: req.params.id },
       include: {
@@ -96,5 +115,6 @@ export async function registerBrowseRoutes(app: FastifyInstance): Promise<void> 
         })),
       })),
     };
-  });
+    },
+  );
 }

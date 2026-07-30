@@ -51,7 +51,7 @@ export function TopNav() {
   };
 
   return (
-    <nav className="fixed inset-x-0 top-0 z-[60] flex h-[62px] items-center justify-between bg-gradient-to-b from-paper/94 to-paper-2/86 px-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] backdrop-blur-md">
+    <nav className="fixed inset-x-0 top-0 z-[60] flex h-[62px] items-center justify-between bg-gradient-to-b from-paper/94 to-paper-2/86 px-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] backdrop-blur-md">
       <div className="flex items-center gap-9">
         <button
           className="brand relative flex items-center gap-2.5 overflow-hidden rounded-xl px-2 py-1.5 font-display text-lg font-bold transition-transform duration-150 ease-snap hover:scale-[1.04] active:scale-[.94]"

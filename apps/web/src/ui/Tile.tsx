@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { Icon, type IconName } from "./icons";
 import { useWiiSound } from "./useWiiSound";
 
-const HUE_CLASS: Record<number, string> = {
+export const HUE_CLASS: Record<number, string> = {
   1: "bg-gradient-to-br from-p1a to-p1b",
   2: "bg-gradient-to-br from-p2a to-p2b",
   3: "bg-gradient-to-br from-p3a to-p3b",

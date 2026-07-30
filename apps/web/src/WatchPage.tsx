@@ -4,15 +4,10 @@ import {
   MediaProvider,
   isHLSProvider,
   isVideoProvider,
-  useMediaState,
-  FullscreenButton,
-  MuteButton,
-  PlayButton,
-  Time,
-  TimeSlider,
   type MediaPlayerInstance,
   type MediaProviderAdapter,
 } from "@vidstack/react";
+import { defaultLayoutIcons, DefaultVideoLayout } from "@vidstack/react/player/layouts/default";
 import JASSUB from "jassub";
 // Vite bundles these from the installed dependency and serves them from our
 // own origin — never a CDN — same reasoning as the hls.js fix below (§1.1/§13.3).
@@ -20,10 +15,7 @@ import jassubWorkerUrl from "jassub/dist/worker/worker.js?worker&url";
 import jassubWasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url";
 import jassubModernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url";
 
-import type {
-  StartPlaybackResponse as PlaybackStart,
-  AudioTrackSwitchBody,
-} from "@hokago/contract/playback";
+import type { StartPlaybackResponse as PlaybackStart } from "@hokago/contract/playback";
 import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
 import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
@@ -49,13 +41,9 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null);
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
   const playerRef = useRef<MediaPlayerInstance>(null);
   const jassubRef = useRef<JASSUB | null>(null);
-  const pendingSeekRef = useRef<number | null>(null);
   const [title, setTitle] = useState<string | null>(null);
-  const paused = useMediaState("paused", playerRef);
-  const muted = useMediaState("muted", playerRef);
 
   useEffect(() => {
     if (!mediaItemId) return;
@@ -142,34 +130,6 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     }
   }, [start?.method, videoEl, selectedAudioIndex, audioTracks]);
 
-  // DIRECT_STREAM/TRANSCODE: only one audio track is ever baked into segments
-  // (§11.4), so switching means asking the server to restart ffmpeg with a
-  // different track, then forcing hls.js to refetch the (now different-content)
-  // playlist URL and reseek — a cache-busting query nonce is what forces the refetch.
-  const handleAudioChange = useCallback(
-    (absoluteIndex: number) => {
-      setSelectedAudioIndex(absoluteIndex);
-      if (!start || start.method === "DIRECT_PLAY") return;
-      const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000);
-      const body: AudioTrackSwitchBody = { audioStreamIndex: absoluteIndex, positionMs };
-      api
-        .POST("/playback/{sessionId}/audio-track", { params: { path: { sessionId: start.sessionId } }, body })
-        .then(({ error }) => {
-          if (error) throw new Error("audio-track switch failed");
-          pendingSeekRef.current = positionMs / 1000;
-          setReloadNonce((n) => n + 1);
-        })
-        .catch((err: Error) => setError(err.message));
-    },
-    [start],
-  );
-
-  const handleCanPlay = useCallback(() => {
-    if (pendingSeekRef.current === null || !playerRef.current) return;
-    playerRef.current.currentTime = pendingSeekRef.current;
-    pendingSeekRef.current = null;
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     api
@@ -190,110 +150,38 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     start?.method === "DIRECT_PLAY"
       ? { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const }
       : start?.playlistUrl
-        ? {
-            src: reloadNonce > 0 ? `${start.playlistUrl}?r=${reloadNonce}` : start.playlistUrl,
-            type: "application/x-mpegurl" as const,
-          }
+        ? { src: start.playlistUrl, type: "application/x-mpegurl" as const }
         : undefined;
 
-  const iconBtn = "flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20";
-
-  const topBar = (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-[4] bg-[linear-gradient(180deg,rgba(0,0,0,0.55)_0%,transparent_100%)] p-6">
-      <div className="pointer-events-auto flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button className={iconBtn} onClick={() => history.back()} title="Back">
-            <Icon name="back" className="h-[18px] w-[18px]" />
-          </button>
-          <div>
-            <div className="text-[13.5px] font-bold text-white">{title ?? "hokago"}</div>
-            <div className="text-[12px] text-white/60">
-              {error ? `error: ${error}` : start ? start.method.replace("_", " ").toLowerCase() : "starting playback…"}
-            </div>
-          </div>
-        </div>
-        <button className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-[12.5px] font-bold text-white/80" title="Watch party">
-          <Icon name="users" className="h-4 w-4" />
-          Watch party
-        </button>
-      </div>
-    </div>
-  );
-
   return (
-    <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-[#161210] text-white">
-      {src ? (
+    <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-black text-white">
+      <button
+        className="absolute left-5 top-5 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-colors hover:bg-black/65"
+        onClick={() => history.back()}
+        title="Back"
+      >
+        <Icon name="back" className="h-[18px] w-[18px]" />
+      </button>
+      {error ? (
+        <div className="flex h-full w-full items-center justify-center text-sm text-white/70">
+          Couldn’t start playback.
+        </div>
+      ) : src ? (
         <MediaPlayer
           ref={playerRef}
           className="h-full w-full"
           src={src}
-          controls={false}
+          playsInline
+          title={title ?? "hokago"}
           onProviderChange={handleProviderChange}
-          onCanPlay={handleCanPlay}
         >
           <MediaProvider />
-
-          {topBar}
-
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[4] bg-[linear-gradient(0deg,rgba(0,0,0,0.65)_0%,transparent_100%)] px-6 pb-5 pt-10">
-            <div className="pointer-events-auto flex flex-col gap-3">
-              <TimeSlider.Root className="group relative flex h-4 w-full cursor-pointer items-center">
-                <TimeSlider.Track className="relative h-1 w-full rounded-full bg-white/25">
-                  <TimeSlider.TrackFill className="absolute h-full rounded-full bg-accent" />
-                </TimeSlider.Track>
-                <TimeSlider.Thumb className="absolute top-1/2 left-[var(--slider-fill-percent)] h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent opacity-0 shadow transition-opacity group-hover:opacity-100" />
-              </TimeSlider.Root>
-
-              <div className="flex items-center gap-3">
-                <PlayButton className={iconBtn}>
-                  <Icon name={paused ? "play" : "pause"} className="h-[18px] w-[18px]" />
-                </PlayButton>
-                <MuteButton className={iconBtn}>
-                  <Icon name={muted ? "mute" : "vol"} className="h-[18px] w-[18px]" />
-                </MuteButton>
-                <div className="font-mono text-[12px] text-white/70">
-                  <Time type="current" /> / <Time type="duration" />
-                </div>
-
-                <div className="ml-auto flex items-center gap-2">
-                  {audioTracks.length > 1 && (
-                    <select
-                      className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white"
-                      value={selectedAudioIndex ?? ""}
-                      onChange={(e) => handleAudioChange(Number(e.target.value))}
-                    >
-                      {audioTracks.map((t) => (
-                        <option key={t.streamIndex} value={t.streamIndex} className="text-ink">
-                          {t.title ?? t.lang ?? `track ${t.streamIndex}`}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {subtitles.length > 0 && (
-                    <select
-                      className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white"
-                      value={selectedSubtitleId ?? ""}
-                      onChange={(e) => setSelectedSubtitleId(e.target.value || null)}
-                    >
-                      <option value="" className="text-ink">off</option>
-                      {subtitles.map((t) => (
-                        <option key={t.id} value={t.id} disabled={t.requiresBurnIn} className="text-ink">
-                          {t.title ?? t.lang ?? t.id}
-                          {t.requiresBurnIn ? " (burn-in only)" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <FullscreenButton className={iconBtn}>
-                    <Icon name="expand" className="h-[18px] w-[18px]" />
-                  </FullscreenButton>
-                </div>
-              </div>
-            </div>
-          </div>
+          <DefaultVideoLayout icons={defaultLayoutIcons} />
         </MediaPlayer>
       ) : (
-        topBar
+        <div className="flex h-full w-full items-center justify-center text-sm text-white/70">
+          Starting playback…
+        </div>
       )}
     </div>
   );

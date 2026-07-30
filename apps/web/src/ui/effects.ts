@@ -17,13 +17,13 @@ export function useReducedMotion(): boolean {
   return reduced;
 }
 
-function spawnStar(x: number, y: number) {
+export function spawnStar(x: number, y: number) {
   const star = document.createElement("div");
-  star.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:9999;color:#e8b84b;transform:translate(-50%,-50%);transition:transform .6s cubic-bezier(.2,.7,.3,1),opacity .6s ease;opacity:1;`;
-  star.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="${STAR_PATH}"/></svg>`;
+  star.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:9999;color:#E3A34C;transform:translate(-50%,-50%) scale(.4) rotate(-8deg);transition:transform .6s cubic-bezier(.2,.7,.3,1),opacity .6s ease;opacity:1;filter:drop-shadow(0 2px 5px rgba(227,163,76,.55));`;
+  star.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="${STAR_PATH}"/></svg>`;
   document.body.appendChild(star);
   requestAnimationFrame(() => {
-    star.style.transform = `translate(-50%,-140%) scale(1.3)`;
+    star.style.transform = `translate(-50%,-150%) scale(1.2) rotate(34deg)`;
     star.style.opacity = "0";
   });
   setTimeout(() => star.remove(), 650);

@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Tile, type TileItem } from "./Tile";
+import { Icon } from "./icons";
 import { useWiiSound } from "./useWiiSound";
 import { useStaggerEntrance } from "./effects";
 
@@ -42,10 +43,11 @@ export function Row({
       </div>
       <div className="group/row relative">
         <button
-          className="absolute left-7 top-[calc(50%-12px)] z-[5] flex h-10 w-10 items-center justify-center rounded-full border border-line-2 bg-card text-lg font-bold text-ink opacity-0 shadow-[0_4px_12px_-3px_rgba(120,80,60,0.3)] transition-opacity duration-200 ease-snap group-hover/row:opacity-100 hover:text-accent active:scale-[.88]"
+          aria-label="Scroll left"
+          className="absolute left-6 top-[calc(50%-14px)] z-[5] flex h-11 w-11 items-center justify-center rounded-full border border-line-2 bg-card/95 text-ink opacity-0 shadow-[0_6px_16px_-4px_rgba(120,80,60,0.35)] backdrop-blur-sm transition-[opacity,transform,color] duration-200 ease-snap group-hover/row:opacity-100 hover:text-accent active:scale-[.88]"
           onClick={() => scroll(-1)}
         >
-          ‹
+          <Icon name="back" className="h-[18px] w-[18px]" />
         </button>
         <div
           ref={scrollerRef}
@@ -57,10 +59,11 @@ export function Row({
           ))}
         </div>
         <button
-          className="absolute right-7 top-[calc(50%-12px)] z-[5] flex h-10 w-10 items-center justify-center rounded-full border border-line-2 bg-card text-lg font-bold text-ink opacity-0 shadow-[0_4px_12px_-3px_rgba(120,80,60,0.3)] transition-opacity duration-200 ease-snap group-hover/row:opacity-100 hover:text-accent active:scale-[.88]"
+          aria-label="Scroll right"
+          className="absolute right-6 top-[calc(50%-14px)] z-[5] flex h-11 w-11 items-center justify-center rounded-full border border-line-2 bg-card/95 text-ink opacity-0 shadow-[0_6px_16px_-4px_rgba(120,80,60,0.35)] backdrop-blur-sm transition-[opacity,transform,color] duration-200 ease-snap group-hover/row:opacity-100 hover:text-accent active:scale-[.88]"
           onClick={() => scroll(1)}
         >
-          ›
+          <Icon name="back" className="h-[18px] w-[18px] rotate-180" />
         </button>
       </div>
     </div>

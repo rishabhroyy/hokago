@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { Icon, type IconName } from "./icons";
 import { useWiiSound } from "./useWiiSound";
-import { useReducedMotion, zoomOpen } from "./effects";
+import { spawnStar, useReducedMotion, zoomOpen } from "./effects";
 
 export const HUE_CLASS: Record<number, string> = {
   1: "bg-gradient-to-br from-p1a to-p1b",
@@ -63,8 +63,9 @@ export function Tile({ item, onOpen }: { item: TileItem; onOpen: (item: TileItem
       onPointerEnter={() => s.hover()}
       onPointerMove={onMove}
       onPointerLeave={onLeave}
-      onClick={() => {
+      onClick={(e) => {
         s.select();
+        if (!reduced) spawnStar(e.clientX, e.clientY);
         if (artRef.current) zoomOpen(artRef.current, () => onOpen(item, artRef.current!), reduced);
       }}
     >

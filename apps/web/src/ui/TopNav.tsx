@@ -60,7 +60,7 @@ export function TopNav() {
   };
 
   return (
-    <nav className="fixed inset-x-0 top-0 z-[60] flex h-[62px] items-center justify-between bg-gradient-to-b from-paper/94 to-paper-2/86 px-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] backdrop-blur-md">
+    <nav className="fixed inset-x-0 top-0 z-[60] flex h-[62px] items-center justify-between border-b border-line/70 bg-gradient-to-b from-paper/94 to-paper-2/86 px-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_1px_12px_-6px_rgba(120,80,60,0.3)] backdrop-blur-md">
       <div className="flex items-center gap-9">
         <button
           className="brand relative flex items-center gap-2.5 overflow-hidden rounded-xl px-2 py-1.5 font-display text-lg font-bold transition-transform duration-150 ease-snap hover:scale-[1.04] active:scale-[.94]"
@@ -117,7 +117,9 @@ export function TopNav() {
             <Icon name="search" className="h-[17px] w-[17px]" />
           </button>
         </div>
-        <div className="h-[34px] w-[34px] rounded-[10px] bg-accent shadow-[inset_0_-2px_4px_rgba(0,0,0,0.12)]" />
+        <div className="flex h-[34px] w-[34px] items-center justify-center rounded-[11px] bg-gradient-to-br from-accent-2 to-accent font-display text-sm font-bold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_3px_8px_-2px_rgba(232,102,79,0.5)] ring-1 ring-white/40">
+          h
+        </div>
       </div>
     </nav>
   );

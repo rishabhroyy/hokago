@@ -98,17 +98,17 @@ export function HomeView() {
             )}
           </div>
           <div className="flex gap-3">
-            {heroMediaFileId && (
-              <button
-                className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full bg-white px-[26px] py-[13px] text-[14.5px] font-bold text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_16px_-6px_rgba(0,0,0,0.3)] transition-transform duration-150 ease-snap hover:-translate-y-0.5 active:scale-[.96]"
-                onClick={() =>
-                  navigate(paths.player(heroMediaFileId, heroId, profileId ?? "dev"))
-                }
-              >
-                <Icon name="play" className="h-4 w-4" />
-                {heroEntry ? "Resume" : "Play"}
-              </button>
-            )}
+            <button
+              className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full bg-white px-[26px] py-[13px] text-[14.5px] font-bold text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_16px_-6px_rgba(0,0,0,0.3)] transition-transform duration-150 ease-snap hover:-translate-y-0.5 active:scale-[.96]"
+              onClick={() =>
+                heroMediaFileId
+                  ? navigate(paths.player(heroMediaFileId, heroId, profileId ?? "dev"))
+                  : navigate(paths.detail(heroId))
+              }
+            >
+              <Icon name="play" className="h-4 w-4" />
+              {heroEntry ? "Resume" : "Play"}
+            </button>
             <button
               className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full border border-white/35 bg-white/20 px-[26px] py-[13px] text-[14.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-white/30 active:scale-[.96]"
               onClick={() => navigate(paths.detail(heroId))}

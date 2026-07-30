@@ -198,9 +198,31 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
 
   const iconBtn = "flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20";
 
+  const topBar = (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-[4] bg-[linear-gradient(180deg,rgba(0,0,0,0.55)_0%,transparent_100%)] p-6">
+      <div className="pointer-events-auto flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button className={iconBtn} onClick={() => history.back()} title="Back">
+            <Icon name="back" className="h-[18px] w-[18px]" />
+          </button>
+          <div>
+            <div className="text-[13.5px] font-bold text-white">{title ?? "hokago"}</div>
+            <div className="text-[12px] text-white/60">
+              {error ? `error: ${error}` : start ? start.method.replace("_", " ").toLowerCase() : "starting playback…"}
+            </div>
+          </div>
+        </div>
+        <button className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-[12.5px] font-bold text-white/80" title="Watch party">
+          <Icon name="users" className="h-4 w-4" />
+          Watch party
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-[#161210] text-white">
-      {src && (
+      {src ? (
         <MediaPlayer
           ref={playerRef}
           className="h-full w-full"
@@ -210,85 +232,69 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           onCanPlay={handleCanPlay}
         >
           <MediaProvider />
-        </MediaPlayer>
-      )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-[4] bg-[linear-gradient(180deg,rgba(0,0,0,0.55)_0%,transparent_100%)] p-6">
-        <div className="pointer-events-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button className={iconBtn} onClick={() => history.back()} title="Back">
-              <Icon name="back" className="h-[18px] w-[18px]" />
-            </button>
-            <div>
-              <div className="text-[13.5px] font-bold text-white">{title ?? "hokago"}</div>
-              <div className="text-[12px] text-white/60">
-                {error ? `error: ${error}` : start ? start.method.replace("_", " ").toLowerCase() : "starting playback…"}
+          {topBar}
+
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[4] bg-[linear-gradient(0deg,rgba(0,0,0,0.65)_0%,transparent_100%)] px-6 pb-5 pt-10">
+            <div className="pointer-events-auto flex flex-col gap-3">
+              <TimeSlider.Root className="group relative flex h-4 w-full cursor-pointer items-center">
+                <TimeSlider.Track className="relative h-1 w-full rounded-full bg-white/25">
+                  <TimeSlider.TrackFill className="absolute h-full rounded-full bg-accent" />
+                </TimeSlider.Track>
+                <TimeSlider.Thumb className="absolute top-1/2 left-[var(--slider-fill-percent)] h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent opacity-0 shadow transition-opacity group-hover:opacity-100" />
+              </TimeSlider.Root>
+
+              <div className="flex items-center gap-3">
+                <PlayButton className={iconBtn}>
+                  <Icon name={paused ? "play" : "pause"} className="h-[18px] w-[18px]" />
+                </PlayButton>
+                <MuteButton className={iconBtn}>
+                  <Icon name={muted ? "mute" : "vol"} className="h-[18px] w-[18px]" />
+                </MuteButton>
+                <div className="font-mono text-[12px] text-white/70">
+                  <Time type="current" /> / <Time type="duration" />
+                </div>
+
+                <div className="ml-auto flex items-center gap-2">
+                  {audioTracks.length > 1 && (
+                    <select
+                      className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white"
+                      value={selectedAudioIndex ?? ""}
+                      onChange={(e) => handleAudioChange(Number(e.target.value))}
+                    >
+                      {audioTracks.map((t) => (
+                        <option key={t.streamIndex} value={t.streamIndex} className="text-ink">
+                          {t.title ?? t.lang ?? `track ${t.streamIndex}`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {subtitles.length > 0 && (
+                    <select
+                      className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white"
+                      value={selectedSubtitleId ?? ""}
+                      onChange={(e) => setSelectedSubtitleId(e.target.value || null)}
+                    >
+                      <option value="" className="text-ink">off</option>
+                      {subtitles.map((t) => (
+                        <option key={t.id} value={t.id} disabled={t.requiresBurnIn} className="text-ink">
+                          {t.title ?? t.lang ?? t.id}
+                          {t.requiresBurnIn ? " (burn-in only)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <FullscreenButton className={iconBtn}>
+                    <Icon name="expand" className="h-[18px] w-[18px]" />
+                  </FullscreenButton>
+                </div>
               </div>
             </div>
           </div>
-          <button className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-[12.5px] font-bold text-white/80" title="Watch party">
-            <Icon name="users" className="h-4 w-4" />
-            Watch party
-          </button>
-        </div>
-      </div>
-
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[4] bg-[linear-gradient(0deg,rgba(0,0,0,0.65)_0%,transparent_100%)] px-6 pb-5 pt-10">
-        <div className="pointer-events-auto flex flex-col gap-3">
-          <TimeSlider.Root className="group relative flex h-4 w-full cursor-pointer items-center">
-            <TimeSlider.Track className="relative h-1 w-full rounded-full bg-white/25">
-              <TimeSlider.TrackFill className="absolute h-full rounded-full bg-accent" />
-            </TimeSlider.Track>
-            <TimeSlider.Thumb className="absolute top-1/2 left-[var(--slider-fill-percent)] h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent opacity-0 shadow transition-opacity group-hover:opacity-100" />
-          </TimeSlider.Root>
-
-          <div className="flex items-center gap-3">
-            <PlayButton className={iconBtn}>
-              <Icon name={paused ? "play" : "pause"} className="h-[18px] w-[18px]" />
-            </PlayButton>
-            <MuteButton className={iconBtn}>
-              <Icon name={muted ? "mute" : "vol"} className="h-[18px] w-[18px]" />
-            </MuteButton>
-            <div className="font-mono text-[12px] text-white/70">
-              <Time type="current" /> / <Time type="duration" />
-            </div>
-
-            <div className="ml-auto flex items-center gap-2">
-              {audioTracks.length > 1 && (
-                <select
-                  className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white"
-                  value={selectedAudioIndex ?? ""}
-                  onChange={(e) => handleAudioChange(Number(e.target.value))}
-                >
-                  {audioTracks.map((t) => (
-                    <option key={t.streamIndex} value={t.streamIndex} className="text-ink">
-                      {t.title ?? t.lang ?? `track ${t.streamIndex}`}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {subtitles.length > 0 && (
-                <select
-                  className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white"
-                  value={selectedSubtitleId ?? ""}
-                  onChange={(e) => setSelectedSubtitleId(e.target.value || null)}
-                >
-                  <option value="" className="text-ink">off</option>
-                  {subtitles.map((t) => (
-                    <option key={t.id} value={t.id} disabled={t.requiresBurnIn} className="text-ink">
-                      {t.title ?? t.lang ?? t.id}
-                      {t.requiresBurnIn ? " (burn-in only)" : ""}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <FullscreenButton className={iconBtn}>
-                <Icon name="expand" className="h-[18px] w-[18px]" />
-              </FullscreenButton>
-            </div>
-          </div>
-        </div>
-      </div>
+        </MediaPlayer>
+      ) : (
+        topBar
+      )}
     </div>
   );
 }

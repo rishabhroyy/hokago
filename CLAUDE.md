@@ -26,8 +26,10 @@ non-obvious, cross-referenced to the doc.
 5. **`packages/metadata` contains interfaces only.** No AGPL or non-commercial data or code
    in the core repo, ever, not even temporarily. Encumbered adapters live in
    `packages-optional/`, fetched at runtime by the operator. This cannot be retrofitted. (§8.5)
-6. **Every component consumes theme tokens only.** Never a hardcoded color, radius, font, or
-   duration. This single rule is the difference between "100% themeable" being true or false. (§15.1)
+6. **One hardcoded UI, no theming system.** hokago ships a single design (`docs/ui-handoff/`
+   is the source of truth). No `ThemeManifest`, no `data-theme` switching, no dark/light
+   toggle, no per-user theme import. Design values live in Tailwind config / CSS, not a
+   swappable token contract. (§15.1)
 7. **Anime is not a `MediaKind`.** It's `ContentProfile.ANIME` on the Library, which forks the
    parser and provider order. (§7.2)
 8. **Confidence is derived from `Evidence`, never authored.** `MediaItem.confidence` is a
@@ -68,13 +70,16 @@ non-obvious, cross-referenced to the doc.
 
 ---
 
-## The two files everything generates from
+## The file everything generates from
 
 - **`packages/db/prisma/schema.prisma`** — the data model. Types flow from here.
-- **`packages/theme/src/tokens.ts`** — the token contract. All styling flows from here.
 
-Both are written and reviewed. **Do not redesign them.** Extend if genuinely needed, but
-raise it first and update `docs/design.md` in the same change.
+Written and reviewed. **Do not redesign it.** Extend if genuinely needed, but raise it
+first and update `docs/design.md` in the same change.
+
+Styling has no equivalent contract file — hokago ships one hardcoded design
+(`apps/web/tailwind.config.ts` + `docs/ui-handoff/`), not a token system multiple
+themes resolve against.
 
 ---
 
@@ -91,7 +96,7 @@ Rejected, don't relitigate: Go backend, NestJS, s6-overlay single container, Pos
 
 ```
 apps/api      apps/worker      apps/web
-packages/     contract  db  metadata  parser  theme  ffmpeg  fonts
+packages/     contract  db  metadata  parser  ffmpeg  fonts
 packages-optional/     ← AGPL/non-commercial, runtime-fetched, never vendored
 infra/docker  infra/hwaccel.transcoding.yml
 ```
@@ -112,4 +117,4 @@ infra/docker  infra/hwaccel.transcoding.yml
 - **Don't add dependencies casually.** Especially native/node-gyp ones — they wreck multi-arch
   Docker builds.
 - **Tests where logic is subtle**: parser, evidence scoring, `episode_offset` resolution,
-  playback decisions, theme validation. Not everywhere.
+  playback decisions. Not everywhere.

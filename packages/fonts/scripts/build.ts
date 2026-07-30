@@ -5,10 +5,9 @@ import subsetFont from "subset-font";
 const root = path.resolve(import.meta.dirname, "..");
 const vendorDir = path.join(root, "vendor");
 
-const WEIGHTS = [400, 500, 600, 700] as const;
 const SUBSETS = ["latin", "latin-ext"] as const;
 
-async function copyFontsourceFiles(pkg: string, outDir: string, weights: readonly number[] = WEIGHTS) {
+async function copyFontsourceFiles(pkg: string, outDir: string, weights: readonly number[]) {
   await mkdir(outDir, { recursive: true });
   const filesDir = path.join(root, "node_modules/@fontsource", pkg, "files");
   for (const weight of weights) {
@@ -36,12 +35,13 @@ async function buildWordmark() {
 async function main() {
   await rm(vendorDir, { recursive: true, force: true });
   await buildWordmark();
-  await copyFontsourceFiles("inter", path.join(vendorDir, "inter"));
-  await copyFontsourceFiles("jetbrains-mono", path.join(vendorDir, "jetbrains-mono"));
-  // Default UI tier (§1.1, §15.2): Regular + Medium, full latin/latin-ext
-  // charset (not the 5-glyph wordmark subset) — this is what renders
-  // font.display for arbitrary heading text, not just "hokago".
-  await copyFontsourceFiles("zen-maru-gothic", path.join(vendorDir, "zen-maru-gothic"), [400, 500]);
+  // Body/UI face (design-system.md).
+  await copyFontsourceFiles("plus-jakarta-sans", path.join(vendorDir, "plus-jakarta-sans"), [400, 500, 600, 700, 800]);
+  // Clock, badges, meta, ratings.
+  await copyFontsourceFiles("jetbrains-mono", path.join(vendorDir, "jetbrains-mono"), [400, 500]);
+  // Display tier (not the 5-glyph wordmark subset) — renders font.display for
+  // arbitrary heading text, not just "hokago". 500/700/900 per design-system.md.
+  await copyFontsourceFiles("zen-maru-gothic", path.join(vendorDir, "zen-maru-gothic"), [500, 700, 900]);
   console.log("fonts vendored to", vendorDir);
 }
 

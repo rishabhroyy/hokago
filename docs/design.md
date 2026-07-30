@@ -774,38 +774,60 @@ Detection params (Jellyfin's defaults, reasonable start): intro within first 25%
 
 ---
 
-## 15. Theming
+## 15. Design (formerly "Theming")
 
-Hard requirement → **the token contract is written before any UI.**
+**Decision (supersedes the token-contract system below): hokago ships one hardcoded
+design, not a themeable token contract.** The approved design lives in
+`docs/ui-handoff/` (source of truth: `reference-prototype.html`) and is implemented
+directly in `apps/web/tailwind.config.ts` + component CSS. No `ThemeManifest`, no
+`data-theme` switching, no dark/light toggle, no per-user or per-profile theme choice.
 
-### 15.1 Mechanism
+The multi-theme system this section originally specified (§15.1–§15.3 below, kept for
+history) was built, then a real UI was designed and approved that made the swappable
+abstraction pure cost: one design to build well beats an N-theme contract nobody was
+asking to swap. `packages/theme` is deleted; styling constants live in Tailwind config
+like any other Tailwind app.
+
+**What's still true from the old approach:**
+- **Fonts are self-hosted, never hotlinked** (§1.1, §13.3) — vendored at build time in
+  `packages/fonts`, served hash-addressed from our own origin via `/fonts`. This
+  invariant doesn't depend on theming; it depends on the browser never loading a
+  third-party `<link>`.
+- **Font roles, not one family** — display (Zen Maru Gothic) vs body/ui (Plus Jakarta
+  Sans) vs mono (JetBrains Mono) is still a real distinction, just fixed values now
+  instead of per-theme swappable stacks.
+
+<details>
+<summary>Original multi-theme system (historical, superseded above)</summary>
+
+### 15.1 Mechanism (superseded)
 
 ```
 packages/theme  →  typed token set  →  CSS custom properties  →  data-theme on <html>
 ```
 
-Themes are `ThemeManifest` constants in `packages/theme/src/tokens.ts` — no Postgres model, no import/export, no per-profile persistence. hokago ships exactly two: `defaultTheme` (dark) and `lightTheme` (light), switched client-side via a `data-theme` attribute and a `localStorage`-remembered toggle. **Every shadcn component consumes tokens only. Never a hardcoded value.** This rule makes or breaks the requirement.
+Themes were `ThemeManifest` constants in `packages/theme/src/tokens.ts` — no Postgres
+model, no import/export, no per-profile persistence. hokago shipped exactly two:
+`defaultTheme` (dark) and `lightTheme` (light), switched client-side via a `data-theme`
+attribute and a `localStorage`-remembered toggle.
 
-A richer runtime theme-import mechanism (drop in arbitrary validated JSON, per-profile assignment) was built once and removed — it added a Theme/ThemeFont DB layer and a chrome-font-linking system for a feature nobody used ahead of having a single real theme to prove the token contract against. `validateTheme()` and the full token schema remain in `packages/theme` (they're what a future importer would validate against), but nothing in the running app calls them.
+A richer runtime theme-import mechanism (drop in arbitrary validated JSON, per-profile
+assignment) was built once and removed even earlier — it added a Theme/ThemeFont DB
+layer and a chrome-font-linking system for a feature nobody used ahead of having a
+single real theme to prove the token contract against.
 
-### 15.2 Token surface
+### 15.2 Token surface (superseded)
 
-Must cover more than color, or "make it look like Netflix" is impossible:
+Covered color, radii/borders/shadows, font roles + scale + weights, spacing, motion,
+poster aspect ratio, card shape + hover behaviour, nav layout, generated-art
+composition style (§8.7.3), collection display default (§7.3). These are now fixed
+design decisions in `docs/ui-handoff/` rather than theme-selectable axes.
 
-- color (bg, surface, text, accent, hover, focus…)
-- radii, borders, shadows
-- **typography — font *roles*, not one family** (§1.1): `font.display` / `font.body` / `font.ui` / `font.mono` / `font.wordmark`, each a **stack** so unresolved fonts degrade instead of breaking. Plus scale and weights. Families resolve against the font store.
-- spacing scale
-- motion (durations, easing)
-- **poster aspect ratio** (2:3 vs 16:9 — Netflix vs Crunchyroll genuinely differ)
-- card shape + hover behaviour
-- nav layout (top bar vs sidebar)
-- **generated-art composition style** (§8.7.3) — blur-extend vs weighted crop, scrim, title placement, display face
-- collection display default: `release_order` or `story_order` (§7.3)
+### 15.3 Ships with (superseded)
 
-### 15.3 Ships with
+`hokago` (default, dark) and `light`, toggled in the browse nav.
 
-`hokago` (default, dark) and `light`. A dark/light toggle in the browse nav, not buried in settings — no profile-menu switcher, since there's no per-profile assignment to switch.
+</details>
 
 ---
 

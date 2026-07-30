@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const API_ORIGIN = process.env.HOKAGO_API_ORIGIN ?? "http://localhost:3000";
 
@@ -18,14 +19,13 @@ const API_PATHS = [
   "/health",
   "/auth",
   "/profiles",
-  "/themes",
   "/continue-watching",
   "/libraries",
   "/media-items",
 ];
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",

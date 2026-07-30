@@ -1,0 +1,61 @@
+/* Merge into the app's global stylesheet (after Tailwind's base).
+   Fonts: install @fontsource-variable/… or self-host to match the repo's font strategy.
+   e.g. import "@fontsource/zen-maru-gothic/500.css" (700, 900),
+        "@fontsource/plus-jakarta-sans/…", "@fontsource/jetbrains-mono/…". */
+
+:root {
+  --e-snap: cubic-bezier(.4, 1.4, .5, 1);
+  --e: cubic-bezier(.4, 0, .2, 1);
+}
+
+body {
+  color: #35302B;
+  font-family: "Plus Jakarta Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* the warm "2007 web" wallpaper: soft top light + faint dot grid */
+  background-color: #F6F0E6;
+  background-image:
+    radial-gradient(130% 75% at 50% -10%, rgba(255, 247, 232, 0.95), transparent 55%),
+    radial-gradient(rgba(120, 95, 72, 0.05) 1px, transparent 1.5px);
+  background-size: 100% 100%, 24px 24px;
+  background-repeat: no-repeat, repeat;
+  background-attachment: fixed; /* keep the wallpaper steady while content scrolls */
+}
+
+/* soft rounded scrollbars in the cream palette */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #D8CEBC; border-radius: 100px; border: 3px solid #F6F0E6; }
+::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible { outline: 2.5px solid #E8664F; outline-offset: 2px; border-radius: 6px; }
+
+/* keyframes (mirror in tailwind.config if you prefer utilities) */
+@keyframes wiipulse {
+  0%,100% { box-shadow: 0 0 0 3px #fff, 0 0 0 5px #4FB8E0, 0 0 15px 1px rgba(79,184,224,.55), 0 14px 26px -8px rgba(120,80,60,.4); }
+  50%     { box-shadow: 0 0 0 3px #fff, 0 0 0 6px #4FB8E0, 0 0 26px 4px rgba(79,184,224,.55), 0 14px 26px -8px rgba(120,80,60,.4); }
+}
+@keyframes popsel { 0%,100% { transform: scale(1); } 42% { transform: scale(1.1); } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes zoomin { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+@keyframes bob { 0%,100% { transform: translateY(-50%); } 50% { transform: translateY(-58%); } }
+@keyframes shine { 0%,72% { transform: translateX(-130%); } 86%,100% { transform: translateX(130%); } }
+
+/* the star-ping used on select + Konami (portal these to <body>) */
+.starping { position: fixed; z-index: 200; pointer-events: none; color: #E3A34C; }
+.starping svg { width: 26px; height: 26px; filter: drop-shadow(0 2px 5px rgba(227,163,76,.55)); }
+@keyframes starp {
+  0%   { transform: translate(-50%,-50%) scale(.2) rotate(-8deg); opacity: 0; }
+  22%  { opacity: 1; }
+  100% { transform: translate(-50%,-150%) scale(1.15) rotate(38deg); opacity: 0; }
+}
+
+/* the channel-zoom overlay (portal to <body>) */
+.zoomov { position: fixed; z-index: 90; pointer-events: none;
+  box-shadow: 0 0 0 3px #fff, 0 0 34px 8px rgba(79,184,224,.55);
+  transition: left .42s var(--e), top .42s var(--e), width .42s var(--e), height .42s var(--e), border-radius .42s var(--e); }
+.zoomov.go { left: 0 !important; top: 0 !important; width: 100vw !important; height: 100vh !important; border-radius: 0 !important; }
+.zoomov.fade { opacity: 0; transition: opacity .3s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}

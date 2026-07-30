@@ -70,7 +70,7 @@ export function Tile({ item, onOpen }: { item: TileItem; onOpen: (item: TileItem
     >
       <div
         ref={artRef}
-        className={`art relative aspect-[2/3] overflow-hidden rounded-tile shadow-plastic transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"} ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
+        className={`art relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-tile shadow-plastic transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"} ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
       >
         {item.posterUrl ? (
           <img src={item.posterUrl} alt="" className="h-full w-full object-cover" loading="lazy" />

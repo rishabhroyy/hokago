@@ -1,30 +1,17 @@
 import { useEffect, useState } from "react";
-import type { ThemeTokens } from "@hokago/theme";
 import { Wordmark } from "./Wordmark";
 import { fetchLibraries, fetchLibraryItems, type LibrarySummary, type MediaCard } from "./browse-api";
-
-interface BrowsePageProps {
-  tokens: ThemeTokens;
-  colorScheme: "dark" | "light";
-}
-
-function toggleColorScheme(current: "dark" | "light"): void {
-  localStorage.setItem("hokago_color_scheme", current === "light" ? "dark" : "light");
-  location.reload();
-}
 
 interface Shelf {
   library: LibrarySummary;
   items: MediaCard[];
 }
 
-// The real browse grid (§7.6/§15) — poster wall built entirely from the
-// active theme's layout tokens, so a theme switch genuinely reshapes the
-// page (sidebar vs top nav, poster vs episodic aspect, hover treatment)
-// rather than just recoloring it.
-export function BrowsePage({ tokens, colorScheme }: BrowsePageProps) {
+// Placeholder browse grid — superseded by the Home/Library views in the UI
+// rebuild (docs/ui-handoff). Keeps real library data wired up in the
+// meantime.
+export function BrowsePage() {
   const [shelves, setShelves] = useState<Shelf[]>([]);
-  const { layout } = tokens;
 
   useEffect(() => {
     let cancelled = false;
@@ -39,11 +26,11 @@ export function BrowsePage({ tokens, colorScheme }: BrowsePageProps) {
     };
   }, []);
 
-  const hero = layout.heroStyle === "none" ? null : shelves.flatMap((s) => s.items).find((i) => i.backdropUrl);
+  const hero = shelves.flatMap((s) => s.items).find((i) => i.backdropUrl);
 
   return (
-    <div className="browse-page" data-nav={layout.nav}>
-      <nav className="browse-nav" data-nav={layout.nav} data-sticky={layout.navSticky}>
+    <div className="browse-page">
+      <nav className="browse-nav">
         <Wordmark />
         <div className="browse-nav__links">
           {shelves.map(({ library }) => (
@@ -54,9 +41,6 @@ export function BrowsePage({ tokens, colorScheme }: BrowsePageProps) {
           ))}
         </div>
         <div className="browse-nav__profile">
-          <button type="button" className="browse-nav__theme-toggle" onClick={() => toggleColorScheme(colorScheme)}>
-            {colorScheme === "light" ? "Dark" : "Light"}
-          </button>
           <span className="browse-nav__avatar" aria-hidden="true" />
           <span className="browse-nav__profile-label">Profile</span>
         </div>
@@ -64,12 +48,7 @@ export function BrowsePage({ tokens, colorScheme }: BrowsePageProps) {
       <div className="browse-page__body">
         {hero && (
           <div className="browse-hero">
-            {layout.heroStyle === "backdrop" && hero.backdropUrl && (
-              <img className="browse-hero__image" src={hero.backdropUrl} alt="" />
-            )}
-            {layout.heroStyle === "poster" && hero.posterUrl && (
-              <img className="browse-hero__image" src={hero.posterUrl} alt="" />
-            )}
+            {hero.backdropUrl && <img className="browse-hero__image" src={hero.backdropUrl} alt="" />}
             <div className="browse-hero__wash" />
             <div className="browse-hero__scrim" />
             <div className="browse-hero__content">
@@ -83,12 +62,7 @@ export function BrowsePage({ tokens, colorScheme }: BrowsePageProps) {
             <h2 className="browse-section__title">{library.name}</h2>
             <div className="browse-grid">
               {items.map((item) => (
-                <div
-                  className="browse-card"
-                  key={item.id}
-                  data-hover={layout.cardHover}
-                  data-title={layout.cardTitle}
-                >
+                <div className="browse-card" key={item.id}>
                   {item.posterUrl ? (
                     <img className="browse-card__poster" src={item.posterUrl} alt="" />
                   ) : (

@@ -1,4 +1,4 @@
-import logoMarkUrl from "../../../packages/theme/assets/logo.svg";
+import logoMarkUrl from "./assets/logo.svg";
 
 interface WordmarkProps {
   /** px, mark height — text scales to match. */
@@ -6,11 +6,10 @@ interface WordmarkProps {
   className?: string;
 }
 
-// The lockup: cat-ears mark (tinted via mask-image, §15.1 — the raw SVG's
-// hardcoded fill is never used) + "hokago" set in Zen Maru Gothic 500,
-// lowercase (§1). This is the one deliberate exception to "tokens only for
-// fonts" — the wordmark face is fixed brand identity, not a theme choice,
-// same reason font.wordmark stays theme-swappable for everything else.
+// The lockup: cat-ears mark (tinted via mask-image, the raw SVG's hardcoded
+// fill is never used) + "hokago" set in Zen Maru Gothic 500, lowercase (§1).
+// Placeholder mark/colors — superseded by the approved logo in the UI
+// rebuild's icon/logo step (docs/ui-handoff).
 export function Wordmark({ size = 28, className }: WordmarkProps) {
   return (
     <span
@@ -27,7 +26,7 @@ export function Wordmark({ size = 28, className }: WordmarkProps) {
           display: "inline-block",
           width: size,
           height: size,
-          backgroundColor: "var(--hk-color-accent)",
+          backgroundColor: "#E8664F",
           maskImage: `url(${logoMarkUrl})`,
           maskRepeat: "no-repeat",
           maskSize: "contain",
@@ -44,7 +43,7 @@ export function Wordmark({ size = 28, className }: WordmarkProps) {
           fontWeight: 500,
           fontSize: size * 0.86,
           lineHeight: 1,
-          color: "var(--hk-color-text)",
+          color: "#35302B",
         }}
       >
         hokago

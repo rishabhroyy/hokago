@@ -17,7 +17,6 @@
     "@hokago/db": "workspace:*",
     "@hokago/ffmpeg": "workspace:*",
     "@hokago/queue": "workspace:*",
-    "@hokago/theme": "workspace:*",
     "fastify": "^5.2.1",
     "fastify-type-provider-zod": "^4.0.2",
     "hash-wasm": "^4.12.0",

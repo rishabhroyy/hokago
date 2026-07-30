@@ -16,19 +16,23 @@ function fontStoreDir(): string {
 // @font-face with an identical selector and no way for the browser to choose
 // between them.
 const VENDORED_FONTS: { file: string; family: string; weight: number }[] = [
-  ...[400, 500, 600, 700].map((weight) => ({ file: `inter/inter-latin-${weight}-normal.woff2`, family: "Inter", weight })),
-  ...[400, 500, 600, 700].map((weight) => ({
+  ...[400, 500, 600, 700, 800].map((weight) => ({
+    file: `plus-jakarta-sans/plus-jakarta-sans-latin-${weight}-normal.woff2`,
+    family: "Plus Jakarta Sans",
+    weight,
+  })),
+  ...[400, 500].map((weight) => ({
     file: `jetbrains-mono/jetbrains-mono-latin-${weight}-normal.woff2`,
     family: "JetBrains Mono",
     weight,
   })),
   { file: "wordmark/zen-maru-gothic-500-hokago-subset.woff2", family: "Zen Maru Gothic", weight: 500 },
-  // Default UI tier (§1.1, §15.2): full latin charset, Regular + Medium —
-  // renders font.display for arbitrary heading text, not just the "hokago"
-  // wordmark glyphs. Shares family/weight 500 with the subset above; browsers
-  // resolve same-family/weight @font-face duplicates by picking whichever
-  // declaration actually has the requested glyph, so this coexists fine.
-  ...[400, 500].map((weight) => ({
+  // Display tier (§1.1): full latin charset — renders font.display for
+  // arbitrary heading text, not just the "hokago" wordmark glyphs. Shares
+  // family/weight 500 with the subset above; browsers resolve same-
+  // family/weight @font-face duplicates by picking whichever declaration
+  // actually has the requested glyph, so this coexists fine.
+  ...[500, 700, 900].map((weight) => ({
     file: `zen-maru-gothic/zen-maru-gothic-latin-${weight}-normal.woff2`,
     family: "Zen Maru Gothic",
     weight,

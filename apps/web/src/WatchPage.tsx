@@ -180,7 +180,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
 
   return (
     <div className="watch-page">
-      <h1 style={{ fontFamily: "var(--hk-font-display)" }}>hokago — watch</h1>
+      <h1 className="font-display">hokago — watch</h1>
       <p className="watch-page__meta">
         {error
           ? `error: ${error}`

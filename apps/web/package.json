@@ -10,18 +10,19 @@
   },
   "dependencies": {
     "@hokago/contract": "workspace:*",
-    "@hokago/theme": "workspace:*",
     "@vidstack/react": "1.15.6",
-    "vidstack": "1.15.6",
     "hls.js": "^1.6.16",
     "jassub": "^2.5.7",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "vidstack": "1.15.6"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.3",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.3.3",
     "vite": "^8.1.5"
   }
 }

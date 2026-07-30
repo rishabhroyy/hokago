@@ -2,20 +2,9 @@ import { PrismaClient } from "@hokago/db";
 import { LibrarySummary, MediaCard, MediaItemDetail, LibraryItemsParams, MediaItemDetailParams, NotFoundError } from "@hokago/contract/browse";
 import { z } from "zod";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
+import { primaryArtworkUrl, type ArtworkRef } from "./artwork.js";
 
 const db = new PrismaClient();
-
-interface ArtworkRef {
-  id: string;
-  kind: string;
-  priority: number;
-}
-
-/** Lowest `priority` wins per kind (§7.6) — sidecar/embedded beat generated. */
-function primaryArtworkUrl(artwork: ArtworkRef[], kind: "POSTER" | "BACKDROP"): string | null {
-  const best = artwork.filter((a) => a.kind === kind).sort((a, b) => a.priority - b.priority)[0];
-  return best ? `/artwork/${best.id}` : null;
-}
 
 const cardSelect = {
   id: true,
@@ -23,17 +12,20 @@ const cardSelect = {
   title: true,
   sortTitle: true,
   year: true,
+  createdAt: true,
   artwork: { select: { id: true, kind: true, priority: true } },
+  files: { select: { id: true }, take: 1 },
 } as const;
 
-function toCard<T extends { artwork: ArtworkRef[] }>(
+function toCard<T extends { artwork: ArtworkRef[]; files: { id: string }[] }>(
   item: T,
-): Omit<T, "artwork"> & { posterUrl: string | null; backdropUrl: string | null } {
-  const { artwork, ...rest } = item;
+): Omit<T, "artwork" | "files"> & { posterUrl: string | null; backdropUrl: string | null; mediaFileId: string | null } {
+  const { artwork, files, ...rest } = item;
   return {
     ...rest,
     posterUrl: primaryArtworkUrl(artwork, "POSTER"),
     backdropUrl: primaryArtworkUrl(artwork, "BACKDROP"),
+    mediaFileId: files[0]?.id ?? null,
   };
 }
 
@@ -80,6 +72,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       where: { id: req.params.id },
       include: {
         artwork: { select: { id: true, kind: true, priority: true } },
+        files: { select: { id: true }, take: 1 },
         children: { select: cardSelect, orderBy: { sortTitle: "asc" } },
         collectionEntries: {
           include: {

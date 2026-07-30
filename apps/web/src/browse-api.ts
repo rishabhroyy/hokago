@@ -10,5 +10,7 @@ export async function fetchLibraries(): Promise<LibrarySummary[]> {
 
 export async function fetchLibraryItems(id: string): Promise<MediaCard[]> {
   const { data } = await api.GET("/libraries/{id}/items", { params: { path: { id } } });
-  return data ?? [];
+  // createdAt is never actually nullable — the OpenAPI generator just can't
+  // see through z.coerce.date() and widens it.
+  return (data ?? []).map((item) => ({ ...item, createdAt: new Date(item.createdAt!) }));
 }

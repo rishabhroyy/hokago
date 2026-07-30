@@ -79,6 +79,10 @@ export const MediaItemRef = z.object({
   parentId: z.string().nullable(),
   seasonNumber: z.number().nullable(),
   episodeNumber: z.number().nullable(),
+  year: z.number().int().nullable(),
+  posterUrl: z.string().nullable(),
+  backdropUrl: z.string().nullable(),
+  mediaFileId: z.string().nullable(),
 });
 
 export const ContinueWatchingEntry = z.object({

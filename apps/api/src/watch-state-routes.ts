@@ -11,8 +11,43 @@ import {
 } from "@hokago/contract/playback";
 import { PlaybackSessionParams } from "@hokago/contract/playback";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
+import { primaryArtworkUrl, type ArtworkRef } from "./artwork.js";
 
 const db = new PrismaClient();
+
+const itemInclude = {
+  artwork: { select: { id: true, kind: true, priority: true } },
+  files: { select: { id: true }, take: 1 },
+} as const;
+
+function toRef<
+  T extends {
+    id: string;
+    kind: string;
+    title: string;
+    sortTitle: string;
+    parentId: string | null;
+    seasonNumber: number | null;
+    episodeNumber: number | null;
+    year: number | null;
+    artwork: ArtworkRef[];
+    files: { id: string }[];
+  },
+>(item: T) {
+  return {
+    id: item.id,
+    kind: item.kind as "MOVIE" | "SERIES" | "SEASON" | "EPISODE",
+    title: item.title,
+    sortTitle: item.sortTitle,
+    parentId: item.parentId,
+    seasonNumber: item.seasonNumber,
+    episodeNumber: item.episodeNumber,
+    year: item.year,
+    posterUrl: primaryArtworkUrl(item.artwork, "POSTER"),
+    backdropUrl: primaryArtworkUrl(item.artwork, "BACKDROP"),
+    mediaFileId: item.files[0]?.id ?? null,
+  };
+}
 
 // Anything past this fraction of the runtime counts as "finished" — matches
 // the industry-standard "credits are rolling" heuristic, not literal 100%.
@@ -80,7 +115,7 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
 
     const states = await db.playbackState.findMany({
       where: { profileId },
-      include: { mediaItem: true },
+      include: { mediaItem: { include: itemInclude } },
       orderBy: { updatedAt: "desc" },
     });
 
@@ -97,7 +132,7 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
         if (!bySeries.has(seriesKey) || bySeries.get(seriesKey)!.updatedAt < state.updatedAt) {
           bySeries.set(seriesKey, {
             updatedAt: state.updatedAt,
-            entry: { mediaItem: item, positionMs: state.positionMs, durationMs: state.durationMs, upNext: false },
+            entry: { mediaItem: toRef(item), positionMs: state.positionMs, durationMs: state.durationMs, upNext: false },
           });
         }
         continue;
@@ -115,7 +150,7 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       if (!bySeries.has(seriesKey) || bySeries.get(seriesKey)!.updatedAt < state.updatedAt) {
         bySeries.set(seriesKey, {
           updatedAt: state.updatedAt,
-          entry: { mediaItem: next, positionMs: 0, durationMs: null, upNext: true },
+          entry: { mediaItem: toRef(next), positionMs: 0, durationMs: null, upNext: true },
         });
       }
     }
@@ -136,6 +171,7 @@ async function findNextEpisode(episode: {
   const nextInSeason = await db.mediaItem.findFirst({
     where: { parentId: episode.parentId, kind: "EPISODE", episodeNumber: { gt: episode.episodeNumber } },
     orderBy: { episodeNumber: "asc" },
+    include: itemInclude,
   });
   if (nextInSeason) return nextInSeason;
 
@@ -150,6 +186,7 @@ async function findNextEpisode(episode: {
   if (!nextSeason) return null;
 
   return db.mediaItem.findFirst({
+    include: itemInclude,
     where: { parentId: nextSeason.id, kind: "EPISODE" },
     orderBy: { episodeNumber: "asc" },
   });

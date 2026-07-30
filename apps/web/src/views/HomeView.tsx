@@ -85,7 +85,7 @@ export function HomeView() {
           <div className="mb-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] opacity-85">
             {heroEntry ? "Continue watching" : "Recently added"}
           </div>
-          <h1 className="mb-2.5 font-display text-4xl font-bold">{heroTitle}</h1>
+          <h1 className="mb-3 font-display text-[40px] font-bold">{heroTitle}</h1>
           <div className="mb-5 flex items-center gap-3.5 text-[13px] opacity-90">
             {heroYear != null && <span>{heroYear}</span>}
             {heroYear != null && <span className="opacity-50">·</span>}
@@ -110,7 +110,7 @@ export function HomeView() {
               </button>
             )}
             <button
-              className="relative inline-flex items-center gap-2.5 overflow-hidden rounded-full border border-white/35 bg-white/20 px-[26px] py-[13px] text-[14.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-white/30 active:scale-[.96]"
+              className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full border border-white/35 bg-white/20 px-[26px] py-[13px] text-[14.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-white/30 active:scale-[.96]"
               onClick={() => navigate(paths.detail(heroId))}
             >
               <Icon name="info" className="h-4 w-4" />

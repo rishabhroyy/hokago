@@ -85,7 +85,34 @@ export function DetailView({ itemId }: { itemId: string }) {
     return [...groups.entries()];
   }, [item]);
 
-  if (!item) return <div className="min-h-screen pt-[62px]" />;
+  if (!item) {
+    return (
+      <div className="detail min-h-screen overflow-y-auto">
+        <div className={`relative h-[320px] overflow-hidden ${HUE_CLASS[hueFor(itemId)]}`}>
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(0deg,#F6F0E6_2%,rgba(246,240,230,0.2)_40%,transparent_65%)]" />
+          <div className="pointer-events-none absolute right-[8%] top-[44%] h-[190px] w-[190px] -translate-y-1/2 animate-pulse text-white opacity-90">
+            <Icon name={iconFor(itemId)} className="h-full w-full" />
+          </div>
+          <button
+            className="absolute left-12 top-[78px] z-[3] flex items-center gap-2 rounded-full bg-ink/40 px-[18px] py-2.5 text-[13.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-ink/60"
+            onClick={() => navigate(paths.home())}
+          >
+            <Icon name="back" className="h-[15px] w-[15px]" />
+            Back
+          </button>
+        </div>
+        <div className="px-12 pb-16">
+          <div className="mb-[26px] flex items-end gap-7">
+            <div
+              className={`aspect-[2/3] w-40 shrink-0 animate-pulse rounded-panel border-4 border-paper shadow-[0_14px_30px_-12px_rgba(120,80,60,0.45)] ${HUE_CLASS[hueFor(itemId)]}`}
+              style={{ marginTop: "-80px" }}
+            />
+            <div className="mb-1.5 h-9 w-64 animate-pulse rounded-full bg-paper-2" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const firstEpisode = item.episodes[0];
   const playMediaFileId = item.kind === "SERIES" ? (firstEpisode?.mediaFileId ?? null) : item.mediaFileId;

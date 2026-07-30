@@ -33,6 +33,19 @@ body {
 
 :focus-visible { outline: 2.5px solid #E8664F; outline-offset: 2px; border-radius: 6px; }
 
+/* glossy top-sheen on pill buttons (.btn), ported from reference-prototype.html */
+.btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 6%;
+  right: 6%;
+  height: 46%;
+  border-radius: 100px 100px 60% 60% / 100% 100% 34% 34%;
+  background: linear-gradient(rgba(255, 255, 255, 0.5), transparent);
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }

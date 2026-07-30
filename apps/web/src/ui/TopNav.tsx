@@ -4,7 +4,7 @@ import { paths, useRouter } from "../router";
 import { useSoundToggle, useWiiSound } from "./useWiiSound";
 import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
-import { starShower, useKonami } from "./effects";
+import { popAndPing, starShower, useKonami, useReducedMotion } from "./effects";
 
 function useClock() {
   const [label, setLabel] = useState(() => formatClock(new Date()));
@@ -49,10 +49,13 @@ export function TopNav() {
     starShower();
   });
 
+  const reduced = useReducedMotion();
+
   if (route.view === "player") return null;
 
-  const go = (path: string) => {
+  const go = (path: string, e: React.MouseEvent<HTMLElement>) => {
     s.select();
+    popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
     navigate(path);
   };
 
@@ -61,7 +64,7 @@ export function TopNav() {
       <div className="flex items-center gap-9">
         <button
           className="brand relative flex items-center gap-2.5 overflow-hidden rounded-xl px-2 py-1.5 font-display text-lg font-bold transition-transform duration-150 ease-snap hover:scale-[1.04] active:scale-[.94]"
-          onClick={() => go(paths.home())}
+          onClick={(e) => go(paths.home(), e)}
         >
           <LogoMark className="h-6 w-6" />
           hokago
@@ -70,7 +73,7 @@ export function TopNav() {
         <div className="flex gap-1.5">
           <button
             className={`rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${route.view === "home" ? "bg-accent/10 text-accent" : "text-ink-2 hover:bg-ink/5 hover:text-ink"}`}
-            onClick={() => go(paths.home())}
+            onClick={(e) => go(paths.home(), e)}
           >
             Home
           </button>
@@ -78,7 +81,7 @@ export function TopNav() {
             <button
               key={lib.id}
               className={`rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${route.view === "library" && route.libraryId === lib.id ? "bg-accent/10 text-accent" : "text-ink-2 hover:bg-ink/5 hover:text-ink"}`}
-              onClick={() => go(paths.library(lib.id))}
+              onClick={(e) => go(paths.library(lib.id), e)}
             >
               {lib.name}
             </button>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodeCard } from "@hokago/contract/browse";
 import { fetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
 import { useProfileId } from "../profile";
@@ -6,6 +6,7 @@ import { paths, useRouter } from "../router";
 import { Icon } from "../ui/icons";
 import { HUE_CLASS, hueFor, iconFor } from "../ui/Tile";
 import { useWiiSound } from "../ui/useWiiSound";
+import { popAndPing, useReducedMotion, useStaggerEntrance } from "../ui/effects";
 
 function seasonLabel(seasonNumber: number | null): string {
   if (seasonNumber == null) return "Episodes";
@@ -16,10 +17,50 @@ function trackLabel(track: { streamIndex: number; lang: string | null }): string
   return track.lang ? track.lang.toUpperCase() : `Track ${track.streamIndex}`;
 }
 
+function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: EpisodeCard[]; onOpen: (ep: EpisodeCard, el: HTMLElement) => void }) {
+  const s = useWiiSound();
+  const gridRef = useRef<HTMLDivElement>(null);
+  useStaggerEntrance(gridRef, [eps]);
+
+  return (
+    <div>
+      <h3 className="mb-[18px] mt-9 font-display text-[19px] font-bold">{seasonLabel(season)}</h3>
+      <div ref={gridRef} className="grid gap-x-[18px] gap-y-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+        {eps.map((ep) => (
+          <button
+            key={ep.id}
+            className="group cursor-pointer text-left"
+            onPointerEnter={() => s.hover()}
+            onClick={(e) => onOpen(ep, e.currentTarget)}
+          >
+            <div
+              className={`relative aspect-video overflow-hidden rounded-tile shadow-[0_3px_10px_-4px_rgba(120,80,60,0.25)] transition-[transform,box-shadow] duration-200 ease-snap group-hover:-translate-y-[3px] group-hover:shadow-wii-ring ${HUE_CLASS[hueFor(ep.id)]}`}
+            >
+              <span className="absolute inset-0 flex items-center justify-center">
+                <Icon name={iconFor(ep.id)} className="h-[28%] w-[28%] text-white opacity-85" />
+              </span>
+              <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-ink/50 px-2 py-0.5 font-mono text-[10px] font-bold text-white">
+                EP {ep.episodeNumber ?? "?"}
+              </span>
+              {ep.runtimeMs != null && (
+                <span className="absolute bottom-2 right-[9px] z-[2] rounded-md bg-ink/50 px-[7px] py-0.5 font-mono text-[9px] text-white">
+                  {Math.round(ep.runtimeMs / 60_000)}m
+                </span>
+              )}
+            </div>
+            <div className="mt-2.5 text-[13.5px] font-bold text-ink">{ep.title}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function DetailView({ itemId }: { itemId: string }) {
   const { navigate } = useRouter();
   const profileId = useProfileId();
   const s = useWiiSound();
+  const reduced = useReducedMotion();
   const [item, setItem] = useState<MediaItemDetail | null>(null);
   const [selectedAudio, setSelectedAudio] = useState<number | null>(null);
 
@@ -50,9 +91,11 @@ export function DetailView({ itemId }: { itemId: string }) {
   const playMediaFileId = item.kind === "SERIES" ? (firstEpisode?.mediaFileId ?? null) : item.mediaFileId;
   const playMediaItemId = item.kind === "SERIES" ? (firstEpisode?.id ?? null) : item.id;
 
-  const openEpisode = (ep: EpisodeCard) => {
+  const openEpisode = (ep: EpisodeCard, el: HTMLElement) => {
     if (!ep.mediaFileId) return;
     s.select();
+    const r = el.getBoundingClientRect();
+    popAndPing(el, r.left + r.width / 2, r.top + r.height / 2, reduced);
     navigate(paths.player(ep.mediaFileId, ep.id, profileId ?? "dev"));
   };
 
@@ -104,8 +147,9 @@ export function DetailView({ itemId }: { itemId: string }) {
           {playMediaFileId && (
             <button
               className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full bg-accent px-[26px] py-[13px] text-[14.5px] font-bold text-white shadow-[0_6px_16px_-6px_rgba(0,0,0,0.3)] transition-transform duration-150 ease-snap hover:-translate-y-0.5 active:scale-[.96]"
-              onClick={() => {
+              onClick={(e) => {
                 s.select();
+                popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
                 navigate(paths.player(playMediaFileId, playMediaItemId!, profileId ?? "dev", selectedAudio));
               }}
             >
@@ -148,36 +192,7 @@ export function DetailView({ itemId }: { itemId: string }) {
         {item.overview && <p className="max-w-[720px] text-[14.5px] leading-relaxed text-ink-2">{item.overview}</p>}
 
         {episodesBySeason.map(([season, eps]) => (
-          <div key={season ?? "none"}>
-            <h3 className="mb-[18px] mt-9 font-display text-[19px] font-bold">{seasonLabel(season)}</h3>
-            <div className="grid gap-x-[18px] gap-y-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-              {eps.map((ep) => (
-                <button
-                  key={ep.id}
-                  className="group cursor-pointer text-left"
-                  onPointerEnter={() => s.hover()}
-                  onClick={() => openEpisode(ep)}
-                >
-                  <div
-                    className={`relative aspect-video overflow-hidden rounded-tile shadow-[0_3px_10px_-4px_rgba(120,80,60,0.25)] transition-[transform,box-shadow] duration-200 ease-snap group-hover:-translate-y-[3px] group-hover:shadow-wii-ring ${HUE_CLASS[hueFor(ep.id)]}`}
-                  >
-                    <span className="absolute inset-0 flex items-center justify-center">
-                      <Icon name={iconFor(ep.id)} className="h-[28%] w-[28%] text-white opacity-85" />
-                    </span>
-                    <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-ink/50 px-2 py-0.5 font-mono text-[10px] font-bold text-white">
-                      EP {ep.episodeNumber ?? "?"}
-                    </span>
-                    {ep.runtimeMs != null && (
-                      <span className="absolute bottom-2 right-[9px] z-[2] rounded-md bg-ink/50 px-[7px] py-0.5 font-mono text-[9px] text-white">
-                        {Math.round(ep.runtimeMs / 60_000)}m
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-2.5 text-[13.5px] font-bold text-ink">{ep.title}</div>
-                </button>
-              ))}
-            </div>
-          </div>
+          <SeasonGrid key={season ?? "none"} season={season} eps={eps} onOpen={openEpisode} />
         ))}
       </div>
     </div>

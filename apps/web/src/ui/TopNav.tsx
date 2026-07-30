@@ -4,6 +4,7 @@ import { paths, useRouter } from "../router";
 import { useSoundToggle, useWiiSound } from "./useWiiSound";
 import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
+import { starShower, useKonami } from "./effects";
 
 function useClock() {
   const [label, setLabel] = useState(() => formatClock(new Date()));
@@ -42,6 +43,11 @@ export function TopNav() {
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   }, []);
+
+  useKonami(() => {
+    s.jingle();
+    starShower();
+  });
 
   if (route.view === "player") return null;
 

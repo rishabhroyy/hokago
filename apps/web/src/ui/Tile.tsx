@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { Icon, type IconName } from "./icons";
 import { useWiiSound } from "./useWiiSound";
+import { useReducedMotion, zoomOpen } from "./effects";
 
 export const HUE_CLASS: Record<number, string> = {
   1: "bg-gradient-to-br from-p1a to-p1b",
@@ -41,8 +42,10 @@ export interface TileItem {
 export function Tile({ item, onOpen }: { item: TileItem; onOpen: (item: TileItem, artEl: HTMLElement) => void }) {
   const artRef = useRef<HTMLDivElement>(null);
   const s = useWiiSound();
+  const reduced = useReducedMotion();
 
   const onMove = (e: React.PointerEvent) => {
+    if (reduced) return;
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
     const rx = ((e.clientY - r.top) / r.height - 0.5) * -8;
@@ -62,12 +65,12 @@ export function Tile({ item, onOpen }: { item: TileItem; onOpen: (item: TileItem
       onPointerLeave={onLeave}
       onClick={() => {
         s.select();
-        if (artRef.current) onOpen(item, artRef.current);
+        if (artRef.current) zoomOpen(artRef.current, () => onOpen(item, artRef.current!), reduced);
       }}
     >
       <div
         ref={artRef}
-        className={`art relative aspect-[2/3] overflow-hidden rounded-tile shadow-plastic transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring group-hover:animate-wiipulse ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
+        className={`art relative aspect-[2/3] overflow-hidden rounded-tile shadow-plastic transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"} ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
       >
         {item.posterUrl ? (
           <img src={item.posterUrl} alt="" className="h-full w-full object-cover" loading="lazy" />

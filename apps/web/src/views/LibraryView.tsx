@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchLibraries, fetchLibraryItems, type LibrarySummary, type MediaCard } from "../browse-api";
 import { paths, useRouter } from "../router";
 import { Tile, type TileItem } from "../ui/Tile";
 import { cardToTile } from "../ui/tile-mapping";
 import { useWiiSound } from "../ui/useWiiSound";
+import { useStaggerEntrance } from "../ui/effects";
 
 export function LibraryView({ libraryId }: { libraryId: string }) {
   const { navigate } = useRouter();
@@ -11,6 +12,7 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
   const [library, setLibrary] = useState<LibrarySummary | null>(null);
   const [items, setItems] = useState<MediaCard[]>([]);
   const [filter, setFilter] = useState<"ALL" | "MOVIE" | "SERIES">("ALL");
+  const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setFilter("ALL");
@@ -29,6 +31,8 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
   );
 
   const openDetail = (item: TileItem) => navigate(paths.detail(item.id));
+
+  useStaggerEntrance(gridRef, [filtered]);
 
   const chip = (value: "ALL" | "MOVIE" | "SERIES", label: string) => (
     <button
@@ -57,7 +61,7 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
           {kindsPresent.has("SERIES") && chip("SERIES", "Series")}
         </div>
       </div>
-      <div className="grid gap-x-[18px] gap-y-7" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(158px, 1fr))" }}>
+      <div ref={gridRef} className="grid gap-x-[18px] gap-y-7" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(158px, 1fr))" }}>
         {filtered.map((item) => (
           <Tile key={item.id} item={cardToTile(item)} onOpen={openDetail} />
         ))}

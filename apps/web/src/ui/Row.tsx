@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { Tile, type TileItem } from "./Tile";
 import { useWiiSound } from "./useWiiSound";
+import { useStaggerEntrance } from "./effects";
 
 export function Row({
   title,
@@ -15,6 +16,7 @@ export function Row({
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const s = useWiiSound();
+  useStaggerEntrance(scrollerRef, [items]);
 
   const scroll = (dir: 1 | -1) => {
     scrollerRef.current?.scrollBy({ left: 540 * dir, behavior: "smooth" });

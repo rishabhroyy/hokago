@@ -4,7 +4,7 @@ export type Route =
   | { view: "home" }
   | { view: "library"; libraryId: string }
   | { view: "detail"; itemId: string }
-  | { view: "player"; mediaFileId: string; mediaItemId: string; profileId: string };
+  | { view: "player"; mediaFileId: string; mediaItemId: string; profileId: string; audioStreamIndex: number | null };
 
 function parse(pathname: string, search: string): Route {
   const parts = pathname.split("/").filter(Boolean);
@@ -13,11 +13,13 @@ function parse(pathname: string, search: string): Route {
   if (parts[0] === "library" && parts[1]) return { view: "library", libraryId: parts[1] };
   if (parts[0] === "title" && parts[1]) return { view: "detail", itemId: parts[1] };
   if (parts[0] === "watch" && parts[1]) {
+    const audio = q.get("audio");
     return {
       view: "player",
       mediaFileId: parts[1],
       mediaItemId: q.get("mediaItemId") ?? "",
       profileId: q.get("profileId") ?? "dev",
+      audioStreamIndex: audio !== null ? Number(audio) : null,
     };
   }
   return { view: "home" };
@@ -27,8 +29,10 @@ export const paths = {
   home: () => "/",
   library: (id: string) => `/library/${id}`,
   detail: (id: string) => `/title/${id}`,
-  player: (mediaFileId: string, mediaItemId: string, profileId: string) =>
-    `/watch/${mediaFileId}?mediaItemId=${mediaItemId}&profileId=${profileId}`,
+  player: (mediaFileId: string, mediaItemId: string, profileId: string, audioStreamIndex?: number | null) =>
+    `/watch/${mediaFileId}?mediaItemId=${mediaItemId}&profileId=${profileId}${
+      audioStreamIndex != null ? `&audio=${audioStreamIndex}` : ""
+    }`,
 };
 
 const RouterCtx = createContext<{ route: Route; navigate: (path: string) => void } | null>(null);

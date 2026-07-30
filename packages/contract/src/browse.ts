@@ -47,8 +47,23 @@ export const CollectionEntry = z.object({
   item: MediaCard,
 });
 
+export const EpisodeCard = MediaCard.extend({
+  seasonNumber: z.number().int().nullable(),
+  episodeNumber: z.number().int().nullable(),
+  runtimeMs: z.number().int().nullable(),
+});
+export type EpisodeCard = z.infer<typeof EpisodeCard>;
+
+export const AudioTrackInfo = z.object({ streamIndex: z.number().int(), lang: z.string().nullable() });
+export type AudioTrackInfo = z.infer<typeof AudioTrackInfo>;
+
 export const MediaItemDetail = MediaCard.extend({
+  overview: z.string().nullable(),
   children: z.array(MediaCard),
+  /** Flattened grandchildren (episodes across all seasons) — empty unless kind === SERIES. */
+  episodes: z.array(EpisodeCard),
+  /** Primary file's audio streams — empty for SERIES/SEASON (no file of their own). */
+  audioTracks: z.array(AudioTrackInfo),
   collections: z.array(
     z.object({
       id: z.string(),

@@ -17,6 +17,13 @@ const cardSelect = {
   files: { select: { id: true }, take: 1 },
 } as const;
 
+const episodeSelect = {
+  ...cardSelect,
+  seasonNumber: true,
+  episodeNumber: true,
+  runtimeMs: true,
+} as const;
+
 function toCard<T extends { artwork: ArtworkRef[]; files: { id: string }[] }>(
   item: T,
 ): Omit<T, "artwork" | "files"> & { posterUrl: string | null; backdropUrl: string | null; mediaFileId: string | null } {
@@ -92,9 +99,28 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
     if (!item) return reply.code(404).send({ error: "media item not found" });
 
     const { children, collectionEntries, ...rest } = item;
+
+    const episodes =
+      item.kind === "SERIES"
+        ? await db.mediaItem.findMany({
+            where: { parent: { parentId: item.id } },
+            select: episodeSelect,
+            orderBy: [{ seasonNumber: "asc" }, { episodeNumber: "asc" }],
+          })
+        : [];
+    const audioTracks = item.files[0]
+      ? await db.mediaStream.findMany({
+          where: { mediaFileId: item.files[0].id, type: "AUDIO" },
+          select: { streamIndex: true, lang: true },
+          orderBy: { streamIndex: "asc" },
+        })
+      : [];
+
     return {
       ...toCard(rest),
       children: children.map(toCard),
+      episodes: episodes.map(toCard),
+      audioTracks,
       collections: collectionEntries.map((entry) => ({
         id: entry.collection.id,
         name: entry.collection.name,

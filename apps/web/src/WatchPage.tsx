@@ -9,7 +9,12 @@ import {
   type MediaPlayerInstance,
   type MediaProviderAdapter,
 } from "@vidstack/react";
-import { defaultLayoutIcons, DefaultVideoLayout } from "@vidstack/react/player/layouts/default";
+import {
+  defaultLayoutIcons,
+  DefaultVideoLayout,
+  DefaultMenuSection,
+  DefaultMenuRadioGroup,
+} from "@vidstack/react/player/layouts/default";
 import JASSUB from "jassub";
 // Vite bundles these from the installed dependency and serves them from our
 // own origin — never a CDN — same reasoning as the hls.js fix below (§1.1/§13.3).
@@ -17,8 +22,11 @@ import jassubWorkerUrl from "jassub/dist/worker/worker.js?worker&url";
 import jassubWasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url";
 import jassubModernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url";
 
-import type { StartPlaybackResponse as PlaybackStart } from "@hokago/contract/playback";
-import type { SubtitleTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
+import type {
+  StartPlaybackResponse as PlaybackStart,
+  AudioTrackSwitchBody,
+} from "@hokago/contract/playback";
+import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
 import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
 import { fetchMediaItemDetail } from "./browse-api";
@@ -39,9 +47,13 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleTrackInfo[]>([]);
+  const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const playerRef = useRef<MediaPlayerInstance>(null);
   const jassubRef = useRef<JASSUB | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
   const [title, setTitle] = useState<string | null>(null);
 
   // Bitmap subs (PGS/VOBSUB) are burned in server-side, so only text subs
@@ -78,7 +90,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     api
       .GET("/media-files/{id}/tracks", { params: { path: { id: mediaFileId } } })
       .then(({ data }) => {
-        if (!cancelled && data) setSubtitles(data.subtitles);
+        if (cancelled || !data) return;
+        setSubtitles(data.subtitles);
+        setAudioTracks(data.audio);
+        const def = data.audio.find((a) => a.isDefault) ?? data.audio[0];
+        setSelectedAudioIndex(def?.streamIndex ?? null);
       })
       .catch(() => {});
     api
@@ -133,12 +149,61 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     };
   }, [mediaFileId, mediaItemId, profileId]);
 
+  // DIRECT_PLAY exposes the container's other audio streams natively, so the
+  // stock audio menu switches them client-side. TRANSCODE/DIRECT_STREAM bake one
+  // audio track into the segments (§11.4), so switching means asking the server
+  // to restart ffmpeg on that track, then forcing hls.js to refetch the (now
+  // different-content) playlist and reseek — a cache-busting nonce is what forces
+  // the refetch. This is the on-demand media-server model, not HLS audio groups.
+  const handleAudioChange = useCallback(
+    (absoluteIndex: number) => {
+      setSelectedAudioIndex(absoluteIndex);
+      if (!start || start.method === "DIRECT_PLAY") return;
+      const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000);
+      const body: AudioTrackSwitchBody = { audioStreamIndex: absoluteIndex, positionMs };
+      api
+        .POST("/playback/{sessionId}/audio-track", { params: { path: { sessionId: start.sessionId } }, body })
+        .then(({ error }) => {
+          if (error) throw new Error("audio-track switch failed");
+          pendingSeekRef.current = positionMs / 1000;
+          setReloadNonce((n) => n + 1);
+        })
+        .catch((err: Error) => setError(err.message));
+    },
+    [start],
+  );
+
+  const handleCanPlay = useCallback(() => {
+    if (pendingSeekRef.current === null || !playerRef.current) return;
+    playerRef.current.currentTime = pendingSeekRef.current;
+    pendingSeekRef.current = null;
+  }, []);
+
   const src =
     start?.method === "DIRECT_PLAY"
       ? { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const }
       : start?.playlistUrl
-        ? { src: start.playlistUrl, type: "application/x-mpegurl" as const }
+        ? {
+            src: reloadNonce > 0 ? `${start.playlistUrl}?r=${reloadNonce}` : start.playlistUrl,
+            type: "application/x-mpegurl" as const,
+          }
         : undefined;
+
+  // Server-side audio switching only makes sense while transcoding; DIRECT_PLAY
+  // already has a native audio menu, so we don't double it up.
+  const serverAudioMenu =
+    start && start.method !== "DIRECT_PLAY" && audioTracks.length > 1 ? (
+      <DefaultMenuSection label="Audio">
+        <DefaultMenuRadioGroup
+          value={String(selectedAudioIndex ?? "")}
+          options={audioTracks.map((t) => ({
+            label: t.title ?? t.lang ?? `Track ${t.streamIndex}`,
+            value: String(t.streamIndex),
+          }))}
+          onChange={(v) => handleAudioChange(Number(v))}
+        />
+      </DefaultMenuSection>
+    ) : null;
 
   return (
     <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-black text-white">
@@ -161,6 +226,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           playsInline
           title={title ?? "hokago"}
           onProviderChange={handleProviderChange}
+          onCanPlay={handleCanPlay}
         >
           <MediaProvider>
             {/* DIRECT_PLAY audio tracks come from the native element and show up
@@ -177,7 +243,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
               />
             ))}
           </MediaProvider>
-          <DefaultVideoLayout icons={defaultLayoutIcons} />
+          <DefaultVideoLayout icons={defaultLayoutIcons} slots={{ settingsMenuItemsEnd: serverAudioMenu }} />
         </MediaPlayer>
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-white/70">

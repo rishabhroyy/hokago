@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MediaPlayer,
   MediaProvider,
+  Track,
   isHLSProvider,
   isVideoProvider,
+  useMediaState,
   type MediaPlayerInstance,
   type MediaProviderAdapter,
 } from "@vidstack/react";
@@ -16,17 +18,17 @@ import jassubWasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url";
 import jassubModernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url";
 
 import type { StartPlaybackResponse as PlaybackStart } from "@hokago/contract/playback";
-import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
+import type { SubtitleTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
 import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
 import { fetchMediaItemDetail } from "./browse-api";
 import { Icon } from "./ui/icons";
 
-// Chrome/Chromium-only, not in lib.dom.d.ts — DIRECT_PLAY's only way to expose
-// a container's other audio streams to the client (§11.4).
-interface HTMLMediaElementWithAudioTracks extends HTMLVideoElement {
-  audioTracks?: ArrayLike<{ enabled: boolean }>;
-}
+// An empty WebVTT that vidstack loads (so the track is a real, selectable entry
+// in the stock captions menu) but which draws nothing — JASSUB does the actual
+// ASS rendering. Registering our subtitles this way lets the default player UI
+// own switching/off while keeping libass (§13.1) as the renderer.
+const EMPTY_VTT = "data:text/vtt," + encodeURIComponent("WEBVTT\n\n");
 
 export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const params = new URLSearchParams(location.search);
@@ -38,12 +40,18 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleTrackInfo[]>([]);
   const [fonts, setFonts] = useState<FontInfo[]>([]);
-  const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null);
-  const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
-  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
   const playerRef = useRef<MediaPlayerInstance>(null);
   const jassubRef = useRef<JASSUB | null>(null);
   const [title, setTitle] = useState<string | null>(null);
+
+  // Bitmap subs (PGS/VOBSUB) are burned in server-side, so only text subs
+  // become selectable menu entries here; the first one is the default.
+  const renderable = useMemo(() => subtitles.filter((t) => !t.requiresBurnIn), [subtitles]);
+
+  // The stock captions menu is the source of truth for which sub is active;
+  // JASSUB just follows it. `id` on each <Track> is our subtitle id.
+  const activeTextTrack = useMediaState("textTrack", playerRef);
+  const selectedSubtitleId = activeTextTrack?.id ?? null;
 
   useEffect(() => {
     if (!mediaItemId) return;
@@ -70,13 +78,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     api
       .GET("/media-files/{id}/tracks", { params: { path: { id: mediaFileId } } })
       .then(({ data }) => {
-        if (cancelled || !data) return;
-        setSubtitles(data.subtitles);
-        const firstRenderable = data.subtitles.find((t) => !t.requiresBurnIn);
-        setSelectedSubtitleId(firstRenderable?.id ?? null);
-        setAudioTracks(data.audio);
-        const defaultAudio = data.audio.find((a) => a.isDefault) ?? data.audio[0];
-        setSelectedAudioIndex(defaultAudio?.streamIndex ?? null);
+        if (!cancelled && data) setSubtitles(data.subtitles);
       })
       .catch(() => {});
     api
@@ -95,8 +97,8 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // since libass just needs the video element's clock, not its source.
   useEffect(() => {
     if (!videoEl || !selectedSubtitleId) return;
-    const track = subtitles.find((t) => t.id === selectedSubtitleId);
-    if (!track || track.requiresBurnIn) return;
+    const track = renderable.find((t) => t.id === selectedSubtitleId);
+    if (!track) return;
 
     const availableFonts = Object.fromEntries(fonts.map((f) => [f.family, f.url]));
     const instance = new JASSUB({
@@ -113,22 +115,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       instance.destroy();
       jassubRef.current = null;
     };
-  }, [videoEl, selectedSubtitleId, mediaFileId, subtitles, fonts]);
-
-  // DIRECT_PLAY: the container's other audio streams ride along in the same
-  // file, so switching is just toggling the browser's native AudioTrackList —
-  // no request, no restart (§11.4). Order matches ascending streamIndex among
-  // audio streams, not the absolute container index audioTracks stores.
-  useEffect(() => {
-    if (start?.method !== "DIRECT_PLAY" || !videoEl || selectedAudioIndex === null) return;
-    const nativeTracks = (videoEl as HTMLMediaElementWithAudioTracks).audioTracks;
-    if (!nativeTracks) return;
-    const ordered = [...audioTracks].sort((a, b) => a.streamIndex - b.streamIndex);
-    const targetPos = ordered.findIndex((t) => t.streamIndex === selectedAudioIndex);
-    for (let i = 0; i < nativeTracks.length; i++) {
-      nativeTracks[i].enabled = i === targetPos;
-    }
-  }, [start?.method, videoEl, selectedAudioIndex, audioTracks]);
+  }, [videoEl, selectedSubtitleId, mediaFileId, renderable, fonts]);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,7 +162,21 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           title={title ?? "hokago"}
           onProviderChange={handleProviderChange}
         >
-          <MediaProvider />
+          <MediaProvider>
+            {/* DIRECT_PLAY audio tracks come from the native element and show up
+                in the stock audio menu automatically; these are the subtitles. */}
+            {renderable.map((t, i) => (
+              <Track
+                key={t.id}
+                id={t.id}
+                src={EMPTY_VTT}
+                kind="subtitles"
+                label={t.title ?? t.lang ?? t.id}
+                language={t.lang ?? undefined}
+                default={i === 0}
+              />
+            ))}
+          </MediaProvider>
           <DefaultVideoLayout icons={defaultLayoutIcons} />
         </MediaPlayer>
       ) : (

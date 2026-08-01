@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodeCard } from "@hokago/contract/browse";
-import { fetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
+import { fetchMediaItemDetail, prefetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
 import { useProfileId } from "../profile";
 import { paths, useRouter } from "../router";
 import { Icon } from "../ui/icons";
-import { HUE_CLASS, hueFor, iconFor } from "../ui/Tile";
+import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
+import { Row } from "../ui/Row";
+import { cardToTile } from "../ui/tile-mapping";
 import { useWiiSound } from "../ui/useWiiSound";
 import { popAndPing, useReducedMotion, useStaggerEntrance } from "../ui/effects";
 
@@ -24,33 +26,112 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
 
   return (
     <div>
-      <h3 className="mb-[18px] mt-9 font-display text-[19px] font-bold">{seasonLabel(season)}</h3>
-      <div ref={gridRef} className="grid gap-x-[18px] gap-y-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+      <h3 className="mb-[18px] mt-9 flex items-baseline gap-3 font-display text-[20px] font-bold tracking-[0.01em]">
+        {seasonLabel(season)}
+        <span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-[10.5px] font-bold text-wii-ink ring-1 ring-line">
+          {eps.length}
+        </span>
+      </h3>
+      <div ref={gridRef} className="grid gap-x-[20px] gap-y-7" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))" }}>
         {eps.map((ep) => (
           <button
             key={ep.id}
-            className="group cursor-pointer text-left"
+            className="group cursor-pointer text-left transition-transform duration-200 ease-snap hover:-translate-y-1.5 active:scale-[.98]"
             onPointerEnter={() => s.hover()}
             onClick={(e) => onOpen(ep, e.currentTarget)}
           >
-            <div
-              className={`relative aspect-video overflow-hidden rounded-tile shadow-[0_3px_10px_-4px_rgba(120,80,60,0.25)] transition-[transform,box-shadow] duration-200 ease-snap group-hover:-translate-y-[3px] group-hover:shadow-wii-ring ${HUE_CLASS[hueFor(ep.id)]}`}
-            >
-              <span className="absolute inset-0 flex items-center justify-center">
-                <Icon name={iconFor(ep.id)} className="h-[28%] w-[28%] text-white opacity-85" />
-              </span>
-              <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-ink/50 px-2 py-0.5 font-mono text-[10px] font-bold text-white">
-                EP {ep.episodeNumber ?? "?"}
-              </span>
-              {ep.runtimeMs != null && (
-                <span className="absolute bottom-2 right-[9px] z-[2] rounded-md bg-ink/50 px-[7px] py-0.5 font-mono text-[9px] text-white">
-                  {Math.round(ep.runtimeMs / 60_000)}m
+            <div className="relative rounded-[18px] bg-white p-[5px] shadow-panel transition-shadow duration-200 group-hover:shadow-wii-ring">
+              <div
+                className={`relative aspect-video overflow-hidden rounded-[13px] ${ep.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(ep.id)]}`}
+              >
+                {ep.posterUrl ? (
+                  <img src={ep.posterUrl} alt={ep.title} loading="lazy" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <Icon name={iconFor(ep.id)} className="h-[28%] w-[28%] text-white opacity-85" />
+                  </span>
+                )}
+                <span className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[42%] bg-gradient-to-b from-white/20 to-transparent" />
+                <span className="pointer-events-none absolute inset-0 z-[1] rounded-[13px] ring-1 ring-inset ring-white/20" />
+                <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9.5px] font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
+                  EP {ep.episodeNumber ?? "?"}
                 </span>
-              )}
+                {ep.runtimeMs != null && (
+                  <span className="absolute bottom-2 right-[9px] z-[2] rounded-full bg-ink/55 px-2 py-[3px] font-mono text-[9.5px] font-bold text-white backdrop-blur-sm">
+                    {Math.round(ep.runtimeMs / 60_000)}m
+                  </span>
+                )}
+                <span className="absolute inset-0 z-[2] flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-b from-wii-2 to-wii-deep text-white shadow-btn-blue">
+                    <Icon name="play" className="ml-0.5 h-5 w-5" />
+                  </span>
+                </span>
+              </div>
             </div>
-            <div className="mt-2.5 text-[13.5px] font-bold text-ink">{ep.title}</div>
+            <div className="mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-[13.5px] font-bold text-ink transition-colors group-hover:text-wii-deep" title={ep.title}>
+              {ep.title}
+            </div>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="btn btn-ghost absolute left-12 top-[84px] z-[4] !px-[18px] !py-2.5 text-[13.5px]" onClick={onClick}>
+      <Icon name="back" className="h-[15px] w-[15px]" />
+      Back
+    </button>
+  );
+}
+
+function Banner({ itemId, backdropUrl, posterUrl, onBack }: { itemId: string; backdropUrl?: string | null; posterUrl?: string | null; onBack: () => void }) {
+  return (
+    <header className={`relative h-[340px] overflow-hidden ${HUE_CLASS[hueFor(itemId)]}`}>
+      {backdropUrl ? (
+        <img src={backdropUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+      ) : posterUrl ? (
+        <img
+          src={posterUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full scale-125 object-cover opacity-70 blur-[28px] saturate-[1.15]"
+        />
+      ) : (
+        <div className="pointer-events-none absolute bottom-[-26px] right-[5%] h-[210px] w-[210px] text-white opacity-90">
+          <Icon name={iconFor(itemId)} className="h-full w-full drop-shadow-[0_6px_14px_rgba(90,50,30,0.3)]" />
+        </div>
+      )}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[40%] bg-gradient-to-b from-white/25 to-transparent" />
+      <div className="pointer-events-none absolute inset-0 z-[1] bg-[linear-gradient(0deg,#F5EFE4_4%,rgba(245,239,228,0.3)_42%,transparent_72%)]" />
+      <div
+        className="pointer-events-none absolute inset-0 z-[1] opacity-50"
+        style={{ backgroundImage: "radial-gradient(rgba(255,255,255,0.14) 1px, transparent 1.5px)", backgroundSize: "18px 18px" }}
+      />
+      <BackButton onClick={onBack} />
+    </header>
+  );
+}
+
+function DetailSkeleton({ itemId }: { itemId: string }) {
+  const { navigate } = useRouter();
+  return (
+    <div className="detail min-h-screen">
+      <Banner itemId={itemId} onBack={() => navigate(paths.home())} />
+      <div className="relative z-[3] mx-12 -mt-24 pb-16">
+        <div className="panel rounded-[30px] p-9">
+          <div className="flex items-start gap-9">
+            <div className="skeleton -mt-[120px] aspect-[2/3] w-48 shrink-0 rounded-[26px] border-[5px] border-white" />
+            <div className="flex w-full max-w-xl flex-col gap-3 pt-1">
+              <div className="skeleton h-10 w-72 rounded-full" />
+              <div className="skeleton h-5 w-44 rounded-full" />
+              <div className="skeleton mt-3 h-12 w-36 rounded-full" />
+              <div className="skeleton mt-2 h-4 w-full rounded-full" />
+              <div className="skeleton h-4 w-2/3 rounded-full" />
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -86,32 +167,7 @@ export function DetailView({ itemId }: { itemId: string }) {
   }, [item]);
 
   if (!item) {
-    return (
-      <div className="detail min-h-screen overflow-y-auto">
-        <div className={`relative h-[320px] overflow-hidden ${HUE_CLASS[hueFor(itemId)]}`}>
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(0deg,#F6F0E6_2%,rgba(246,240,230,0.2)_40%,transparent_65%)]" />
-          <div className="pointer-events-none absolute right-[8%] top-[44%] h-[190px] w-[190px] -translate-y-1/2 animate-pulse text-white opacity-90">
-            <Icon name={iconFor(itemId)} className="h-full w-full" />
-          </div>
-          <button
-            className="absolute left-12 top-[78px] z-[3] flex items-center gap-2 rounded-full bg-ink/40 px-[18px] py-2.5 text-[13.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-ink/60"
-            onClick={() => navigate(paths.home())}
-          >
-            <Icon name="back" className="h-[15px] w-[15px]" />
-            Back
-          </button>
-        </div>
-        <div className="px-12 pb-16">
-          <div className="mb-[26px] flex items-end gap-7">
-            <div
-              className={`aspect-[2/3] w-40 shrink-0 animate-pulse rounded-panel border-4 border-paper shadow-[0_14px_30px_-12px_rgba(120,80,60,0.45)] ${HUE_CLASS[hueFor(itemId)]}`}
-              style={{ marginTop: "-80px" }}
-            />
-            <div className="mb-1.5 h-9 w-64 animate-pulse rounded-full bg-paper-2" />
-          </div>
-        </div>
-      </div>
-    );
+    return <DetailSkeleton itemId={itemId} />;
   }
 
   const firstEpisode = item.episodes[0];
@@ -126,102 +182,137 @@ export function DetailView({ itemId }: { itemId: string }) {
     navigate(paths.player(ep.mediaFileId, ep.id, profileId ?? "dev"));
   };
 
-  return (
-    <div className="detail min-h-screen overflow-y-auto">
-      <div className={`relative h-[320px] overflow-hidden ${HUE_CLASS[hueFor(item.id)]}`}>
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(0deg,#F6F0E6_2%,rgba(246,240,230,0.2)_40%,transparent_65%)]" />
-        <div className="pointer-events-none absolute right-[8%] top-[44%] h-[190px] w-[190px] -translate-y-1/2 text-white opacity-90">
-          <Icon name={iconFor(item.id)} className="h-full w-full" />
-        </div>
-        <button
-          className="absolute left-12 top-[78px] z-[3] flex items-center gap-2 rounded-full bg-ink/40 px-[18px] py-2.5 text-[13.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-ink/60"
-          onClick={() => navigate(paths.home())}
-        >
-          <Icon name="back" className="h-[15px] w-[15px]" />
-          Back
-        </button>
-      </div>
+  const openTile = (tile: TileItem) => navigate(paths.detail(tile.id));
+  const prefetchTile = (tile: TileItem) => prefetchMediaItemDetail(tile.id);
 
-      <div className="px-12 pb-16">
-        <div className="mb-[26px] flex items-end gap-7">
-          <div
-            className={`flex aspect-[2/3] w-40 shrink-0 items-center justify-center overflow-hidden rounded-panel border-4 border-paper shadow-[0_14px_30px_-12px_rgba(120,80,60,0.45)] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
-            style={{ marginTop: "-80px" }}
-          >
-            {item.posterUrl ? (
-              <img src={item.posterUrl} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <Icon name={iconFor(item.id)} className="h-[42%] w-[42%] text-white opacity-90" />
-            )}
-          </div>
-          <div className="pb-1.5">
-            <h1 className="mb-2.5 font-display text-[34px] font-bold">{item.title}</h1>
-            <div className="flex flex-wrap items-center gap-3 text-[13.5px] text-ink-2">
-              {item.year != null && <span>{item.year}</span>}
-              {item.year != null && <span>·</span>}
-              <span>{item.kind === "MOVIE" ? "Movie" : "Series"}</span>
-              {item.kind === "SERIES" && item.episodes.length > 0 && (
-                <>
-                  <span>·</span>
-                  <span>{item.episodes.length} episodes</span>
-                </>
+  const hasEpisodes = item.episodes.length > 0;
+
+  return (
+    <div className="detail min-h-screen">
+      <Banner itemId={item.id} backdropUrl={item.backdropUrl} posterUrl={item.posterUrl} onBack={() => navigate(paths.home())} />
+
+      {/* the sheet: one glossy page holding everything about this title */}
+      <div className="relative z-[3] mx-12 -mt-24 pb-16">
+        <div className="panel rounded-[30px] p-9">
+          <div className="flex items-start gap-9">
+            {/* channel-framed poster sticking up into the banner, slight wii-tilt */}
+            <div className="-mt-[120px] w-48 shrink-0 -rotate-2 rounded-[26px] bg-white p-[5px] shadow-panel transition-transform duration-300 ease-snap hover:rotate-0">
+              <div
+                className={`relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-[21px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
+              >
+                {item.posterUrl ? (
+                  <img src={item.posterUrl} alt={item.title} className="h-full w-full object-cover" />
+                ) : (
+                  <>
+                    <span className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[42%] bg-gradient-to-b from-white/35 to-transparent" />
+                    <Icon name={iconFor(item.id)} className="h-[40%] w-[40%] text-white opacity-90" />
+                  </>
+                )}
+                <span className="pointer-events-none absolute inset-0 z-[1] rounded-[21px] ring-1 ring-inset ring-white/20" />
+              </div>
+            </div>
+
+            <div className="min-w-0 flex-1 pt-1">
+              <h1 className="mb-3 font-display text-[40px] font-bold leading-[1.06] tracking-[0.005em] [text-wrap:balance]">
+                {item.title}
+              </h1>
+              <div className="mb-5 flex flex-wrap items-center gap-2 text-[12.5px] font-semibold text-ink-2">
+                <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">
+                  {item.kind === "MOVIE" ? "Movie" : "Series"}
+                </span>
+                {item.year != null && (
+                  <span className="rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line">{item.year}</span>
+                )}
+                {item.kind === "SERIES" && hasEpisodes && (
+                  <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">{item.episodes.length} episodes</span>
+                )}
+              </div>
+
+              <div className="mb-5 flex items-center gap-3">
+                {playMediaFileId && (
+                  <button
+                    className="btn btn-primary"
+                    onClick={(e) => {
+                      s.select();
+                      popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
+                      navigate(paths.player(playMediaFileId, playMediaItemId!, profileId ?? "dev", selectedAudio));
+                    }}
+                  >
+                    <Icon name="play" className="h-4 w-4" />
+                    {item.kind === "SERIES" ? "Play S1 · E1" : "Play"}
+                  </button>
+                )}
+                <button
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
+                  title="Add to list"
+                >
+                  <Icon name="plus" className="h-[19px] w-[19px]" />
+                </button>
+                <button
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
+                  title="Download"
+                >
+                  <Icon name="download" className="h-[19px] w-[19px]" />
+                </button>
+              </div>
+
+              {item.audioTracks.length >= 2 && (
+                <div className="mb-5 flex items-center gap-2">
+                  <span className="mr-1 font-mono text-[10.5px] font-bold uppercase tracking-[0.14em] text-ink-3">Audio</span>
+                  {item.audioTracks.map((track) => (
+                    <button
+                      key={track.streamIndex}
+                      className={`rounded-full px-4 py-2 text-[12.5px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
+                        selectedAudio === track.streamIndex
+                          ? "bg-gradient-to-b from-wii-2 to-wii text-white shadow-btn-blue"
+                          : "bg-white text-ink-2 shadow-panel hover:text-wii-deep"
+                      }`}
+                      onClick={() => {
+                        s.hover();
+                        setSelectedAudio(track.streamIndex);
+                      }}
+                    >
+                      {trackLabel(track)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {item.overview && (
+                <p className="max-w-[680px] text-[14.5px] leading-[1.75] text-ink-2 [text-wrap:pretty]">{item.overview}</p>
               )}
             </div>
           </div>
+
+          {hasEpisodes && <div className="my-2 h-px bg-line/80" />}
+
+          {episodesBySeason.map(([season, eps]) => (
+            <SeasonGrid key={season ?? "none"} season={season} eps={eps} onOpen={openEpisode} />
+          ))}
         </div>
-
-        <div className="mb-[22px] flex items-center gap-3">
-          {playMediaFileId && (
-            <button
-              className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full bg-accent px-[26px] py-[13px] text-[14.5px] font-bold text-white shadow-[0_6px_16px_-6px_rgba(0,0,0,0.3)] transition-transform duration-150 ease-snap hover:-translate-y-0.5 active:scale-[.96]"
-              onClick={(e) => {
-                s.select();
-                popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
-                navigate(paths.player(playMediaFileId, playMediaItemId!, profileId ?? "dev", selectedAudio));
-              }}
-            >
-              <Icon name="play" className="h-4 w-4" />
-              Play
-            </button>
-          )}
-          <button
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-line-2 bg-card text-ink shadow-[0_3px_10px_-4px_rgba(120,80,60,0.25)] transition-[transform,color,border-color] duration-150 ease-snap hover:border-accent hover:text-accent active:scale-90"
-            title="Add to list"
-          >
-            <Icon name="plus" className="h-[19px] w-[19px]" />
-          </button>
-          <button
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-line-2 bg-card text-ink shadow-[0_3px_10px_-4px_rgba(120,80,60,0.25)] transition-[transform,color,border-color] duration-150 ease-snap hover:border-accent hover:text-accent active:scale-90"
-            title="Download"
-          >
-            <Icon name="download" className="h-[19px] w-[19px]" />
-          </button>
-        </div>
-
-        {item.audioTracks.length >= 2 && (
-          <div className="mb-[18px] flex gap-2">
-            {item.audioTracks.map((track) => (
-              <button
-                key={track.streamIndex}
-                className={`rounded-full border px-4 py-2 text-[12.5px] font-bold transition-colors duration-150 ${
-                  selectedAudio === track.streamIndex
-                    ? "border-accent bg-accent text-white"
-                    : "border-line-2 bg-card text-ink-2 hover:border-wii hover:text-ink"
-                }`}
-                onClick={() => setSelectedAudio(track.streamIndex)}
-              >
-                {trackLabel(track)}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {item.overview && <p className="max-w-[720px] text-[14.5px] leading-relaxed text-ink-2">{item.overview}</p>}
-
-        {episodesBySeason.map(([season, eps]) => (
-          <SeasonGrid key={season ?? "none"} season={season} eps={eps} onOpen={openEpisode} />
-        ))}
       </div>
+
+      {/* movie-series children (§7.3) — TV children are SEASONs, already
+          represented by the season grids above, so don't double them up */}
+      {item.children.some((c) => c.kind === "MOVIE") && (
+        <Row
+          title="In this series"
+          items={item.children.filter((c) => c.kind === "MOVIE").map(cardToTile)}
+          onOpen={openTile}
+          onPrefetch={prefetchTile}
+        />
+      )}
+
+      {item.collections.map((collection) => (
+        <Row
+          key={collection.id}
+          title={collection.name}
+          items={collection.entries.map((e) => cardToTile(e.item))}
+          onOpen={openTile}
+          onPrefetch={prefetchTile}
+        />
+      ))}
+      <div className="pb-16" />
     </div>
   );
 }

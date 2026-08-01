@@ -22,6 +22,7 @@ const API_PATHS = [
   "/continue-watching",
   "/libraries",
   "/media-items",
+  "/admin",
 ];
 
 export default defineConfig({

@@ -34,14 +34,18 @@ function queueOrNotFound(name: string): Queue | null {
   return name in queues ? queues[name as QueueName] : null;
 }
 
-/** Admin queue UI (§9.6.8): view/pause/resume/retry-failed/clean per queue, backed directly by BullMQ. */
+/** Admin queue UI (§9.6.8): view/pause/resume/retry-failed/clean per queue, backed directly by BullMQ.
+ *  The HTML shell is public (it's just markup — the browser can't attach a Bearer
+ *  header to a navigation), but every data/action endpoint requires an admin JWT. */
 export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void> {
+  const adminOnly = { preHandler: [app.authenticate, app.requireAdmin] };
+
   app.get("/admin", async (_req, reply) => {
     const html = await readFile(path.join(__dirname, "admin.html"), "utf-8");
     reply.type("text/html").send(html);
   });
 
-  app.get("/admin/queues", { schema: { response: { 200: QueueListResponse } } }, async () => {
+  app.get("/admin/queues", { ...adminOnly, schema: { response: { 200: QueueListResponse } } }, async () => {
     const result = await Promise.all(
       Object.entries(queues).map(async ([name, queue]) => ({
         name,
@@ -55,6 +59,7 @@ export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void
   app.get(
     "/admin/queues/:name/jobs",
     {
+      ...adminOnly,
       schema: {
         params: QueueParams,
         querystring: QueueJobsQuery,
@@ -79,7 +84,7 @@ export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void
 
   app.post(
     "/admin/queues/:name/pause",
-    { schema: { params: QueueParams, response: { 200: QueuePausedResponse, 404: ErrorResponse } } },
+    { ...adminOnly, schema: { params: QueueParams, response: { 200: QueuePausedResponse, 404: ErrorResponse } } },
     async (req, reply) => {
       const queue = queueOrNotFound(req.params.name);
       if (!queue) return reply.code(404).send({ error: "unknown queue" });
@@ -90,7 +95,7 @@ export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void
 
   app.post(
     "/admin/queues/:name/resume",
-    { schema: { params: QueueParams, response: { 200: QueuePausedResponse, 404: ErrorResponse } } },
+    { ...adminOnly, schema: { params: QueueParams, response: { 200: QueuePausedResponse, 404: ErrorResponse } } },
     async (req, reply) => {
       const queue = queueOrNotFound(req.params.name);
       if (!queue) return reply.code(404).send({ error: "unknown queue" });
@@ -101,7 +106,7 @@ export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void
 
   app.post(
     "/admin/queues/:name/retry-failed",
-    { schema: { params: QueueParams, response: { 200: QueueRetriedResponse, 404: ErrorResponse } } },
+    { ...adminOnly, schema: { params: QueueParams, response: { 200: QueueRetriedResponse, 404: ErrorResponse } } },
     async (req, reply) => {
       const queue = queueOrNotFound(req.params.name);
       if (!queue) return reply.code(404).send({ error: "unknown queue" });
@@ -114,6 +119,7 @@ export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void
   app.post(
     "/admin/queues/:name/clean",
     {
+      ...adminOnly,
       schema: {
         params: QueueParams,
         body: QueueCleanBody.optional(),

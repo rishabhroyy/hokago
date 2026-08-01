@@ -20,6 +20,8 @@ export default {
         gold: "#E3A34C",
         wii: "#4FB8E0",
         "wii-2": "#8FE0F5",
+        "wii-deep": "#2E9BC4",
+        "wii-ink": "#177A9E",
         // per-title poster pastels (deterministic pair per title, e.g. id % 6)
         p1a: "#F4A98C", p1b: "#EE8E6C",
         p2a: "#ED9DAE", p2b: "#E2879A",
@@ -49,6 +51,14 @@ export default {
         // resting Wii glow (compose the pulse via the keyframes below)
         "wii-ring":
           "0 0 0 3px #fff, 0 0 0 5px #4FB8E0, 0 0 15px 1px rgba(79,184,224,0.55), 0 14px 26px -8px rgba(120,80,60,0.4)",
+        // floating white panel — nav, cards, login
+        panel:
+          "inset 0 1.5px 0 rgba(255,255,255,0.9), 0 2px 6px -2px rgba(120,80,60,0.14), 0 18px 44px -18px rgba(120,80,60,0.35)",
+        // glossy blue primary action
+        "btn-blue":
+          "inset 0 1.5px 0 rgba(255,255,255,0.45), 0 6px 18px -6px rgba(46,155,196,0.65)",
+        "btn-blue-hover":
+          "inset 0 1.5px 0 rgba(255,255,255,0.45), 0 4px 24px -2px rgba(79,184,224,0.8), 0 0 0 3px rgba(255,255,255,0.9), 0 0 0 5px rgba(79,184,224,0.5)",
       },
       keyframes: {
         wiipulse: {

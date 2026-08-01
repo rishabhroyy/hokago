@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import type { ContinueWatchingEntry } from "@hokago/contract/playback";
 import { api } from "../api-client";
-import { fetchLibraries, fetchLibraryItems, type MediaCard } from "../browse-api";
+import {
+  fetchLibraries,
+  fetchLibraryItems,
+  prefetchMediaItemDetail,
+  type MediaCard,
+} from "../browse-api";
 import { useProfileId } from "../profile";
 import { paths, useRouter } from "../router";
 import { Icon } from "../ui/icons";
+import { LogoMark } from "../ui/Logo";
 import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
 import { continueWatchingToTile, cardToTile } from "../ui/tile-mapping";
@@ -14,6 +20,7 @@ export function HomeView() {
   const profileId = useProfileId();
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingEntry[]>([]);
   const [recentlyAdded, setRecentlyAdded] = useState<MediaCard[]>([]);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (!profileId) return;
@@ -37,91 +44,176 @@ export function HomeView() {
         if (cancelled) return;
         const merged = lists.flat().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
         setRecentlyAdded(merged.slice(0, 18));
+        setLoaded(true);
       })
-      .catch(() => {});
+      .catch(() => setLoaded(true));
     return () => {
       cancelled = true;
     };
   }, []);
 
   const openDetail = (item: TileItem) => navigate(paths.detail(item.id));
+  const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.id);
 
   const heroEntry = continueWatching.find((e) => !e.upNext) ?? null;
   const heroCard = !heroEntry ? (recentlyAdded[0] ?? null) : null;
-  if (!heroEntry && !heroCard) {
-    return <div className="pt-[62px]" />;
+
+  // Warm the detail cache for whatever the hero points at — the "Details"
+  // button is the most likely next click on the page.
+  useEffect(() => {
+    const id = heroEntry?.mediaItem.id ?? heroCard?.id;
+    if (id) prefetchMediaItemDetail(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heroEntry?.mediaItem.id, heroCard?.id]);
+
+  if (loaded && !heroEntry && !heroCard) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6">
+        <div className="panel flex max-w-[440px] flex-col items-center rounded-[32px] p-12 text-center">
+          <span className="mb-6 flex h-24 w-24 items-center justify-center rounded-[28px] bg-gradient-to-br from-wii-2 to-wii-deep text-white shadow-btn-blue">
+            <LogoMark className="h-12 w-12" />
+          </span>
+          <h1 className="mb-2 font-display text-[28px] font-bold">welcome to hokago</h1>
+          <p className="mb-8 text-[14px] leading-relaxed text-ink-2">
+            nothing on the menu yet — add a library from the admin panel and your channels will show up here.
+          </p>
+          <a href="/admin" className="btn btn-primary">
+            Open admin panel
+          </a>
+        </div>
+      </div>
+    );
   }
 
-  const heroId = heroEntry ? heroEntry.mediaItem.id : heroCard!.id;
-  const heroTitle = heroEntry ? heroEntry.mediaItem.title : heroCard!.title;
-  const heroYear = heroEntry ? heroEntry.mediaItem.year : heroCard!.year;
-  const heroMediaFileId = heroEntry ? heroEntry.mediaItem.mediaFileId : heroCard!.mediaFileId;
+  const heroId = heroEntry ? heroEntry.mediaItem.id : (heroCard?.id ?? "");
+  const heroTitle = heroEntry ? heroEntry.mediaItem.title : (heroCard?.title ?? "");
+  const heroYear = heroEntry ? heroEntry.mediaItem.year : heroCard?.year;
+  const heroPoster = heroEntry ? heroEntry.mediaItem.posterUrl : (heroCard?.posterUrl ?? null);
+  const heroBackdrop = heroEntry ? heroEntry.mediaItem.backdropUrl : (heroCard?.backdropUrl ?? null);
+  const heroMediaFileId = heroEntry ? heroEntry.mediaItem.mediaFileId : heroCard?.mediaFileId;
   const heroSub = heroEntry
     ? heroEntry.mediaItem.kind === "EPISODE" &&
       heroEntry.mediaItem.seasonNumber != null &&
       heroEntry.mediaItem.episodeNumber != null
-      ? `Season ${heroEntry.mediaItem.seasonNumber} · Episode ${heroEntry.mediaItem.episodeNumber}`
+      ? `S${heroEntry.mediaItem.seasonNumber} · E${heroEntry.mediaItem.episodeNumber}`
       : heroEntry.mediaItem.kind === "MOVIE"
         ? "Movie"
         : "Series"
-    : heroCard!.kind === "MOVIE"
+    : heroCard?.kind === "MOVIE"
       ? "Movie"
       : "Series";
+  const heroProgress =
+    heroEntry?.durationMs != null && heroEntry.durationMs > 0 ? heroEntry.positionMs / heroEntry.durationMs : null;
   const timeLeftMs =
     heroEntry?.durationMs != null ? Math.max(0, heroEntry.durationMs - heroEntry.positionMs) : null;
   const timeLeftLabel = timeLeftMs != null ? `${Math.max(1, Math.round(timeLeftMs / 60_000))} min left` : null;
 
   return (
-    <div className="pt-[62px]">
-      <div
-        className={`relative mx-12 mt-7 h-[340px] overflow-hidden rounded-hero shadow-[inset_0_2px_0_rgba(255,255,255,0.4),0_10px_30px_-12px_rgba(120,80,60,0.35)] ${HUE_CLASS[hueFor(heroId)]}`}
-      >
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[44%] bg-gradient-to-b from-white/25 to-transparent" />
-        <div className="pointer-events-none absolute right-[6%] top-1/2 h-[190px] w-[190px] -translate-y-1/2 animate-bob text-white opacity-90">
-          <Icon name={iconFor(heroId)} className="h-full w-full drop-shadow-[0_4px_10px_rgba(90,50,30,0.25)]" />
-        </div>
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[rgba(60,40,30,0.5)] via-[rgba(60,40,30,0.15)] to-transparent" />
-        <div className="relative z-[2] flex h-full max-w-[560px] flex-col justify-end px-11 pb-9 text-white">
-          <div className="mb-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] opacity-85">
-            {heroEntry ? "Continue watching" : "Recently added"}
-          </div>
-          <h1 className="mb-3 font-display text-[40px] font-bold">{heroTitle}</h1>
-          <div className="mb-5 flex items-center gap-3.5 text-[13px] opacity-90">
-            {heroYear != null && <span>{heroYear}</span>}
-            {heroYear != null && <span className="opacity-50">·</span>}
-            <span>{heroSub}</span>
-            {timeLeftLabel && (
-              <>
-                <span className="opacity-50">·</span>
-                <span>{timeLeftLabel}</span>
-              </>
+    <div className="pb-6 pt-[86px]">
+      {heroId && (
+        <section className="mx-12 rounded-[34px] bg-white p-[7px] shadow-panel">
+          <div className={`relative h-[400px] overflow-hidden rounded-[27px] ${HUE_CLASS[hueFor(heroId)]}`}>
+            {/* real backdrop when we have one; soft, masked, never hotlinked (§1.1) */}
+            {heroBackdrop && (
+              <img
+                src={heroBackdrop}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover [mask-image:linear-gradient(to_right,rgba(0,0,0,0.85),rgba(0,0,0,0.3))]"
+              />
             )}
-          </div>
-          <div className="flex gap-3">
-            <button
-              className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full bg-white px-[26px] py-[13px] text-[14.5px] font-bold text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_16px_-6px_rgba(0,0,0,0.3)] transition-transform duration-150 ease-snap hover:-translate-y-0.5 active:scale-[.96]"
-              onClick={() =>
-                heroMediaFileId
-                  ? navigate(paths.player(heroMediaFileId, heroId, profileId ?? "dev"))
-                  : navigate(paths.detail(heroId))
-              }
-            >
-              <Icon name="play" className="h-4 w-4" />
-              {heroEntry ? "Resume" : "Play"}
-            </button>
-            <button
-              className="btn relative inline-flex items-center gap-2.5 overflow-hidden rounded-full border border-white/35 bg-white/20 px-[26px] py-[13px] text-[14.5px] font-bold text-white backdrop-blur-md transition-colors hover:bg-white/30 active:scale-[.96]"
-              onClick={() => navigate(paths.detail(heroId))}
-            >
-              <Icon name="info" className="h-4 w-4" />
-              Details
-            </button>
-          </div>
-        </div>
-      </div>
+            {/* channel-art scene */}
+            <div className="pointer-events-none absolute inset-0 z-[1]">
+              {!heroPoster && !heroBackdrop && (
+                <span className="absolute bottom-[-34px] right-[4%] h-[250px] w-[250px] animate-bob text-white opacity-90">
+                  <Icon name={iconFor(heroId)} className="h-full w-full drop-shadow-[0_6px_14px_rgba(90,50,30,0.3)]" />
+                </span>
+              )}
+              <span className="absolute right-[23%] top-[16%] h-9 w-9 text-white opacity-70">
+                <Icon name="sparkle" className="h-full w-full" />
+              </span>
+              <span className="absolute right-[16%] top-[58%] h-5 w-5 text-white opacity-50">
+                <Icon name="sparkle" className="h-full w-full" />
+              </span>
+              {!heroBackdrop && heroPoster && (
+                <img
+                  src={heroPoster}
+                  alt=""
+                  className="absolute right-[3.5%] top-1/2 h-[86%] -translate-y-1/2 rotate-2 rounded-[20px] border-[5px] border-white/90 object-cover shadow-[0_18px_40px_-14px_rgba(60,40,30,0.5)]"
+                />
+              )}
+            </div>
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-[2] h-[42%] bg-gradient-to-b from-white/25 to-transparent" />
+            <div className="pointer-events-none absolute inset-0 z-[2] bg-gradient-to-r from-[rgba(50,35,25,0.38)] via-[rgba(50,35,25,0.08)] to-transparent" />
+            {/* faint dot texture over the scene — the "printed channel" finish */}
+            <div
+              className="pointer-events-none absolute inset-0 z-[2] opacity-[0.5]"
+              style={{ backgroundImage: "radial-gradient(rgba(255,255,255,0.14) 1px, transparent 1.5px)", backgroundSize: "18px 18px" }}
+            />
 
-      <Row title="Continue watching" items={continueWatching.map(continueWatchingToTile)} onOpen={openDetail} />
-      <Row title="Recently added" items={recentlyAdded.map(cardToTile)} onOpen={openDetail} />
+            <div className="relative z-[3] flex h-full max-w-[640px] flex-col justify-end px-12 pb-11 text-white">
+              <div className="mb-3.5">
+                <span className="inline-flex items-center gap-2 rounded-full border border-white/45 bg-white/20 px-3.5 py-1.5 font-mono text-[10.5px] font-bold uppercase tracking-[0.16em] backdrop-blur-md">
+                  <span className="h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
+                  {heroEntry ? "Continue watching" : "Recently added"}
+                </span>
+              </div>
+              <h1 className="mb-3 font-display text-[48px] font-bold leading-[1.04] drop-shadow-[0_2px_8px_rgba(60,40,30,0.35)] [text-wrap:balance]">
+                {heroTitle}
+              </h1>
+              <div className="mb-4 flex items-center gap-2.5 text-[12.5px] font-semibold">
+                <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 backdrop-blur-md">{heroSub}</span>
+                {heroYear != null && (
+                  <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 font-mono backdrop-blur-md">
+                    {heroYear}
+                  </span>
+                )}
+                {timeLeftLabel && (
+                  <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 backdrop-blur-md">
+                    {timeLeftLabel}
+                  </span>
+                )}
+              </div>
+              {heroProgress != null && (
+                <div className="mb-5 h-[6px] w-[320px] overflow-hidden rounded-full bg-black/25 shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)]">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-wii-2 to-wii shadow-[0_0_10px_rgba(143,224,245,0.9)]"
+                    style={{ width: `${Math.round(heroProgress * 100)}%` }}
+                  />
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button
+                  className="btn btn-primary"
+                  onClick={() =>
+                    heroMediaFileId
+                      ? navigate(paths.player(heroMediaFileId, heroId, profileId ?? "dev"))
+                      : navigate(paths.detail(heroId))
+                  }
+                >
+                  <Icon name="play" className="h-4 w-4" />
+                  {heroEntry ? "Resume" : "Play"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onPointerEnter={() => prefetchMediaItemDetail(heroId)}
+                  onClick={() => navigate(paths.detail(heroId))}
+                >
+                  <Icon name="info" className="h-4 w-4" />
+                  Details
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <Row
+        title="Continue watching"
+        items={continueWatching.map(continueWatchingToTile)}
+        onOpen={openDetail}
+        onPrefetch={prefetch}
+      />
+      <Row title="Recently added" items={recentlyAdded.map(cardToTile)} onOpen={openDetail} onPrefetch={prefetch} />
     </div>
   );
 }

@@ -60,8 +60,12 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
       overlay.style.height = "100vh";
       overlay.style.borderRadius = "0";
     });
+    // Navigate almost immediately — the fixed overlay covers the swap, and the
+    // detail fetch (already warmed by hover prefetch) runs during the zoom
+    // instead of after it. Waiting for the full animation first doubled the
+    // perceived load time of every title page.
+    setTimeout(navigate, 90);
     setTimeout(() => {
-      navigate();
       overlay.style.opacity = "0";
       setTimeout(() => overlay.remove(), 320);
     }, 420);

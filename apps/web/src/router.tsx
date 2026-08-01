@@ -4,12 +4,15 @@ export type Route =
   | { view: "home" }
   | { view: "library"; libraryId: string }
   | { view: "detail"; itemId: string }
-  | { view: "player"; mediaFileId: string; mediaItemId: string; profileId: string; audioStreamIndex: number | null };
+  | { view: "player"; mediaFileId: string; mediaItemId: string; profileId: string; audioStreamIndex: number | null }
+  | { view: "login" }
+  | { view: "notfound" };
 
 function parse(pathname: string, search: string): Route {
   const parts = pathname.split("/").filter(Boolean);
   const q = new URLSearchParams(search);
 
+  if (parts[0] === "login") return { view: "login" };
   if (parts[0] === "library" && parts[1]) return { view: "library", libraryId: parts[1] };
   if (parts[0] === "title" && parts[1]) return { view: "detail", itemId: parts[1] };
   if (parts[0] === "watch" && parts[1]) {
@@ -22,11 +25,13 @@ function parse(pathname: string, search: string): Route {
       audioStreamIndex: audio !== null ? Number(audio) : null,
     };
   }
-  return { view: "home" };
+  if (parts.length === 0) return { view: "home" };
+  return { view: "notfound" };
 }
 
 export const paths = {
   home: () => "/",
+  login: () => "/login",
   library: (id: string) => `/library/${id}`,
   detail: (id: string) => `/title/${id}`,
   player: (mediaFileId: string, mediaItemId: string, profileId: string, audioStreamIndex?: number | null) =>

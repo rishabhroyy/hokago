@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>hokago</title>
+    <script>
+      // Theme init before first paint: explicit choice wins, otherwise follow
+      // the OS. Mirrors ui/useTheme.tsx, which owns the theme once React mounts.
+      (function () {
+        try {
+          var t = localStorage.getItem("hokago_theme");
+          var dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

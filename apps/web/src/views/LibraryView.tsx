@@ -53,7 +53,7 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
       className={`flex items-center gap-2 rounded-full px-[18px] py-[9px] text-[13px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
         filter === value
           ? "wii-btn text-white shadow-btn-blue"
-          : "bg-white text-ink-2 shadow-panel hover:-translate-y-0.5 hover:text-wii-deep"
+          : "bg-card text-ink-2 shadow-panel hover:-translate-y-0.5 hover:text-wii-deep"
       }`}
       onClick={() => {
         s.hover();

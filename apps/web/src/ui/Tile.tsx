@@ -83,7 +83,7 @@ export function Tile({
       {/* wii channel: glossy white frame, art floats inside */}
       <div
         ref={artRef}
-        className={`art relative rounded-[20px] bg-white p-[5px] shadow-panel transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"}`}
+        className={`art relative rounded-[20px] bg-card p-[5px] shadow-panel transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"}`}
       >
         <div
           className={`relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-[15px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
@@ -102,7 +102,7 @@ export function Tile({
           <span className="pointer-events-none absolute inset-0 z-[1] rounded-[15px] ring-1 ring-inset ring-white/20" />
 
           {item.badge && (
-            <span className="absolute left-2 top-2 z-[3] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-wii-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
+            <span className="absolute left-2 top-2 z-[3] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9px] dark:bg-paper font-bold uppercase tracking-[0.08em] text-wii-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
               {item.badge}
             </span>
           )}

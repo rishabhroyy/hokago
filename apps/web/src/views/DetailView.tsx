@@ -40,7 +40,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
             onPointerEnter={() => s.hover()}
             onClick={(e) => onOpen(ep, e.currentTarget)}
           >
-            <div className="relative rounded-[18px] bg-white p-[5px] shadow-panel transition-shadow duration-200 group-hover:shadow-wii-ring">
+            <div className="relative rounded-[18px] bg-card p-[5px] shadow-panel transition-shadow duration-200 group-hover:shadow-wii-ring">
               <div
                 className={`relative aspect-video overflow-hidden rounded-[13px] ${ep.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(ep.id)]}`}
               >
@@ -53,11 +53,11 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
                 )}
                 <span className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[42%] bg-gradient-to-b from-white/20 to-transparent" />
                 <span className="pointer-events-none absolute inset-0 z-[1] rounded-[13px] ring-1 ring-inset ring-white/20" />
-                <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9.5px] font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
+                <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9.5px] dark:bg-paper font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
                   EP {ep.episodeNumber ?? "?"}
                 </span>
                 {ep.runtimeMs != null && (
-                  <span className="absolute bottom-2 right-[9px] z-[2] rounded-full bg-ink/55 px-2 py-[3px] font-mono text-[9.5px] font-bold text-white backdrop-blur-sm">
+                  <span className="absolute bottom-2 right-[9px] z-[2] rounded-full bg-black/55 px-2 py-[3px] font-mono text-[9.5px] font-bold text-white backdrop-blur-sm">
                     {Math.round(ep.runtimeMs / 60_000)}m
                   </span>
                 )}
@@ -196,7 +196,7 @@ export function DetailView({ itemId }: { itemId: string }) {
         <div className="panel rounded-[30px] p-9">
           <div className="flex items-start gap-9 max-[820px]:flex-col max-[820px]:gap-5">
             {/* channel-framed poster sticking up into the banner, slight wii-tilt */}
-            <div className="-mt-[120px] w-48 shrink-0 -rotate-2 rounded-[26px] bg-white p-[5px] shadow-panel transition-transform duration-300 ease-snap hover:rotate-0 max-[820px]:mt-0 max-[820px]:w-[140px]">
+            <div className="-mt-[120px] w-48 shrink-0 -rotate-2 rounded-[26px] bg-card p-[5px] shadow-panel transition-transform duration-300 ease-snap hover:rotate-0 max-[820px]:mt-0 max-[820px]:w-[140px]">
               <div
                 className={`relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-[21px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
               >
@@ -243,13 +243,13 @@ export function DetailView({ itemId }: { itemId: string }) {
                   </button>
                 )}
                 <button
-                  className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-card text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
                   title="Add to list"
                 >
                   <Icon name="plus" className="h-[19px] w-[19px]" />
                 </button>
                 <button
-                  className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-card text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
                   title="Download"
                 >
                   <Icon name="download" className="h-[19px] w-[19px]" />
@@ -265,7 +265,7 @@ export function DetailView({ itemId }: { itemId: string }) {
                       className={`rounded-full px-4 py-2 text-[12.5px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
                         selectedAudio === track.streamIndex
                           ? "wii-btn text-white shadow-btn-blue"
-                          : "bg-white text-ink-2 shadow-panel hover:text-wii-deep"
+                          : "bg-card text-ink-2 shadow-panel hover:text-wii-deep"
                       }`}
                       onClick={() => {
                         s.hover();

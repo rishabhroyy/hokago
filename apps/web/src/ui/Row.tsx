@@ -46,7 +46,7 @@ export function Row({
       <div className="group/row relative">
         <button
           aria-label="Scroll left"
-          className="absolute left-6 top-1/2 z-[5] flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white bg-white/95 text-ink opacity-0 shadow-panel backdrop-blur-sm transition-[opacity,transform,color] duration-200 ease-snap group-hover/row:opacity-100 hover:text-wii-deep active:scale-[.88] pointer-coarse:hidden"
+          className="absolute left-6 top-1/2 z-[5] flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white bg-card/95 text-ink dark:border-white/15 opacity-0 shadow-panel backdrop-blur-sm transition-[opacity,transform,color] duration-200 ease-snap group-hover/row:opacity-100 hover:text-wii-deep active:scale-[.88] pointer-coarse:hidden"
           onClick={() => scroll(-1)}
         >
           <Icon name="back" className="h-[18px] w-[18px]" />
@@ -64,7 +64,7 @@ export function Row({
         </div>
         <button
           aria-label="Scroll right"
-          className="absolute right-6 top-1/2 z-[5] flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white bg-white/95 text-ink opacity-0 shadow-panel backdrop-blur-sm transition-[opacity,transform,color] duration-200 ease-snap group-hover/row:opacity-100 hover:text-wii-deep active:scale-[.88] pointer-coarse:hidden"
+          className="absolute right-6 top-1/2 z-[5] flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white bg-card/95 text-ink dark:border-white/15 opacity-0 shadow-panel backdrop-blur-sm transition-[opacity,transform,color] duration-200 ease-snap group-hover/row:opacity-100 hover:text-wii-deep active:scale-[.88] pointer-coarse:hidden"
           onClick={() => scroll(1)}
         >
           <Icon name="back" className="h-[18px] w-[18px] rotate-180" />

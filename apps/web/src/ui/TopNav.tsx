@@ -13,6 +13,7 @@ import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
 import { HUE_CLASS, hueFor, iconFor } from "./Tile";
 import { popAndPing, starShower, useKonami, useReducedMotion } from "./effects";
+import { ThemeToggle } from "./useTheme";
 
 function useClock() {
   const [label, setLabel] = useState(() => formatClock(new Date()));
@@ -137,6 +138,7 @@ export function TopNav() {
       </div>
       <div className="flex items-center gap-3">
         <span className="font-mono text-xs font-medium tabular-nums text-ink-3 max-[820px]:hidden">{clock}</span>
+        <ThemeToggle />
         <button
           className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap hover:bg-wii/10 active:scale-90 ${enabled ? "text-wii-deep" : "text-ink-3"}`}
           title="Sound"
@@ -157,7 +159,7 @@ export function TopNav() {
               if (e.key === "Enter" && results[0]) pickResult(results[0]);
             }}
             placeholder="Search titles..."
-            className={`h-[38px] rounded-full border-[1.5px] border-line bg-[#FBF8F1] text-[13.5px] text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-[width,opacity,padding,border-color] duration-[280ms] ease-smooth focus:border-wii max-[820px]:absolute max-[820px]:right-0 max-[820px]:top-[48px] max-[820px]:z-[70] max-[820px]:w-[min(66vw,240px)] max-[820px]:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_14px_30px_-12px_rgba(120,80,60,0.35)] ${searchOpen ? "w-[230px] px-4 opacity-100" : "w-0 px-0 opacity-0"}`}
+            className={`h-[38px] rounded-full border-[1.5px] border-line bg-[#FBF8F1] text-[13.5px] text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-[width,opacity,padding,border-color] duration-[280ms] ease-smooth focus:border-wii dark:bg-[#1F1C17] dark:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35)] max-[820px]:absolute max-[820px]:right-0 max-[820px]:top-[48px] max-[820px]:z-[70] max-[820px]:w-[min(66vw,240px)] max-[820px]:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_14px_30px_-12px_rgba(120,80,60,0.35)] max-[820px]:dark:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35),0_14px_30px_-12px_rgba(0,0,0,0.55)] ${searchOpen ? "w-[230px] px-4 opacity-100" : "w-0 px-0 opacity-0"}`}
           />
           <button
             className="icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full text-ink-2 transition-all duration-150 ease-snap hover:bg-wii/10 hover:text-wii-deep active:scale-90"

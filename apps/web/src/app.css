@@ -1,9 +1,64 @@
 @import "tailwindcss";
 @config "../tailwind.config.ts";
 
+/* Class-based dark mode: the .dark class is applied to <html> (see
+   ui/useTheme.tsx + the inline script in index.html). This variant lets the
+   `dark:` utilities key off that class instead of the OS media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic design tokens (light = default). Redefined in `.dark` below —
+   every Tailwind utility that references these emits `var(--…)` and flips
+   with the theme. Values are verbatim from hokago-current-ui.html. */
 :root {
   --e-snap: cubic-bezier(.4, 1.4, .5, 1); /* press / hover / pop */
   --e: cubic-bezier(.4, 0, .2, 1); /* fades / view transitions */
+  --paper: #F6F0E6;
+  --paper-2: #EFE7D8;
+  --card: #FFFFFF;
+  --ink: #35302B;
+  --ink-2: #72695F;
+  --ink-3: #8B8177;
+  --line: #E6DDCE;
+  --line-2: #D8CEBC;
+  --accent: #E8664F;
+  --accent-2: #F0836F;
+  --gold: #E3A34C;
+  --wii: #4FB8E0;
+  --wii-2: #8FE0F5;
+  --wii-deep: #2E9BC4;
+  --wii-ink: #177A9E;
+  --shadow-panel:
+    inset 0 1.5px 0 rgba(255,255,255,0.9),
+    0 2px 6px -2px rgba(120,80,60,0.14),
+    0 18px 44px -18px rgba(120,80,60,0.35);
+}
+
+/* ============ dark theme ============
+   Warm espresso base — keeps the "cozy channel" warmth of the paper palette
+   instead of going cold/blue. Pastel channel art and the glossy wii buttons
+   stay vivid (they're the color centerpieces); everything around them sinks
+   into a soft dark surface. */
+.dark {
+  color-scheme: dark;
+  --paper: #26221D;
+  --paper-2: #2E2A24;
+  --card: #2B2722;
+  --ink: #F1EADB;
+  --ink-2: #BCB2A2;
+  --ink-3: #857D6F;
+  --line: #3A352E;
+  --line-2: #4A443B;
+  --accent: #F07B63;
+  --accent-2: #F49B87;
+  --gold: #EDB866;
+  --wii: #63C3E6;
+  --wii-2: #A5E7F8;
+  --wii-deep: #3FAED6;
+  --wii-ink: #6ECFF2;
+  --shadow-panel:
+    inset 0 1.5px 0 rgba(255,255,255,0.06),
+    0 2px 6px -2px rgba(0,0,0,0.45),
+    0 18px 44px -18px rgba(0,0,0,0.6);
 }
 
 html,
@@ -32,12 +87,30 @@ body {
   background-attachment: fixed;
 }
 
+/* dark wallpaper: same aura composition, dimmed into the espresso base */
+.dark body {
+  color: var(--ink);
+  background-color: #171410;
+  background-image:
+    radial-gradient(130% 70% at 50% -10%, rgba(255, 244, 224, 0.05), transparent 52%),
+    radial-gradient(48% 42% at 92% -4%, rgba(99, 195, 230, 0.09), transparent 68%),
+    radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.05), transparent 70%),
+    radial-gradient(36% 50% at 50% 70%, rgba(237, 184, 102, 0.045), transparent 72%),
+    radial-gradient(rgba(143, 224, 245, 0.05) 1px, transparent 1.3px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 ::selection { background: rgba(79, 184, 224, 0.35); }
+.dark ::selection { background: rgba(99, 195, 230, 0.32); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #C8DDE8; border-radius: 100px; border: 3px solid #F5EFE4; }
 ::-webkit-scrollbar-thumb:hover { background: #8FE0F5; }
 ::-webkit-scrollbar-track { background: transparent; }
+.dark ::-webkit-scrollbar-thumb { background: #3A342D; border: 3px solid #171410; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #4E86A0; }
 
 :focus-visible { outline: 2.5px solid #4FB8E0; outline-offset: 2px; }
 
@@ -53,6 +126,9 @@ body {
   background: linear-gradient(90deg, #EDE4D3 25%, #FAF5EA 50%, #EDE4D3 75%);
   background-size: 600px 100%;
   animation: shimmer 1.5s linear infinite;
+}
+.dark .skeleton {
+  background: linear-gradient(90deg, #26221D 25%, #2E2A24 50%, #26221D 75%);
 }
 
 /* glossy top-sheen on pill buttons (.btn), ported from reference-prototype.html */
@@ -118,12 +194,30 @@ body {
 .btn-ghost:hover { transform: translateY(-2px); color: #2E9BC4; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 18px -4px rgba(79,184,224,0.55); }
 .btn-ghost:active { transform: scale(.96); }
 
+/* dark: frosted charcoal pill — still reads on the colorful banners it sits
+   over (the left overlay darkens behind it), but sits in the dark theme */
+.dark .btn-ghost {
+  color: var(--ink);
+  background: rgba(38,34,29,0.88);
+  border-color: rgba(255,255,255,0.1);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 4px 12px -4px rgba(0,0,0,0.5);
+}
+.dark .btn-ghost:hover {
+  color: var(--wii-deep);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 6px 18px -4px rgba(99,195,230,0.35);
+}
+
 /* floating white panel — nav, login card, about cards */
 .panel {
   background: rgba(255,255,255,0.86);
   border: 1px solid rgba(255,255,255,0.95);
   box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.9), 0 2px 6px -2px rgba(120,80,60,0.14), 0 18px 44px -18px rgba(120,80,60,0.35);
   backdrop-filter: blur(10px);
+}
+.dark .panel {
+  background: rgba(43,39,34,0.88);
+  border-color: rgba(255,255,255,0.07);
+  box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.06), 0 2px 6px -2px rgba(0,0,0,0.45), 0 18px 44px -18px rgba(0,0,0,0.65);
 }
 
 /* soft text input */
@@ -142,6 +236,18 @@ body {
 }
 .input::placeholder { color: #8B8177; }
 .input:focus { border-color: #4FB8E0; box-shadow: inset 0 2px 4px rgba(120,80,60,0.07), 0 0 0 3.5px rgba(79,184,224,0.28); }
+
+.dark .input {
+  background: #1F1C17;
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.35);
+}
+.dark .input::placeholder { color: var(--ink-3); }
+.dark .input:focus {
+  border-color: var(--wii);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.35), 0 0 0 3.5px rgba(99,195,230,0.28);
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; scroll-behavior: auto !important; }

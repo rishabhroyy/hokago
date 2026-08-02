@@ -7,22 +7,25 @@ export default {
   theme: {
     extend: {
       colors: {
-        paper: "#F6F0E6",
-        "paper-2": "#EFE7D8",
-        card: "#FFFFFF",
-        ink: "#35302B",
-        "ink-2": "#72695F",
-        "ink-3": "#8B8177",
-        line: "#E6DDCE",
-        "line-2": "#D8CEBC",
-        accent: "#E8664F",
-        "accent-2": "#F0836F",
-        gold: "#E3A34C",
-        wii: "#4FB8E0",
-        "wii-2": "#8FE0F5",
-        "wii-deep": "#2E9BC4",
-        "wii-ink": "#177A9E",
+        // Semantic tokens are CSS variables redefined in app.css's `.dark`
+        // scope, so one theme swap re-themes every utility that uses them.
+        paper: "var(--paper)",
+        "paper-2": "var(--paper-2)",
+        card: "var(--card)",
+        ink: "var(--ink)",
+        "ink-2": "var(--ink-2)",
+        "ink-3": "var(--ink-3)",
+        line: "var(--line)",
+        "line-2": "var(--line-2)",
+        accent: "var(--accent)",
+        "accent-2": "var(--accent-2)",
+        gold: "var(--gold)",
+        wii: "var(--wii)",
+        "wii-2": "var(--wii-2)",
+        "wii-deep": "var(--wii-deep)",
+        "wii-ink": "var(--wii-ink)",
         // per-title poster pastels (deterministic pair per title, e.g. id % 6)
+        // — channel art, identical in both themes, so kept as literal hex
         p1a: "#F4A98C", p1b: "#EE8E6C",
         p2a: "#ED9DAE", p2b: "#E2879A",
         p3a: "#EFCB79", p3b: "#E4B457",
@@ -51,9 +54,9 @@ export default {
         // resting Wii glow (compose the pulse via the keyframes below)
         "wii-ring":
           "0 0 0 3px #fff, 0 0 0 5px #4FB8E0, 0 0 15px 1px rgba(79,184,224,0.55), 0 14px 26px -8px rgba(120,80,60,0.4)",
-        // floating white panel — nav, cards, login
-        panel:
-          "inset 0 1.5px 0 rgba(255,255,255,0.9), 0 2px 6px -2px rgba(120,80,60,0.14), 0 18px 44px -18px rgba(120,80,60,0.35)",
+        // floating white panel — nav, cards, login (variable so .dark can
+        // soften the white sheen and deepen the drop shadow on dark surfaces)
+        panel: "var(--shadow-panel)",
         // glossy blue primary action
         "btn-blue":
           "inset 0 1.5px 0 rgba(255,255,255,0.45), 0 6px 18px -6px rgba(46,155,196,0.65)",

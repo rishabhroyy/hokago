@@ -122,7 +122,7 @@ export function Tile({
       >
         {item.title}
       </div>
-      <div className="t-sub mt-px px-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-3">{item.subLabel}</div>
+      <div className="t-sub mt-0.5 px-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-3">{item.subLabel}</div>
     </button>
   );
 }

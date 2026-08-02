@@ -70,7 +70,7 @@ export function HomeView() {
     return (
       <div className="flex min-h-screen items-center justify-center px-6">
         <div className="panel flex max-w-[440px] flex-col items-center rounded-[32px] p-12 text-center">
-          <span className="mb-6 flex h-24 w-24 items-center justify-center rounded-[28px] bg-gradient-to-br from-wii-2 to-wii-deep text-white shadow-btn-blue">
+          <span className="mb-6 flex h-24 w-24 items-center justify-center rounded-[28px] bg-[linear-gradient(135deg,#45ADDD,#187AA5)] text-white shadow-btn-blue">
             <LogoMark className="h-12 w-12" />
           </span>
           <h1 className="mb-2 font-display text-[28px] font-bold">welcome to hokago</h1>
@@ -111,8 +111,8 @@ export function HomeView() {
   return (
     <div className="pb-6 pt-[86px]">
       {heroId && (
-        <section className="mx-12 rounded-[34px] bg-white p-[7px] shadow-panel">
-          <div className={`relative h-[400px] overflow-hidden rounded-[27px] ${HUE_CLASS[hueFor(heroId)]}`}>
+        <section className="mx-12 mt-2 rounded-[34px] bg-white p-[7px] shadow-panel max-[820px]:mx-4">
+          <div className={`relative h-[400px] overflow-hidden rounded-[27px] ${HUE_CLASS[hueFor(heroId)]} max-[820px]:h-[340px]`}>
             {/* real backdrop when we have one; soft, masked, never hotlinked (§1.1) */}
             {heroBackdrop && (
               <img
@@ -124,7 +124,7 @@ export function HomeView() {
             {/* channel-art scene */}
             <div className="pointer-events-none absolute inset-0 z-[1]">
               {!heroPoster && !heroBackdrop && (
-                <span className="absolute bottom-[-34px] right-[4%] h-[250px] w-[250px] animate-bob text-white opacity-90">
+                <span className="absolute bottom-[-34px] right-[4%] h-[250px] w-[250px] animate-bob text-white opacity-90 max-[820px]:h-[168px] max-[820px]:w-[168px] max-[820px]:opacity-55">
                   <Icon name={iconFor(heroId)} className="h-full w-full drop-shadow-[0_6px_14px_rgba(90,50,30,0.3)]" />
                 </span>
               )}
@@ -150,14 +150,14 @@ export function HomeView() {
               style={{ backgroundImage: "radial-gradient(rgba(255,255,255,0.14) 1px, transparent 1.5px)", backgroundSize: "18px 18px" }}
             />
 
-            <div className="relative z-[3] flex h-full max-w-[640px] flex-col justify-end px-12 pb-11 text-white">
-              <div className="mb-3.5">
+            <div className="relative z-[3] flex h-full max-w-[640px] flex-col justify-end px-12 pb-11 text-white max-[820px]:px-[22px] max-[820px]:pb-[34px]">
+              <div className="mb-3.5 max-[820px]:mb-3">
                 <span className="inline-flex items-center gap-2 rounded-full border border-white/45 bg-white/20 px-3.5 py-1.5 font-mono text-[10.5px] font-bold uppercase tracking-[0.16em] backdrop-blur-md">
                   <span className="h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                   {heroEntry ? "Continue watching" : "Recently added"}
                 </span>
               </div>
-              <h1 className="mb-3 font-display text-[48px] font-bold leading-[1.04] drop-shadow-[0_2px_8px_rgba(60,40,30,0.35)] [text-wrap:balance]">
+              <h1 className="mb-3 font-display text-[48px] font-black leading-[1.02] tracking-[-0.015em] drop-shadow-[0_2px_8px_rgba(60,40,30,0.35)] [text-wrap:balance] max-[820px]:text-[34px] max-[820px]:leading-[1.1]">
                 {heroTitle}
               </h1>
               <div className="mb-4 flex items-center gap-2.5 text-[12.5px] font-semibold">
@@ -174,7 +174,7 @@ export function HomeView() {
                 )}
               </div>
               {heroProgress != null && (
-                <div className="mb-5 h-[6px] w-[320px] overflow-hidden rounded-full bg-black/25 shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)]">
+                <div className="mb-5 h-[6px] w-[320px] max-w-full overflow-hidden rounded-full bg-black/25 shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)] max-[820px]:mb-4">
                   <div
                     className="h-full rounded-full bg-gradient-to-r from-wii-2 to-wii shadow-[0_0_10px_rgba(143,224,245,0.9)]"
                     style={{ width: `${Math.round(heroProgress * 100)}%` }}

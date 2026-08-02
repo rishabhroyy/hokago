@@ -62,7 +62,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
                   </span>
                 )}
                 <span className="absolute inset-0 z-[2] flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-b from-wii-2 to-wii-deep text-white shadow-btn-blue">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full wii-btn text-white shadow-btn-blue">
                     <Icon name="play" className="ml-0.5 h-5 w-5" />
                   </span>
                 </span>
@@ -80,7 +80,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
 
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
-    <button className="btn btn-ghost absolute left-12 top-[84px] z-[4] !px-[18px] !py-2.5 text-[13.5px]" onClick={onClick}>
+    <button className="btn btn-ghost absolute left-12 top-[84px] z-[4] !px-[18px] !py-2.5 text-[13.5px] max-[820px]:left-4" onClick={onClick}>
       <Icon name="back" className="h-[15px] w-[15px]" />
       Back
     </button>
@@ -89,7 +89,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
 
 function Banner({ itemId, backdropUrl, posterUrl, onBack }: { itemId: string; backdropUrl?: string | null; posterUrl?: string | null; onBack: () => void }) {
   return (
-    <header className={`relative h-[340px] overflow-hidden ${HUE_CLASS[hueFor(itemId)]}`}>
+    <header className={`relative h-[340px] overflow-hidden ${HUE_CLASS[hueFor(itemId)]} max-[820px]:h-[300px]`}>
       {backdropUrl ? (
         <img src={backdropUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
       ) : posterUrl ? (
@@ -99,7 +99,7 @@ function Banner({ itemId, backdropUrl, posterUrl, onBack }: { itemId: string; ba
           className="absolute inset-0 h-full w-full scale-125 object-cover opacity-70 blur-[28px] saturate-[1.15]"
         />
       ) : (
-        <div className="pointer-events-none absolute bottom-[-26px] right-[5%] h-[210px] w-[210px] text-white opacity-90">
+        <div className="pointer-events-none absolute bottom-[-26px] right-[5%] h-[210px] w-[210px] text-white opacity-90 max-[820px]:h-[150px] max-[820px]:w-[150px] max-[820px]:opacity-60">
           <Icon name={iconFor(itemId)} className="h-full w-full drop-shadow-[0_6px_14px_rgba(90,50,30,0.3)]" />
         </div>
       )}
@@ -119,10 +119,10 @@ function DetailSkeleton({ itemId }: { itemId: string }) {
   return (
     <div className="detail min-h-screen">
       <Banner itemId={itemId} onBack={() => navigate(paths.home())} />
-      <div className="relative z-[3] mx-12 -mt-24 pb-16">
+      <div className="relative z-[3] mx-12 -mt-24 pb-16 max-[820px]:mx-4">
         <div className="panel rounded-[30px] p-9">
-          <div className="flex items-start gap-9">
-            <div className="skeleton -mt-[120px] aspect-[2/3] w-48 shrink-0 rounded-[26px] border-[5px] border-white" />
+          <div className="flex items-start gap-9 max-[820px]:flex-col">
+            <div className="skeleton -mt-[120px] aspect-[2/3] w-48 shrink-0 rounded-[26px] border-[5px] border-white max-[820px]:mt-0 max-[820px]:w-[140px]" />
             <div className="flex w-full max-w-xl flex-col gap-3 pt-1">
               <div className="skeleton h-10 w-72 rounded-full" />
               <div className="skeleton h-5 w-44 rounded-full" />
@@ -192,11 +192,11 @@ export function DetailView({ itemId }: { itemId: string }) {
       <Banner itemId={item.id} backdropUrl={item.backdropUrl} posterUrl={item.posterUrl} onBack={() => navigate(paths.home())} />
 
       {/* the sheet: one glossy page holding everything about this title */}
-      <div className="relative z-[3] mx-12 -mt-24 pb-16">
+      <div className="relative z-[3] mx-12 -mt-24 pb-16 max-[820px]:mx-4">
         <div className="panel rounded-[30px] p-9">
-          <div className="flex items-start gap-9">
+          <div className="flex items-start gap-9 max-[820px]:flex-col max-[820px]:gap-5">
             {/* channel-framed poster sticking up into the banner, slight wii-tilt */}
-            <div className="-mt-[120px] w-48 shrink-0 -rotate-2 rounded-[26px] bg-white p-[5px] shadow-panel transition-transform duration-300 ease-snap hover:rotate-0">
+            <div className="-mt-[120px] w-48 shrink-0 -rotate-2 rounded-[26px] bg-white p-[5px] shadow-panel transition-transform duration-300 ease-snap hover:rotate-0 max-[820px]:mt-0 max-[820px]:w-[140px]">
               <div
                 className={`relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-[21px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
               >
@@ -213,7 +213,7 @@ export function DetailView({ itemId }: { itemId: string }) {
             </div>
 
             <div className="min-w-0 flex-1 pt-1">
-              <h1 className="mb-3 font-display text-[40px] font-bold leading-[1.06] tracking-[0.005em] [text-wrap:balance]">
+              <h1 className="mb-3 font-display text-[40px] font-black leading-[1.04] tracking-[-0.01em] [text-wrap:balance]">
                 {item.title}
               </h1>
               <div className="mb-5 flex flex-wrap items-center gap-2 text-[12.5px] font-semibold text-ink-2">
@@ -228,7 +228,7 @@ export function DetailView({ itemId }: { itemId: string }) {
                 )}
               </div>
 
-              <div className="mb-5 flex items-center gap-3">
+              <div className="mb-5 flex items-center gap-3 max-[820px]:flex-wrap">
                 {playMediaFileId && (
                   <button
                     className="btn btn-primary"
@@ -264,7 +264,7 @@ export function DetailView({ itemId }: { itemId: string }) {
                       key={track.streamIndex}
                       className={`rounded-full px-4 py-2 text-[12.5px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
                         selectedAudio === track.streamIndex
-                          ? "bg-gradient-to-b from-wii-2 to-wii text-white shadow-btn-blue"
+                          ? "wii-btn text-white shadow-btn-blue"
                           : "bg-white text-ink-2 shadow-panel hover:text-wii-deep"
                       }`}
                       onClick={() => {

@@ -52,7 +52,7 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
       key={value}
       className={`flex items-center gap-2 rounded-full px-[18px] py-[9px] text-[13px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
         filter === value
-          ? "bg-gradient-to-b from-wii-2 to-wii text-white shadow-btn-blue"
+          ? "wii-btn text-white shadow-btn-blue"
           : "bg-white text-ink-2 shadow-panel hover:-translate-y-0.5 hover:text-wii-deep"
       }`}
       onClick={() => {
@@ -70,10 +70,10 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
   );
 
   return (
-    <div className="min-h-screen px-12 pb-10 pt-[86px]">
+    <div className="min-h-screen px-12 pb-10 pt-[86px] max-[820px]:px-5">
       <div className="pb-[26px] pt-[30px]">
         <div className="mb-[18px] flex items-baseline gap-3.5">
-          <h2 className="font-display text-[30px] font-bold tracking-[0.005em]">{library?.name ?? "Library"}</h2>
+          <h2 className="font-display text-[30px] font-bold tracking-[-0.01em]">{library?.name ?? "Library"}</h2>
           {items.length > 0 && (
             <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-ink-3">
               {filtered.length} {filtered.length === 1 ? "title" : "titles"}
@@ -88,12 +88,14 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
       </div>
 
       {loaded && filtered.length === 0 ? (
-        <div className="panel flex flex-col items-center rounded-[28px] px-6 py-20 text-center">
-          <span className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] bg-gradient-to-br from-wii-2/40 to-wii/30 text-wii-deep">
-            <Icon name="grid" className="h-8 w-8" />
+        <div className="flex flex-col items-center px-6 py-[76px] pb-24 text-center">
+          <Icon name="sparkle" className="h-10 w-10 text-gold opacity-65" />
+          <p className="mt-[14px] font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-ink-2">
+            nothing on this shelf yet
+          </p>
+          <span className="mt-1 text-[14px] text-ink-2">
+            scan a folder from the admin panel and it will appear here.
           </span>
-          <p className="mb-1 font-display text-[19px] font-bold text-ink">nothing on this shelf yet</p>
-          <p className="text-[13px] text-ink-2">scan a folder from the admin panel and it will appear here.</p>
         </div>
       ) : (
         <div

@@ -105,12 +105,12 @@ export function TopNav() {
   const linkCls = (active: boolean) =>
     `rounded-full px-4 py-[7px] text-[13.5px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
       active
-        ? "bg-gradient-to-b from-wii-2 to-wii text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
+        ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
         : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
     }`;
 
   return (
-    <nav className="panel fixed inset-x-12 top-3 z-[60] flex h-[58px] items-center justify-between rounded-full pl-5 pr-3.5">
+    <nav className="panel fixed inset-x-12 top-3 z-[60] flex h-[58px] items-center justify-between rounded-full pl-5 pr-3.5 max-[820px]:inset-x-3">
       <div className="flex items-center gap-7">
         <button
           className="brand relative flex items-center gap-2.5 overflow-hidden rounded-xl px-2 py-1.5 font-display text-[19px] font-bold transition-transform duration-150 ease-snap hover:scale-[1.04] active:scale-[.94]"
@@ -120,7 +120,7 @@ export function TopNav() {
           hokago
           <span className="pointer-events-none absolute inset-0 animate-shine bg-[linear-gradient(115deg,transparent_42%,rgba(255,255,255,0.8)_50%,transparent_58%)]" />
         </button>
-        <div className="flex gap-1">
+        <div className="flex gap-1 max-[820px]:hidden">
           <button className={linkCls(route.view === "home")} onClick={(e) => go(paths.home(), e)}>
             Home
           </button>
@@ -136,7 +136,7 @@ export function TopNav() {
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <span className="font-mono text-xs font-medium tabular-nums text-ink-3">{clock}</span>
+        <span className="font-mono text-xs font-medium tabular-nums text-ink-3 max-[820px]:hidden">{clock}</span>
         <button
           className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap hover:bg-wii/10 active:scale-90 ${enabled ? "text-wii-deep" : "text-ink-3"}`}
           title="Sound"
@@ -157,7 +157,7 @@ export function TopNav() {
               if (e.key === "Enter" && results[0]) pickResult(results[0]);
             }}
             placeholder="Search titles..."
-            className={`h-[38px] rounded-full border-[1.5px] border-line bg-[#FBF8F1] text-[13.5px] text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-[width,opacity,padding,border-color] duration-[280ms] ease-smooth focus:border-wii ${searchOpen ? "w-[230px] px-4 opacity-100" : "w-0 px-0 opacity-0"}`}
+            className={`h-[38px] rounded-full border-[1.5px] border-line bg-[#FBF8F1] text-[13.5px] text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-[width,opacity,padding,border-color] duration-[280ms] ease-smooth focus:border-wii max-[820px]:absolute max-[820px]:right-0 max-[820px]:top-[48px] max-[820px]:z-[70] max-[820px]:w-[min(66vw,240px)] max-[820px]:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_14px_30px_-12px_rgba(120,80,60,0.35)] ${searchOpen ? "w-[230px] px-4 opacity-100" : "w-0 px-0 opacity-0"}`}
           />
           <button
             className="icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full text-ink-2 transition-all duration-150 ease-snap hover:bg-wii/10 hover:text-wii-deep active:scale-90"
@@ -174,7 +174,7 @@ export function TopNav() {
           </button>
 
           {searchOpen && q.length > 0 && (
-            <div className="panel absolute right-0 top-[48px] w-[320px] overflow-hidden rounded-[22px]">
+            <div className="panel absolute right-0 top-[48px] w-[320px] overflow-hidden rounded-[22px] max-[820px]:top-[96px] max-[820px]:w-[min(80vw,320px)]">
               {results.length === 0 ? (
                 <div className="px-4 py-5 text-center text-[12.5px] font-semibold text-ink-3">no matches</div>
               ) : (
@@ -211,7 +211,7 @@ export function TopNav() {
         </div>
         <div ref={menuRef} className="relative">
           <button
-            className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-gradient-to-br from-wii-2 to-wii-deep font-display text-[15px] font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70 transition-transform duration-150 ease-snap hover:scale-105 active:scale-92"
+            className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-[15px] font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70 transition-transform duration-150 ease-snap hover:scale-105 active:scale-92"
             title={profile?.name ?? "account"}
             onClick={() => setMenuOpen((o) => !o)}
           >

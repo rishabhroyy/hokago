@@ -64,7 +64,7 @@ export function LoginView() {
 
       <form onSubmit={submit} className="panel w-full max-w-[400px] rounded-[32px] p-10">
         <div className="mb-7 flex flex-col items-center text-center">
-          <span className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] bg-gradient-to-br from-wii-2 to-wii-deep text-white shadow-btn-blue">
+          <span className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,#45ADDD,#187AA5)] text-white shadow-btn-blue">
             <LogoMark className="h-10 w-10" />
           </span>
           <h1 className="font-display text-[26px] font-bold">hokago</h1>

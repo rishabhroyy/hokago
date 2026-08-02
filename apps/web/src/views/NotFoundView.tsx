@@ -6,7 +6,7 @@ export function NotFoundView() {
   return (
     <div className="flex min-h-screen items-center justify-center px-6">
       <div className="panel flex max-w-[420px] flex-col items-center rounded-[32px] p-12 text-center">
-        <span className="mb-6 flex h-20 w-20 items-center justify-center rounded-[24px] bg-gradient-to-br from-wii-2/50 to-wii/40 text-wii-deep">
+        <span className="mb-6 flex h-20 w-20 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,rgba(69,173,221,0.5),rgba(24,122,165,0.4))] text-wii-deep">
           <Icon name="cloudsun" className="h-10 w-10" />
         </span>
         <h1 className="mb-2 font-display text-[24px] font-bold">channel not found</h1>

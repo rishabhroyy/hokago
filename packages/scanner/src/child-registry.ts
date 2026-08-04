@@ -1,6 +1,6 @@
 /**
  * Tracks live ffmpeg/ffprobe child PIDs so a worker's SIGTERM handler can reap
- * them (§9.6.4) — Node itself won't kill in-flight children on exit.
+ * them — Node itself won't kill in-flight children on exit.
  */
 const tracked = new Set<number>();
 

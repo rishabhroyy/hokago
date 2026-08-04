@@ -78,7 +78,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: { 200: { description: "Service is healthy", ...json(HealthResponse) } },
   });
 
-  // Browse (§7.3/§7.6)
+ // Browse (/)
   registry.registerPath({
     method: "get",
     path: "/libraries",
@@ -103,7 +103,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     },
   });
 
-  // Profiles (§7.1)
+ // Profiles
   registry.registerPath({
     method: "get",
     path: "/profiles",
@@ -148,7 +148,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     },
   });
 
-  // Auth (§7.1)
+ // Auth
   registry.registerPath({
     method: "post",
     path: "/auth/register",
@@ -214,7 +214,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: { 200: { description: "OK", ...json(InviteResponse) } },
   });
 
-  // Playback (§11.1/§11.2/§11.4)
+ // Playback (//)
   registry.registerPath({
     method: "post",
     path: "/playback/start",
@@ -273,7 +273,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: { 200: { description: "OK", ...json(ContinueWatchingResponse) } },
   });
 
-  // Admin (§9.6.8)
+ // Admin
   registry.registerPath({
     method: "get",
     path: "/admin/queues",
@@ -331,7 +331,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     },
   });
 
-  // Media files (§13)
+ // Media files
   registry.registerPath({
     method: "get",
     path: "/media-files/{id}/fonts",

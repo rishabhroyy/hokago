@@ -6,7 +6,7 @@ import type { ParsedFilename } from "./parsers/types.js";
 
 export type { ParsedFilename } from "./parsers/types.js";
 
-/** Parser registry (§9.3): forks by library content profile. */
+/** Parser registry : forks by library content profile. */
 export function parseFilename(filename: string, profile: ContentProfile = "GENERAL"): ParsedFilename {
   return profile === "ANIME" ? parseAnime(filename) : parseScene(filename);
 }

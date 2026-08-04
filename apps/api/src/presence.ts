@@ -8,7 +8,7 @@ const db = new PrismaClient();
 const sockets = new Set<WebSocket>();
 
 /**
- * Real-time "who's watching now" (§11.4) — an admin view, not a per-account
+ * Real-time "who's watching now" — an admin view, not a per-account
  * feed, so every connection must present an admin JWT before the upgrade
  * completes. Browsers can't set an Authorization header on a WS handshake,
  * so the token travels as a query param instead.

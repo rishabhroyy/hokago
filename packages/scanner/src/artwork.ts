@@ -29,7 +29,7 @@ function artworkStoreDir(): string {
   return path.join(configDir(), "artwork");
 }
 
-/** Content-addressed store under /config/artwork — same bytes, same path, idempotent (§9.6.1). */
+/** Content-addressed store under /config/artwork — same bytes, same path, idempotent . */
 export async function storeBytes(bytes: Buffer, ext: string): Promise<{ bytesPath: string; hash: string }> {
   const hash = createHash("sha256").update(bytes).digest("hex");
   const dir = artworkStoreDir();
@@ -47,14 +47,14 @@ async function writeIfMissing(filePath: string, bytes: Buffer): Promise<void> {
   }
 }
 
-/** Discovers Kodi + Radarr/Sonarr sidecar art files in a directory (§10.1). */
+/** Discovers Kodi + Radarr/Sonarr sidecar art files in a directory . */
 export async function findSidecarArt(dir: string, filePath?: string): Promise<ArtworkDescriptor[]> {
   const results: ArtworkDescriptor[] = [];
   const foundKinds = new Set<ArtworkKind>();
 
   // Kodi's per-file <basename>-poster.jpg is checked first (more specific —
   // matters when several movies share one folder), then Radarr/Sonarr's
-  // plain, folder-wide poster.jpg as fallback (§10.1, §8.6). At most one
+ // plain, folder-wide poster.jpg as fallback . At most one
   // sidecar file wins per kind.
   const candidates: { path: string; kind: ArtworkKind }[] = [];
   if (filePath) {
@@ -90,7 +90,7 @@ export async function findSidecarArt(dir: string, filePath?: string): Promise<Ar
   return results;
 }
 
-/** Extracts the first attached_pic stream as embedded cover art (§10.2). */
+/** Extracts the first attached_pic stream as embedded cover art . */
 export async function extractEmbeddedArt(
   filePath: string,
   attachedPics: AttachedPic[],
@@ -121,10 +121,10 @@ export async function extractEmbeddedArt(
 }
 
 /**
- * Generated fallback (§8.7): a real frame becomes the backdrop directly, and
+ * Generated fallback : a real frame becomes the backdrop directly, and
  * a blur-extend composition of that same frame becomes the poster. Always
  * lowest priority, always source=GENERATED — silently replaced by anything
- * better later (§8.7.4 self-healing). No baked-in title text (skipped for now).
+ * better later (self-healing). No baked-in title text (skipped for now).
  */
 export async function generateArt(filePath: string, durationMs: number): Promise<ArtworkDescriptor[]> {
   const frame = await selectBestFrame(filePath, durationMs);
@@ -163,7 +163,7 @@ export async function generateArt(filePath: string, durationMs: number): Promise
 
 /**
  * Upsert one artwork candidate and self-heal the [mediaItemId, kind] slot
- * (§8.7.4, §3.4): a higher-priority source resolved this run permanently
+ * : a higher-priority source resolved this run permanently
  * supersedes whatever this kind previously resolved to. Shared by the
  * local-file resolution path (`storeArtwork` in ingest.ts) and the network
  * provider path (`resolveMetadata` in metadata.ts) so the self-healing

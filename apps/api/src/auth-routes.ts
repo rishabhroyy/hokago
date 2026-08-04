@@ -26,7 +26,7 @@ import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
 
-/** §7.1 — username/password auth, argon2id, JWT access + opaque refresh token, sessions table makes tokens genuinely revocable. */
+/** username/password auth, argon2id, JWT access + opaque refresh token, sessions table makes tokens genuinely revocable. */
 export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void> {
   app.post(
     "/auth/register",

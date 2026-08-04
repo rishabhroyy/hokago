@@ -18,10 +18,10 @@ const SUBTITLE_FORMAT_BY_CODEC: Record<string, SubtitleFormat> = {
 };
 
 // Bitmap subtitle formats can't be rendered client-side by libass/JASSUB —
-// force burn-in, which later kills Direct Play eligibility (§13.4).
+// force burn-in, which later kills Direct Play eligibility .
 const BITMAP_SUBTITLE_FORMATS = new Set<SubtitleFormat>(["PGS", "VOBSUB", "DVBSUB"]);
 
-/** Sync MediaStream rows for one file — create/update/delete-by-key, same shape as evidence sync (§9.6.1). */
+/** Sync MediaStream rows for one file — create/update/delete-by-key, same shape as evidence sync . */
 export async function syncMediaStreams(db: PrismaClient, mediaFileId: string, streams: ProbedStream[]): Promise<void> {
   const existing = await db.mediaStream.findMany({ where: { mediaFileId } });
   const seenIndexes = new Set<number>();
@@ -59,7 +59,7 @@ export async function syncMediaStreams(db: PrismaClient, mediaFileId: string, st
 }
 
 /**
- * Sync SubtitleTrack rows for one file's SUBTITLE-type streams (§13.4). No DB
+ * Sync SubtitleTrack rows for one file's SUBTITLE-type streams . No DB
  * unique constraint on [mediaFileId, streamIndex] (external sidecar tracks
  * have a null streamIndex), so this is find-then-create/update, not a
  * compound-key upsert like MediaStream's.

@@ -20,7 +20,7 @@ function yearOf(base: string): number | null {
 }
 
 /**
- * Scene-release + Kodi folder-convention parser (§9.3, GENERAL content profile).
+ * Scene-release + Kodi folder-convention parser (GENERAL content profile).
  * One generic regex, not a tokenizer — good enough for `SxxEyy` / `NxNN` /
  * `Title - NN` scene conventions. Known-unresolvable cases (ambiguous group vs.
  * title, "Spice and Wolf 2" episode-vs-batch) are left as-is rather than guessed.

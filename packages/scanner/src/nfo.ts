@@ -19,7 +19,7 @@ const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_
 /**
  * Parses a Kodi NFO. Returns null for anything that isn't actually one —
  * critically, scene-release `.nfo` files are ASCII-art release notes that
- * share the extension but aren't XML at all (§9.3 known-unresolvable case:
+ * share the extension but aren't XML at all (known-unresolvable case:
  * "detect and ignore. Real bug we'd otherwise ship.").
  */
 export function parseNfo(xml: string): ParsedNfo | null {
@@ -61,7 +61,7 @@ export function parseNfo(xml: string): ParsedNfo | null {
   return { kind, title, year: year && !Number.isNaN(year) ? year : null, plot, uniqueIds };
 }
 
-/** Candidate NFO paths for a given video file, per §10.1 conventions. */
+/** Candidate NFO paths for a given video file, per conventions. */
 export async function findNfoForFile(filePath: string): Promise<ParsedNfo | null> {
   const dir = path.dirname(filePath);
   const base = filePath.replace(/\.[^.]+$/, "");

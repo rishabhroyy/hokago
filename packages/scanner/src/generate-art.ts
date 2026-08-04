@@ -6,10 +6,10 @@ import { randomUUID } from "node:crypto";
 import { trackPid, untrackPid } from "./child-registry.js";
 
 const POSTER_WIDTH = 1000;
-const POSTER_HEIGHT = 1500; // 2:3 (§8.7.3)
+const POSTER_HEIGHT = 1500; // 2:3
 const CANDIDATE_COUNT = 5;
 
-/** Registers the child's PID so a worker's SIGTERM handler can reap it (§9.6.4). */
+/** Registers the child's PID so a worker's SIGTERM handler can reap it . */
 async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = execFile("ffmpeg", args, { maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -21,7 +21,7 @@ async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: stri
   });
 }
 
-/** Runs a single ffmpeg pass over a short window near sampleAtSec, parses the last crop=W:H:X:Y (§8.7.2 — black bars would otherwise skew scoring and composition). */
+/** Runs a single ffmpeg pass over a short window near sampleAtSec, parses the last crop=W:H:X:Y (— black bars would otherwise skew scoring and composition). */
 async function detectCrop(filePath: string, sampleAtSec: number): Promise<string | null> {
   try {
     const { stderr } = await runFfmpeg([
@@ -67,7 +67,7 @@ interface FrameScore {
   score: number;
 }
 
-/** Classical scoring (§8.7.2): reject near-black/near-white and low-variance frames, then score by colorfulness + contrast. No ML. */
+/** Classical scoring : reject near-black/near-white and low-variance frames, then score by colorfulness + contrast. No ML. */
 async function scoreFrame(imgPath: string): Promise<FrameScore> {
   const { stdout } = await runFfmpeg(["-i", imgPath, "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-"]);
 
@@ -94,7 +94,7 @@ export interface SelectedFrame {
 }
 
 /**
- * Picks a real frame from the film for backdrop/still use (§8.7.2). This is
+ * Picks a real frame from the film for backdrop/still use . This is
  * the artwork kind that genuinely generates well — a frame from the movie
  * *is* a usable 16:9 image of the movie.
  */
@@ -125,7 +125,7 @@ export async function selectBestFrame(filePath: string, durationMs: number): Pro
     if (candidates.length === 0) return null;
 
     const usable = candidates.filter((c) => !c.score.rejected);
-    // §8.7 "cannot fail" — if every candidate got rejected, fall back to the
+ // "cannot fail" — if every candidate got rejected, fall back to the
     // middle-most one rather than shipping no artwork at all.
     const pool = usable.length > 0 ? usable : candidates;
     const best = pool.reduce((a, b) => (b.score.score > a.score.score ? b : a));
@@ -142,7 +142,7 @@ export async function selectBestFrame(filePath: string, durationMs: number): Pro
 
 /**
  * Composes a 2:3 poster from a 16:9 (or arbitrary) source frame via
- * blur-extend (§8.7.3 default): a blurred, darkened crop of the same frame
+ * blur-extend (default): a blurred, darkened crop of the same frame
  * fills the background, the frame itself is centered on top at full width.
  * No text/gradient — baked-in title typography was explicitly dropped for
  * now (no drawtext filter in this ffmpeg build).

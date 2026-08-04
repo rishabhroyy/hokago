@@ -1,4 +1,4 @@
-/** §7.3/§7.6 — library browsing and item detail contracts. */
+/** / — library browsing and item detail contracts. */
 
 import { z } from "zod";
 

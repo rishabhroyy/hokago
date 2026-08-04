@@ -15,7 +15,7 @@ function median(values: number[]): number {
 }
 
 /**
- * Detects the Mugen Train shape (§7.3, §9.2c): a season folder of ~24min
+ * Detects the Mugen Train shape (c): a season folder of ~24min
  * episodes plus one 108min movie. Outliers become standalone movies.
  *
  * ponytail: a single "> 1.8x median" ratio heuristic, not a real clustering

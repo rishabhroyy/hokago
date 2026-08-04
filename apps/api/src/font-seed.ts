@@ -10,7 +10,7 @@ function fontStoreDir(): string {
 }
 
 // Filename → (family, weight) for the chrome fonts packages/fonts vendors at
-// build time (§1.1 source 1, VENDORED — the offline-boot floor). Only the
+// build time (source 1, VENDORED — the offline-boot floor). Only the
 // "latin" subset is registered: the per-file fontsource CSS carries no
 // unicode-range, so also serving "latin-ext" would just be a second
 // @font-face with an identical selector and no way for the browser to choose
@@ -27,7 +27,7 @@ const VENDORED_FONTS: { file: string; family: string; weight: number }[] = [
     weight,
   })),
   { file: "wordmark/zen-maru-gothic-500-hokago-subset.woff2", family: "Zen Maru Gothic", weight: 500 },
-  // Display tier (§1.1): full latin charset — renders font.display for
+ // Display tier : full latin charset — renders font.display for
   // arbitrary heading text, not just the "hokago" wordmark glyphs. Shares
   // family/weight 500 with the subset above; browsers resolve same-
   // family/weight @font-face duplicates by picking whichever declaration
@@ -42,8 +42,8 @@ const VENDORED_FONTS: { file: string; family: string; weight: number }[] = [
 /**
  * Registers the build-time-vendored chrome fonts into the same hash-deduped
  * Font store subtitle-extracted fonts already use (packages/scanner/src/
- * fonts.ts). Both shipped themes (§15) share one font stack, so there's no
- * per-theme linking — every vendored font is just always served.
+ * fonts.ts). There's one font stack, so no per-theme linking — every vendored
+ * font is just always served.
  */
 export async function seedVendoredFonts(db: PrismaClient): Promise<void> {
   const dir = fontStoreDir();

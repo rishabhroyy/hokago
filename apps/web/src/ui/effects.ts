@@ -1,5 +1,5 @@
 // Wii-flavored interaction effects: channel-zoom open, select-pop + star ping,
-// staggered entrance, Konami code. See docs/ui-handoff/interactions.md §5,4,6,9.
+// staggered entrance, Konami code.
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 const STAR_PATH = "M12 2C12 8 14 10 20 12 14 14 12 16 12 22 12 16 10 14 4 12 10 10 12 8 12 2Z";
@@ -29,7 +29,7 @@ export function spawnStar(x: number, y: number) {
   setTimeout(() => star.remove(), 650);
 }
 
-/** §4 — springy pop on the clicked element + a small gold star ping at the pointer. */
+/** Springy pop on the clicked element + a small gold star ping at the pointer. */
 export function popAndPing(el: HTMLElement, clientX: number, clientY: number, reduced: boolean) {
   if (reduced) return;
   el.style.animation = "popsel .34s cubic-bezier(.4,1.4,.5,1)";
@@ -41,7 +41,7 @@ export function popAndPing(el: HTMLElement, clientX: number, clientY: number, re
   spawnStar(clientX, clientY);
 }
 
-/** §5 — the signature Wii "channel opens" poster → detail transition. */
+/** the signature Wii "channel opens" poster → detail transition. */
 export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: boolean) {
   if (reduced) {
     navigate();
@@ -74,7 +74,7 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
   }
 }
 
-/** §6 — riseIn tiles/cards in a container with incremental delay, once per `deps` change. */
+/** riseIn tiles/cards in a container with incremental delay, once per `deps` change. */
 export function useStaggerEntrance(containerRef: RefObject<HTMLElement | null>, deps: readonly unknown[]) {
   const reduced = useReducedMotion();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -97,7 +97,7 @@ export function useStaggerEntrance(containerRef: RefObject<HTMLElement | null>, 
 
 const KONAMI = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "b", "a"];
 
-/** §9 — Konami code easter egg: jingle + a shower of star pings. */
+/** Konami code easter egg: jingle + a shower of star pings. */
 export function useKonami(onTrigger: () => void) {
   const posRef = useRef(0);
   useEffect(() => {

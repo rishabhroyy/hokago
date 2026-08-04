@@ -1,4 +1,4 @@
-// Stand-in for the eventual `hokago-cli` (§7.1 — "password reset = admin
+// Stand-in for the eventual `hokago-cli` (— "password reset = admin
 // action or CLI"). Bootstraps the first admin account directly: invite
 // creation requires an admin and registration requires an invite, so
 // something has to break that cycle once, out of band.

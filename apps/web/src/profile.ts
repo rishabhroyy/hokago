@@ -6,7 +6,7 @@ export interface PrimaryProfile {
   name: string;
 }
 
-// No profile-picker UI exists yet (§7.1 multi-profile support is unbuilt on
+// No profile-picker UI exists yet (multi-profile support is unbuilt on
 // the frontend) — every view just operates as the account's first profile.
 let cached: Promise<PrimaryProfile | null> | null = null;
 

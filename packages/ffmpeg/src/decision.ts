@@ -9,7 +9,7 @@ export interface PlaybackDecision {
 }
 
 /**
- * Three-tier decision, evaluated in the doc's stated order (§11.1, Jellyfin
+ * Three-tier decision, evaluated in the doc's stated order (Jellyfin
  * StreamBuilder order): force flags → direct play eval → transcoding profile
  * eval. Direct Stream is remux-only (container swap, streams copied) — it
  * can't fix a codec, resolution, bitrate, HDR, or subtitle-burn mismatch, only
@@ -36,7 +36,7 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
     input.bitrateKbps === null ||
     input.bitrateKbps <= profile.maxVideoBitrateKbps;
   const hdrOk = !needsToneMap(input.isHdr, profile.supportsHdr);
-  // PGS/VOBSUB forcing burn-in (§13.4) always wins; a profile that itself
+ // PGS/VOBSUB forcing burn-in always wins; a profile that itself
   // wants everything burned (e.g. airplay) forces it independent of the track.
   const burnRequired = input.subtitleRequiresBurnIn || profile.subtitleMode === "burn";
 
@@ -56,7 +56,7 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
   }
 
   // Stage 3: transcoding profile eval — remux (Direct Stream) still counts as
-  // a "transcode" tier per §11.1's naming, but only ever touches the container.
+ // a "transcode" tier per 's naming, but only ever touches the container.
   if (directStreamForced && !containerOk && codecsAndLimitsOk) {
     return { method: "DIRECT_STREAM", reasons: [...reasons, "remux only: codecs and limits already compatible"] };
   }

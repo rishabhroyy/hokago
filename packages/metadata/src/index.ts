@@ -1,6 +1,5 @@
 /**
  * hokago — metadata provider interfaces (license firewall)
- * Design doc: docs/design.md §8.5, §19 Step 0.
  *
  * INTERFACES ONLY. No implementation, no data, ever — not even temporarily.
  * AGPL-encumbered (anime-offline-database, Fribb/anime-lists) and non-commercial
@@ -44,7 +43,7 @@ export interface MetadataQuery {
 
 /**
  * A raw observation, not a verdict. Confidence is derived from these by the
- * resolver — a provider never hands back a confidence number (§7.5).
+ * resolver — a provider never hands back a confidence number .
  */
 export interface MetadataSignal {
   signalType: SignalType;
@@ -63,13 +62,13 @@ export type MetadataLifecycleState = "ENDED" | "ONGOING" | "UNKNOWN" | "UNRELEAS
 
 export interface MetadataArtworkCandidate {
   kind: "POSTER" | "BACKDROP" | "STILL" | "BANNER" | "LOGO" | "THUMB";
-  /** Remote URL — the provider client fetches these bytes once; never stored as a URL (§1.1). */
+ /** Remote URL — the provider client fetches these bytes once; never stored as a URL . */
   url: string;
 }
 
 /**
  * One candidate identity match from a provider's search — not yet accepted.
- * The resolver runs its own title+year sanity check (§8.7.2) before treating
+ * The resolver runs its own title+year sanity check before treating
  * this as a real match; the provider does no matching-confidence math itself.
  */
 export interface MetadataMatch {
@@ -84,9 +83,9 @@ export interface MetadataMatch {
 }
 
 export interface MetadataSearchOptions {
-  /** Last-Modified value from a prior fetch (§8.3), sent back as If-Modified-Since — only Jikan currently honors this. */
+ /** Last-Modified value from a prior fetch , sent back as If-Modified-Since — only Jikan currently honors this. */
   lastModified?: string;
-  /** This mediaItem's existing providerId from a prior match — lets a provider revalidate directly instead of re-searching by title (§8.3; TVmaze's /updates/shows). */
+ /** This mediaItem's existing providerId from a prior match — lets a provider revalidate directly instead of re-searching by title (TVmaze's /updates/shows). */
   existingProviderId?: string;
 }
 
@@ -104,7 +103,7 @@ export interface MetadataProvider {
 }
 
 /**
- * Unidirectional: A→B does not imply B→A (§7.4). A mapping source returns
+ * Unidirectional: A→B does not imply B→A . A mapping source returns
  * only the direction it was asked for.
  */
 export interface IdMapping {
@@ -117,7 +116,7 @@ export interface IdMapping {
 }
 
 export interface MappingSource {
-  /** Which packages-optional dataset this is — stored on IdMapping.datasetSource (§8.5). */
+ /** Which packages-optional dataset this is — stored on IdMapping.datasetSource . */
   readonly datasetSource: string;
   mappingsFor(provider: string, id: string): Promise<IdMapping[]>;
 }

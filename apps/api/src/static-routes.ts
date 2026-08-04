@@ -30,7 +30,7 @@ const ARTWORK_MIME: Record<string, string> = {
 };
 
 // Text subtitle formats only — PGS/VOBSUB/DVBSUB are bitmap and never reach
-// the browser this way (§13.4: they force server-side burn-in instead).
+// the browser this way (they force server-side burn-in instead).
 const SUBTITLE_MUX: Record<string, string> = {
   ASS: "ass",
   SSA: "ass",
@@ -58,13 +58,13 @@ async function subtitleRelativeIndex(mediaFileId: string, absoluteStreamIndex: n
 
 /**
  * Static-byte serving for the four things a browser now needs from our own
- * origin (§1.1, §13.2, §13.3): the direct-play media file, fonts, artwork,
+ * origin : the direct-play media file, fonts, artwork,
  * and extracted subtitle text. `Cross-Origin-Resource-Policy: cross-origin`
  * on all of them is defense-in-depth for any topology where these aren't
  * proxied to the same origin as the app shell.
  */
 export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<void> {
-  // DIRECT_PLAY (§11.1) — raw bytes, range-enabled like any static video server.
+ // DIRECT_PLAY — raw bytes, range-enabled like any static video server.
   // @fastify/static's sendFile does the Range/If-Range/206/416 handling; we
   // only supply the explicit container MIME type (extension-based sniffing
   // would get this wrong for e.g. `.mkv`) and skip its cache headers, which
@@ -83,14 +83,14 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     });
   });
 
-  // Chrome fonts (§1.1, §15.2) — both shipped themes share one font stack, so
-  // this is just every vendored font, unconditionally, no per-theme lookup.
+  // Chrome fonts — one font stack, so this is just every vendored font,
+  // unconditionally, no per-theme lookup.
   app.get("/fonts", async () => {
     const fonts = await db.font.findMany({ where: { source: "VENDORED" } });
     return fonts.map((f) => ({ hash: f.hash, family: f.family, weight: f.weight, style: f.style, url: `/fonts/${f.hash}` }));
   });
 
-  // Font store (§1.1, §13.2) — hash-keyed, so the response is safe to cache
+ // Font store — hash-keyed, so the response is safe to cache
   // forever regardless of which of the four sources produced it.
   app.get<{ Params: { hash: string } }>("/fonts/:hash", async (req, reply) => {
     const font = await db.font.findUnique({ where: { hash: req.params.hash } });
@@ -102,7 +102,7 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     return reply.send(createReadStream(font.path));
   });
 
-  // Artwork store (§3.5, §7.6) — bytes fetched once server-side, never a URL.
+ // Artwork store — bytes fetched once server-side, never a URL.
   app.get<{ Params: { id: string } }>("/artwork/:id", async (req, reply) => {
     const artwork = await db.artwork.findUnique({ where: { id: req.params.id } });
     if (!artwork || !existsSync(artwork.bytesPath)) return reply.code(404).send({ error: "artwork not found" });
@@ -113,7 +113,7 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     return reply.send(createReadStream(artwork.bytesPath));
   });
 
-  // Which fonts a media file's ASS track(s) need (§13.2 MediaFileFont join) —
+ // Which fonts a media file's ASS track(s) need (MediaFileFont join) —
   // JASSUB's `availableFonts` map is built from this on the client.
   app.get(
     "/media-files/:id/fonts",
@@ -163,10 +163,10 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     },
   );
 
-  // Subtitle text for client-side rendering (§13.1) — external sidecars are
+ // Subtitle text for client-side rendering — external sidecars are
   // read straight off disk; embedded tracks are extracted on demand (no eager
   // extraction step exists for subtitle *text* itself, only for the fonts an
-  // ASS track references — §13.2 — so this has to happen at request time).
+ // ASS track references — — so this has to happen at request time).
   app.get<{ Params: { id: string; trackId: string } }>(
     "/media-files/:id/subtitle-tracks/:trackId",
     async (req, reply) => {

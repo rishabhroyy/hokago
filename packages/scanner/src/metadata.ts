@@ -22,7 +22,7 @@ import { storeBytes, upsertArtworkDescriptor } from "./artwork.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import type { MetadataNeeded } from "./ingest.js";
 
-/** Effective chain for this kind/profile: library override (or profile default), plus the always-tried anime carve-out for MOVIE (§8.7.6, non-negotiable #15). */
+/** Effective chain for this kind/profile: library override (or profile default), plus the always-tried anime carve-out for MOVIE (non-negotiable #15). */
 export function buildProviderChain(
   kind: "MOVIE" | "SERIES",
   contentProfile: "GENERAL" | "ANIME",
@@ -40,12 +40,12 @@ function ttlPolicyAndExpiry(lifecycleState: MetadataLifecycleState): { ttlPolicy
       return { ttlPolicy: "infinite", expiresAt: null };
     case "ONGOING":
       return { ttlPolicy: "6h", expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000) };
-    default: // UNKNOWN, UNRELEASED — retry-with-backoff surrogate (§8.3)
+    default: // UNKNOWN, UNRELEASED — retry-with-backoff surrogate
       return { ttlPolicy: "24h", expiresAt: new Date(Date.now() + SELF_HEALING_RETRY_BACKOFF_MS) };
   }
 }
 
-/** Only ever declares the PROVIDER_MATCH domain, so this never prunes a local signal ingest.ts wrote (§7.5, see ownedTypes doc on syncEvidenceAndConfidence). */
+/** Only ever declares the PROVIDER_MATCH domain, so this never prunes a local signal ingest.ts wrote (see ownedTypes doc on syncEvidenceAndConfidence). */
 async function addProviderMatchEvidence(
   db: PrismaClient,
   mediaItemId: string,
@@ -62,7 +62,7 @@ async function addProviderMatchEvidence(
   await syncEvidenceAndConfidence(db, mediaItemId, evidence, ["PROVIDER_MATCH"]);
 }
 
-/** Title sync (§20.2): each metadata run replaces all titles of a type it just fetched, per (mediaItemId, type). */
+/** Title sync : each metadata run replaces all titles of a type it just fetched, per (mediaItemId, type). */
 async function syncProviderTitles(db: PrismaClient, mediaItemId: string, match: MetadataMatch): Promise<void> {
   const titles = [{ type: "PRIMARY" as const, value: match.title }, ...(match.titles ?? [])];
   const byType = new Map<string, string[]>();
@@ -76,7 +76,7 @@ async function syncProviderTitles(db: PrismaClient, mediaItemId: string, match: 
   }
 }
 
-/** Local data always outranks network providers (§8.3) — only fill descriptive fields still at their unset default. */
+/** Local data always outranks network providers — only fill descriptive fields still at their unset default. */
 async function fillDescriptiveFields(db: PrismaClient, mediaItemId: string, match: MetadataMatch): Promise<void> {
   if (match.overview) {
     await db.mediaItem.updateMany({ where: { id: mediaItemId, overview: null }, data: { overview: match.overview } });
@@ -95,7 +95,7 @@ async function fillDescriptiveFields(db: PrismaClient, mediaItemId: string, matc
   }
 }
 
-/** Fetched once, stored as bytes (non-negotiable #4), merged into the existing self-healing artwork slot (§8.7.4). */
+/** Fetched once, stored as bytes (non-negotiable #4), merged into the existing self-healing artwork slot . */
 async function fetchAndStoreProviderArtwork(
   db: PrismaClient,
   mediaItemId: string,
@@ -154,7 +154,7 @@ async function upsertMetadataCache(
 }
 
 /**
- * §3.4 self-healing for the "matched but low-confidence" case (the "never
+ * self-healing for the "matched but low-confidence" case (the "never
  * matched at all" case already retries every scan via the `!existing` branch
  * below `resolveMetadataStep` — this closes the other half). Bypassing the
  * cache-freshness shortcut is only worth it when something suggests the match
@@ -163,7 +163,7 @@ async function upsertMetadataCache(
  *
  * - New local Evidence recorded since we last actually checked this provider
  *   → always worth a look (the "NFO appears, file renamed" case named in
- *   §3.4) — this only fires when something on disk genuinely changed, not on
+ *) — this only fires when something on disk genuinely changed, not on
  *   every routine scan.
  * - Confidence still below SELF_HEALING_CONFIDENCE_THRESHOLD with no new
  *   evidence → still worth a periodic look (the provider's own data could
@@ -206,7 +206,7 @@ async function refreshMetadataCacheExpiry(
 }
 
 /**
- * Wikidata is an ID bridge only (§8.2: "✅ (ID bridge)", not descriptive/artwork)
+ * Wikidata is an ID bridge only ("✅ (ID bridge)", not descriptive/artwork)
  * — it turns this provider's own item ID into an IMDb ID. `IdMapping` is the
  * dataset-level cache (reusable across any item sharing this provider+ID, so a
  * second item never re-queries Wikidata for the same show); `ExternalId` is
@@ -272,16 +272,16 @@ async function applyMatch(
 }
 
 /**
- * One provider's turn in the chain (§8.2) — not the whole chain. Each
+ * One provider's turn in the chain — not the whole chain. Each
  * provider gets its own BullMQ queue with its own `limiter` (own rate
  * budget), so a job here only ever calls this one provider's API; the
  * caller (apps/worker) decides whether to enqueue the next provider in the
  * chain when this returns `false`. A media item with a fresh (unexpired)
  * MetadataCache entry costs zero network calls either way — the "fetch
- * once" promise (§8.3).
+ * once" promise .
  *
  * Returns true once a match is accepted and fully written (or the existing
- * cache is still fresh and not due for §3.4 self-healing) — the chain stops
+ * cache is still fresh and not due for self-healing) — the chain stops
  * there. Returns false when this provider found nothing acceptable and the
  * caller should try the next one.
  */
@@ -305,7 +305,7 @@ export async function resolveMetadataStep(
     if (cached) {
       const isFresh = cached.expiresAt === null || cached.expiresAt > new Date();
       if (isFresh && !(await dueForSelfHealing(db, target.mediaItemId, existing.lastResolvedAt))) {
-        return true; // cache hit, zero network (§8.3)
+        return true; // cache hit, zero network
       }
 
       const result = await provider.search(query, {

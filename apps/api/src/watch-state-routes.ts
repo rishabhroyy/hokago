@@ -53,7 +53,7 @@ function toRef<
 // the industry-standard "credits are rolling" heuristic, not literal 100%.
 const WATCHED_THRESHOLD = 0.9;
 
-/** §7.7/§11.4 — PlaybackState updates live during playback, continue-watching, next-episode rollover. */
+/** / — PlaybackState updates live during playback, continue-watching, next-episode rollover. */
 export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise<void> {
   app.post(
     "/playback/:sessionId/heartbeat",

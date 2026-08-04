@@ -1,6 +1,6 @@
 # packages-optional
 
-Deliberately empty in the core repo. Design doc: docs/design.md §8.5, §19 Step 0.
+Deliberately empty in the core repo. Design doc: docs/design.md Step 0.
 
 AGPL-encumbered datasets (anime-offline-database, Fribb/anime-lists) and
 non-commercial-restricted datasets (IMDb) are never vendored, bundled, or

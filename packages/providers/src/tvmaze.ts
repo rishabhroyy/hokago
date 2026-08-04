@@ -51,7 +51,7 @@ function toMatch(show: TvMazeShow): MetadataMatch {
   };
 }
 
-/** SERIES-only identity/descriptive/artwork provider (§8.2, CC BY-SA 4.0, ≥20/10s rate limit at the queue layer). */
+/** SERIES-only identity/descriptive/artwork provider (CC BY-SA 4.0, ≥20/10s rate limit at the queue layer). */
 export class TvMazeProvider implements MetadataProvider {
   readonly provider = "TVMAZE" as const;
 
@@ -73,7 +73,7 @@ export class TvMazeProvider implements MetadataProvider {
 
   /**
    * Revalidates an already-matched show via the incremental /updates/shows
-   * endpoint (§8.3) instead of re-running a fuzzy title search: one bulk poll
+ * endpoint instead of re-running a fuzzy title search: one bulk poll
    * tells us which shows changed in the last day, so an unchanged show costs
    * zero per-show requests, and a changed one costs one direct /shows/{id}
    * fetch — never the fuzzy /search/shows call every rescan used to make.

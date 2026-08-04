@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { trackPid, untrackPid } from "./child-registry.js";
 
-/** Like promisify(execFile), but registers the child's PID so a worker's SIGTERM handler can reap it (§9.6.4). */
+/** Like promisify(execFile), but registers the child's PID so a worker's SIGTERM handler can reap it . */
 export function execFileAsync(
   file: string,
   args: string[],
@@ -42,7 +42,7 @@ export interface HdrContentLightLevel {
   maxAverage: number | null;
 }
 
-/** Gate for the §11.3 tone-map chain: present only for PQ/HLG streams, null (and skipped) for SDR. */
+/** Gate for the tone-map chain: present only for PQ/HLG streams, null (and skipped) for SDR. */
 export interface HdrMeta {
   colorPrimaries: string | null;
   transfer: string | null;
@@ -133,7 +133,7 @@ interface FfprobeFramesOutput {
 
 // PQ (HDR10/HDR10+/Dolby Vision base layer) and HLG transfer characteristics.
 // Anything else (bt709, smpte170m, ...) is SDR and must skip the tone-map
-// chain entirely (§11.3) — this set is the gate.
+// chain entirely — this set is the gate.
 const HDR_TRANSFER_CHARACTERISTICS = new Set(["smpte2084", "arib-std-b67"]);
 
 function parseFraction(s: string | undefined): number | null {
@@ -169,8 +169,8 @@ function mapStreamType(codecType: string | undefined): StreamKind | null {
 /**
  * Mastering display metadata and content light level only surface via a
  * frame-level decode, not -show_streams — a narrow second ffprobe call reads
- * just the first frame of each video stream (§11.3, §21 HDR appendix).
- * Degrades to an empty map on failure, never throws (§3 "degrade, never error").
+ * just the first frame of each video stream (HDR appendix).
+ * Degrades to an empty map on failure, never throws ("degrade, never error").
  */
 async function probeHdrSideData(filePath: string, hasVideo: boolean): Promise<Map<number, FfprobeSideData[]>> {
   const result = new Map<number, FfprobeSideData[]>();
@@ -230,12 +230,12 @@ function buildHdrMeta(stream: FfprobeStream, sideData: FfprobeSideData[]): HdrMe
   };
 }
 
-/** Pure gate for the §11.3 tone-map chain — SDR (hdrMeta null) skips it entirely. */
+/** Pure gate for the tone-map chain — SDR (hdrMeta null) skips it entirely. */
 export function needsToneMap(hdrMeta: HdrMeta | null): boolean {
   return hdrMeta !== null;
 }
 
-/** Returns null on probe failure — caller sets MediaFile.probeFailed, never throws the pipeline off course (§3 "degrade, never error"). */
+/** Returns null on probe failure — caller sets MediaFile.probeFailed, never throws the pipeline off course ("degrade, never error"). */
 export async function probeFile(filePath: string): Promise<ProbeResult | null> {
   try {
     const { stdout } = await execFileAsync(

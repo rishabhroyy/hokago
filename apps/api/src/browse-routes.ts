@@ -36,7 +36,7 @@ function toCard<T extends { artwork: ArtworkRef[]; files: { id: string }[] }>(
   };
 }
 
-/** §7.3/§7.6 — library browsing and item detail. No route existed before this. */
+/** / — library browsing and item detail. No route existed before this. */
 export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<void> {
   app.get(
     "/libraries",

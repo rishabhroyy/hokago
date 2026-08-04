@@ -1,7 +1,6 @@
 import type { Config } from "tailwindcss";
 
-// hokago design tokens — verbatim from docs/ui-handoff/design-system.md,
-// the approved prototype (reference-prototype.html) is the source of truth.
+// hokago design tokens — the warm KyoAni / glossy Wii world, single hardcoded design.
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {

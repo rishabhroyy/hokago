@@ -1,4 +1,4 @@
-/** §7.1 — multiple profiles per account. */
+/** multiple profiles per account. */
 
 import { z } from "zod";
 

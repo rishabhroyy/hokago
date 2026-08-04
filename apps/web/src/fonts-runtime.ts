@@ -10,9 +10,9 @@ export interface FontDescriptor {
 
 /**
  * Fonts are served from our own origin, byte-for-byte, via the same
- * hash-addressed store subtitle fonts use (§1.1, §13.3) — never a
+ * hash-addressed store subtitle fonts use — never a
  * third-party @import or <link>. Missing/failed fonts just fall through to
- * the CSS font stack's next member; nothing here can break the page (§3.2).
+ * the CSS font stack's next member; nothing here can break the page .
  */
 export function applyFonts(fonts: FontDescriptor[]): void {
   const style = document.getElementById(FONTS_STYLE_TAG_ID) as HTMLStyleElement | null;

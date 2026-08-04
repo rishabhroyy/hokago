@@ -1,4 +1,4 @@
-/** §11.1/§11.2/§11.4 — playback start/seek/audio-track + heartbeat/continue-watching. */
+/** playback start/seek/audio-track + heartbeat/continue-watching. */
 
 import { z } from "zod";
 

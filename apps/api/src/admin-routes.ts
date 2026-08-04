@@ -34,7 +34,7 @@ function queueOrNotFound(name: string): Queue | null {
   return name in queues ? queues[name as QueueName] : null;
 }
 
-/** Admin queue UI (§9.6.8): view/pause/resume/retry-failed/clean per queue, backed directly by BullMQ.
+/** Admin queue UI : view/pause/resume/retry-failed/clean per queue, backed directly by BullMQ.
  *  The HTML shell is public (it's just markup — the browser can't attach a Bearer
  *  header to a navigation), but every data/action endpoint requires an admin JWT. */
 export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void> {

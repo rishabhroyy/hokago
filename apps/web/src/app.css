@@ -8,7 +8,7 @@
 
 /* Semantic design tokens (light = default). Redefined in `.dark` below —
    every Tailwind utility that references these emits `var(--…)` and flips
-   with the theme. Values are verbatim from hokago-current-ui.html. */
+   with the theme. Values are verbatim from the approved hokago UI. */
 :root {
   --e-snap: cubic-bezier(.4, 1.4, .5, 1); /* press / hover / pop */
   --e: cubic-bezier(.4, 0, .2, 1); /* fades / view transitions */
@@ -72,7 +72,7 @@ body {
   color: #35302B;
   font-family: "Plus Jakarta Sans", sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* wii-dream wallpaper (matches hokago-current-ui.html): warm paper, blue dot
+  /* wii-dream wallpaper: warm paper, blue dot
      grid, soft top light, and three huge out-of-focus pastel auras — vivid
      blue top-right, coral left, gold low-center */
   background-color: #F5EFE4;
@@ -131,7 +131,7 @@ body {
   background: linear-gradient(90deg, #26221D 25%, #2E2A24 50%, #26221D 75%);
 }
 
-/* glossy top-sheen on pill buttons (.btn), ported from reference-prototype.html */
+/* glossy top-sheen on pill buttons (.btn), from the approved hokago UI */
 .btn::after {
   content: "";
   position: absolute;

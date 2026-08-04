@@ -52,7 +52,7 @@ app.listen({ port, host: "0.0.0.0" }).catch((err) => {
 });
 
 // Reaps any live transcode children on shutdown — apps/api owns them directly
-// (separate PID namespace from apps/worker), so nothing else can reap them (§9.6.4).
+// (separate PID namespace from apps/worker), so nothing else can reap them .
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;

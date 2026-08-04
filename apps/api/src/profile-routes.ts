@@ -11,7 +11,7 @@ import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
 
-/** §7.1 — multiple profiles per account, maturity rating stored per profile. */
+/** multiple profiles per account, maturity rating stored per profile. */
 export async function registerProfileRoutes(app: ZodFastifyInstance): Promise<void> {
   app.get(
     "/profiles",

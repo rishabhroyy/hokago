@@ -17,7 +17,7 @@ import {
 } from "@vidstack/react/player/layouts/default";
 import JASSUB from "jassub";
 // Vite bundles these from the installed dependency and serves them from our
-// own origin — never a CDN — same reasoning as the hls.js fix below (§1.1/§13.3).
+// own origin — never a CDN — same reasoning as the hls.js fix below (/).
 import jassubWorkerUrl from "jassub/dist/worker/worker.js?worker&url";
 import jassubWasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url";
 import jassubModernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url";
@@ -35,7 +35,7 @@ import { Icon } from "./ui/icons";
 // An empty WebVTT that vidstack loads (so the track is a real, selectable entry
 // in the stock captions menu) but which draws nothing — JASSUB does the actual
 // ASS rendering. Registering our subtitles this way lets the default player UI
-// own switching/off while keeping libass (§13.1) as the renderer.
+// own switching/off while keeping libass as the renderer.
 const EMPTY_VTT = "data:text/vtt," + encodeURIComponent("WEBVTT\n\n");
 
 export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
@@ -74,14 +74,14 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
 
   // Vidstack's HLS provider defaults `library` to a cdn.jsdelivr.net URL — a
   // third-party hotlink that breaks local-first and is exactly what COEP:
-  // require-corp is watching for (§13.3). hls.js is already an installed
+ // require-corp is watching for . hls.js is already an installed
   // dependency, so point it at the same bundled copy instead of a CDN.
   const handleProviderChange = useCallback((provider: MediaProviderAdapter | null) => {
     if (isHLSProvider(provider)) provider.library = () => import("hls.js");
     setVideoEl(isVideoProvider(provider) ? provider.video : null);
   }, []);
 
-  // Track list (§13's audio/subtitle switcher, Step 8) — text formats only;
+ // Track list ('s audio/subtitle switcher, Step 8) — text formats only;
   // PGS/VOBSUB never show up here since /tracks still lists them but the
   // subtitle-text route 422s for bitmap formats (server forces burn-in instead).
   useEffect(() => {
@@ -108,7 +108,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     };
   }, [mediaFileId]);
 
-  // JASSUB renders ASS client-side (§13.1) — attached directly to the
+ // JASSUB renders ASS client-side — attached directly to the
   // underlying <video>, independent of DIRECT_PLAY/DIRECT_STREAM/TRANSCODE,
   // since libass just needs the video element's clock, not its source.
   useEffect(() => {
@@ -151,7 +151,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
 
   // DIRECT_PLAY exposes the container's other audio streams natively, so the
   // stock audio menu switches them client-side. TRANSCODE/DIRECT_STREAM bake one
-  // audio track into the segments (§11.4), so switching means asking the server
+ // audio track into the segments , so switching means asking the server
   // to restart ffmpeg on that track, then forcing hls.js to refetch the (now
   // different-content) playlist and reseek — a cache-busting nonce is what forces
   // the refetch. This is the on-demand media-server model, not HLS audio groups.

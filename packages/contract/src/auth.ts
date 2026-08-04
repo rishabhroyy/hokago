@@ -1,4 +1,4 @@
-/** §7.1 — username/password auth, JWT access + opaque refresh token. */
+/** username/password auth, JWT access + opaque refresh token. */
 
 import { z } from "zod";
 

@@ -70,7 +70,7 @@ function titleVariants(title: AniListTitle): MetadataTitle[] {
   return variants;
 }
 
-/** Anime SERIES+MOVIE identity/descriptive/artwork provider (§8.2, free GraphQL, no key, rate-limited at the queue layer). */
+/** Anime SERIES+MOVIE identity/descriptive/artwork provider (free GraphQL, no key, rate-limited at the queue layer). */
 export class AniListProvider implements MetadataProvider {
   readonly provider = "ANILIST" as const;
 

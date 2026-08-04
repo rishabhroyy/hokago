@@ -22,7 +22,7 @@ function stableStringify(value: unknown): string {
 }
 
 /**
- * Confidence is derived from Evidence, never authored (§7.5, non-negotiable #8).
+ * Confidence is derived from Evidence, never authored (non-negotiable #8).
  * Noisy-OR combination: 1 - Π(1 - weight_i). A single strong signal (e.g.
  * NFO_UNIQUEID at 0.99) alone yields ~that weight instead of being diluted by
  * an averaging denominator; corroborating signals nudge it up instead of
@@ -46,7 +46,7 @@ export function computeConfidence(rows: { weight: number }[], contradicted = fal
 }
 
 /**
- * Sync rather than blind delete+recreate (§9.6.1 idempotency, §9.6.2
+ * Sync rather than blind delete+recreate (idempotency,
  * self-healing, crash-only): unchanged signals keep their original
  * observedAt instead of resetting on every rescan, changed/new signals get a
  * fresh one, and vanished sources are removed. All in one transaction so a
@@ -59,7 +59,7 @@ export function computeConfidence(rows: { weight: number }[], contradicted = fal
  * within the type(s) it declares, never a row owned by the other subsystem.
  *
  * Shared by leaf items (MOVIE/EPISODE) and containers (SERIES/SEASON) —
- * container-level confidence was the Step 2 gap this closes (§19 Step 4).
+ * container-level confidence was the Step 2 gap this closes (Step 4).
  */
 export async function syncEvidenceAndConfidence(
   db: PrismaClient,
@@ -117,7 +117,7 @@ export async function syncEvidenceAndConfidence(
   // Confidence is derived from the full post-sync Evidence snapshot, not the
   // caller's partial view — otherwise a caller passing only its own subset
   // (e.g. local scan evidence) would silently drop preserved PROVIDER_MATCH
-  // weight from the computed confidence (§7.5, non-negotiable #8).
+ // weight from the computed confidence (non-negotiable #8).
   const confidence = computeConfidence(
     finalRows.map((r) => ({ weight: r.weight })),
     contradicted,

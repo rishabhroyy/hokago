@@ -292,7 +292,7 @@ export function DetailView({ itemId }: { itemId: string }) {
         </div>
       </div>
 
-      {/* movie-series children (§7.3) — TV children are SEASONs, already
+ {/* movie-series children — TV children are SEASONs, already
           represented by the season grids above, so don't double them up */}
       {item.children.some((c) => c.kind === "MOVIE") && (
         <Row

@@ -24,14 +24,14 @@ export interface IngestSummary {
 }
 
 /**
- * Directory-hierarchy heuristic (§9.2 "group first, match second"):
+ * Directory-hierarchy heuristic ("group first, match second"):
  *
  * For each directory of video files, parse every filename through the
- * registry (§9.3, forked by the library's content profile). If a majority
+ * registry (forked by the library's content profile). If a majority
  * carry a season/episode marker, the directory is a season worth of a
  * series (explicit "Season 01"-style dirname, or implicit Season 1 if not).
  * Runtime-cluster outliers within that group become standalone movies —
- * the Mugen Train shape (§7.3, §9.2c). Otherwise every file in the
+ * the Mugen Train shape (c). Otherwise every file in the
  * directory is independently a movie (covers both one-movie-per-folder and
  * flat scene-style dumps of unrelated files in one folder).
  */
@@ -69,7 +69,7 @@ async function findOrCreateChild(
 }
 
 /**
- * Collections (§7.3): find-then-create, mirroring findOrCreateChild — no
+ * Collections : find-then-create, mirroring findOrCreateChild — no
  * unique DB constraint on name, so this is a lookup, not a true upsert.
  */
 async function findOrCreateCollection(
@@ -97,7 +97,7 @@ export interface ArtworkNeeded {
   durationMs: number | null;
 }
 
-/** A MOVIE or SERIES item whose network-provider metadata (§8, §19 Step 6) hasn't been resolved yet. */
+/** A MOVIE or SERIES item whose network-provider metadata (Step 6) hasn't been resolved yet. */
 export interface MetadataNeeded {
   mediaItemId: string;
   libraryId: string;
@@ -130,7 +130,7 @@ async function ingestLeafItem(
 
   // Path first (common case, cheap unique lookup). If the path moved, fall
   // back to inode within this library — a rename/move must reuse the same
-  // MediaItem/MediaFile, not re-import (§9.5).
+ // MediaItem/MediaFile, not re-import .
   let existingFile = await db.mediaFile.findUnique({ where: { path: file.path } });
   if (!existingFile) {
     existingFile = await db.mediaFile.findFirst({
@@ -188,16 +188,16 @@ async function ingestLeafItem(
     await db.mediaItem.update({ where: { id: mediaItemId }, data: { runtimeMs: probe.durationMs } });
   }
 
-  // Local NFO always outranks network providers (§8.3 resolution chain) — only
+ // Local NFO always outranks network providers (resolution chain) — only
   // fill overview when still unset, so a later provider fetch never clobbers it.
   if (nfo?.plot) {
     await db.mediaItem.updateMany({ where: { id: mediaItemId, overview: null }, data: { overview: nfo.plot } });
   }
 
-  // Probe + fonts + subtitles (§19 Step 5): streams carry HDR gate data
-  // (§11.3), subtitle tracks carry the burn-in flag (§13.4), fonts land in
+ // Probe + fonts + subtitles (Step 5): streams carry HDR gate data
+ // , subtitle tracks carry the burn-in flag , fonts land in
   // the shared hash-deduped store regardless of which of the three sources
-  // they came from (§1.1, §13.2).
+ // they came from .
   await syncMediaStreams(db, mediaFileId, probe?.streams ?? []);
   await syncSubtitleTracks(db, mediaFileId, probe?.streams ?? []);
   await extractFonts(db, mediaFileId, file.path, dir);
@@ -216,7 +216,7 @@ async function ingestLeafItem(
     evidence.push({ signalType: "NFO_UNIQUEID", source: "nfo", value: { ...nfo } });
   }
 
-  // Contradiction (§7.5): runtime clustering resolved this file as MOVIE, but
+ // Contradiction : runtime clustering resolved this file as MOVIE, but
   // its own filename evidence unambiguously parses as a numbered episode —
   // the two signals disagree about what this item even is. Noisy-OR alone
   // can't express that; it only ever combines weights upward.
@@ -233,7 +233,7 @@ async function ingestLeafItem(
       .catch(() => {});
   }
 
-  // Job infra (§9.6): artwork resolution shells out to ffmpeg and is the
+ // Job infra : artwork resolution shells out to ffmpeg and is the
   // crash/CPU-heavy risk, so it's split into its own queue with its own
   // concurrency limit and poison-pill handling. Direct/offline invocation
   // (scripts/scan.ts, no deferArtwork) keeps resolving it inline, unchanged.
@@ -270,15 +270,15 @@ export async function storeArtwork(
 }
 
 export interface IngestOptions {
-  /** Skip directories at/before this sorted path — resume after a checkpointed interruption (§9.6.3). */
+ /** Skip directories at/before this sorted path — resume after a checkpointed interruption . */
   resumeFromCursor?: string | null;
   /** Called after a directory's MediaItem/Evidence work is fully committed — persist as the new scanCursor. */
   onDirectoryComplete?: (dir: string) => Promise<void>;
   /** When set, artwork is not resolved inline — each file needing it is handed to this callback instead (queued). */
   onArtworkNeeded?: (job: ArtworkNeeded) => Promise<void>;
-  /** Called for every MOVIE/SERIES item so network-provider metadata (§8, §19 Step 6) can be queued. */
+ /** Called for every MOVIE/SERIES item so network-provider metadata (Step 6) can be queued. */
   onMetadataNeeded?: (job: MetadataNeeded) => Promise<void>;
-  /** Forks the parser registry (§9.3). Defaults to the library's own profile when omitted. */
+ /** Forks the parser registry . Defaults to the library's own profile when omitted. */
   contentProfile?: ContentProfile;
 }
 
@@ -294,7 +294,7 @@ export async function ingestLibrary(
   const deferArtwork = opts.onArtworkNeeded !== undefined;
 
   // Global, deterministic order independent of filesystem readdir order —
-  // required for scanCursor resume to mean anything (§9.6.3).
+ // required for scanCursor resume to mean anything .
   const sortedDirs = Array.from(byDir.keys()).sort();
 
   const summary: IngestSummary = {
@@ -370,7 +370,7 @@ export async function ingestLibrary(
       if (result) {
         summary.artworkStored += result.artworkStored;
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
-        // Outliers are movies (§7.3 the Mugen Train shape) — §8.7.6 tries the
+ // Outliers are movies (the Mugen Train shape) — tries the
         // anime provider chain for these regardless of the library's profile.
         if (outliers.includes(file.path)) {
           await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
@@ -380,7 +380,7 @@ export async function ingestLibrary(
       if (parsedTitle && parsedTitle.toLowerCase() === seriesTitle.toLowerCase()) agreeingTitles += 1;
     }
 
-    // Container-level confidence (§7.5, the Step 2 gap this closes): SERIES
+ // Container-level confidence (the Step 2 gap this closes): SERIES
     // identity is stable across all its season directories, so it only ever
     // carries FOLDER_NAME — a per-season SIBLING_CONSISTENCY signal on the
     // series would get wiped by the next season directory's sync pass (each
@@ -407,7 +407,7 @@ export async function ingestLibrary(
       LOCAL_SIGNAL_TYPES,
     );
 
-    // Collections (§7.3): the Mugen Train shape. clusterByRuntime's outliers
+ // Collections : the Mugen Train shape. clusterByRuntime's outliers
     // are movies that live inside a series folder — link them and the series
     // into one franchise collection instead of leaving them unconnected.
     if (outlierMediaItemIds.length > 0) {

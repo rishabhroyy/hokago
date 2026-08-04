@@ -1,10 +1,10 @@
 import type { IdMapping, MappingSource } from "@hokago/metadata";
 
 const BASE_URL = process.env.HOKAGO_WIKIDATA_BASE_URL ?? "https://query.wikidata.org/sparql";
-// WDQS's usage policy asks for a descriptive User-Agent identifying the client (§21, "polite").
+// WDQS's usage policy asks for a descriptive User-Agent identifying the client ("polite").
 const USER_AGENT = "hokago-metadata-bridge/1.0 (self-hosted media server; runs on the operator's own instance)";
 
-/** Wikidata property (P-number) holding each provider's own item ID — verified live against query.wikidata.org (§21). */
+/** Wikidata property (P-number) holding each provider's own item ID — verified live against query.wikidata.org . */
 const SOURCE_PROPERTY: Record<string, string> = {
   TVMAZE: "P8600", // "TV Maze series ID"
   ANILIST: "P8729", // "AniList anime ID"
@@ -18,7 +18,7 @@ interface SparqlResponse {
 }
 
 /**
- * CC0 ID-bridge only (§8.2: Wikidata is "✅ (ID bridge)", not a descriptive or
+ * CC0 ID-bridge only (Wikidata is "✅ (ID bridge)", not a descriptive or
  * artwork source) — resolves a provider's own item ID to its IMDb ID (P345)
  * via a live SPARQL query. Never a dependency: callers must treat any failure
  * as "no bridge available," not an error.

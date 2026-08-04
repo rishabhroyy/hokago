@@ -1,6 +1,6 @@
 # AGENTS.md — hokago
 
-Self-hosted media server (movies/TV/anime). **Read `docs/design.md` before writing anything** — it's the constitution. `CLAUDE.md` (auto-loaded) holds the 15 load-bearing invariants and principles; `docs/design.md` is the reference for every §. If they conflict, the doc wins and `CLAUDE.md` is wrong — tell the user.
+Self-hosted media server (movies/TV/anime). `CLAUDE.md` (auto-loaded) holds the invariants and principles — it's the constitution now. There is no `docs/design.md` anymore; if a doc and the code disagree, **the code is right and the doc is wrong** — fix the doc.
 
 ## Commands
 
@@ -33,14 +33,21 @@ pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via 
 
 - `apps/api` — Fastify + WS, auth, playback decision engine. `build` copies `src/admin.html` into dist (keep that `cp` if you touch the build script).
 - `apps/worker` — BullMQ consumer; **owns all ffmpeg**. Jobs: scan, parse, resolve, probe, fonts, art, segments, transcode.
-- `apps/web` — React 19 + Vite + Tailwind v4 + vidstack + JASSUB. Single hardcoded design, no theming; tokens in `apps/web/tailwind.config.ts` are verbatim from `docs/ui-handoff/` (the prototype `reference-prototype.html` is the source of truth).
-- `packages/metadata` — **interfaces only** (license firewall §8.5). No provider data/code in the core repo, ever. AGPL/non-commercial adapters live in `packages-optional/` (never vendored, runtime-fetched).
+- `apps/web` — React 19 + Vite + Tailwind v4 + vidstack + JASSUB. Single hardcoded design in `apps/web/tailwind.config.ts` + `src/app.css`, with a dark-mode toggle (see `src/ui/useTheme.tsx`). No theme system, no tokens contract.
+- `packages/metadata` — **interfaces only** (license firewall). No provider data/code in the core repo, ever. AGPL/non-commercial adapters live in `packages-optional/` (never vendored, runtime-fetched).
 - `packages/scanner` — evidence-based pipeline. **Known limitation (by design, defer to step 4):** `parse-filename.ts` is a single generic regex placeholder, not the parser registry; container-level confidence isn't computed yet, only leaves.
+
+## Build order (was §19 of docs/design.md; that file is gone)
+
+Work top to bottom; don't skip ahead. Ordering principle: build the thing that always works first, then layer the thing that needs the internet on top.
+
+- **Done:** Step 0 license firewall (`packages/metadata` interfaces only) · Step 1 foundations (schema, contract, ffmpeg image, font subsets, compose) · Step 2 local-first scan pipeline (scan → group → NFO → embedded tags/art → generated art, run via `pnpm --filter @hokago/scanner scan <path>`, not yet job-queued) · Step 3 job infrastructure (reconciler, idempotency, checkpointing, graceful shutdown, admin queue UI) · Step 6 keyless network providers (TVmaze, AniList/Jikan, MAL — BullMQ queues + per-provider limiters in `apps/worker`) · Step 7 playback decision engine + HLS · Step 8 player (vidstack + JASSUB + fonts + track switching + COOP/COEP) · Step 9 auth, profiles, watch state, continue-watching + WS layer · dark mode (replaces the cut theming step).
+- **Next (step 4):** parser registry + evidence engine + resolution + collections (movies-inside-series, `episode_offset`).
+- Then: probe + fonts + subtitles + artwork store (eager font extraction, `.mks`, `fonts/`, PGS flagging) → segments (intro/outro skip) + trickplay → watch parties → optional user-key tier → hwaccel overlay, wizard, PUID/PGID, base path → native clients + offline downloads. Chromecast: **never**; AirPlay rides along with the native clients.
 
 ## Gotchas
 
-- Work the build order in `docs/design.md` §19; don't skip ahead. Step 2 (offline scan pipeline) is done; step 3+ is job infrastructure.
 - `hokago` is always lowercase — code, UI, packages, commits.
 - Conventional commits (`feat:`/`fix:`/...), small one-concern commits (see `git log`).
-- Model changes require a schema change **and** a `docs/design.md` update in the same commit. Don't redesign `packages/db/prisma/schema.prisma` silently.
+- Model changes: update `packages/db/prisma/schema.prisma` and call it out in the commit. Don't redesign the schema silently.
 - No third-party fonts/artwork links ever emitted to the browser — everything must be served from our own origin (JASSUB's COOP/COEP depends on it).

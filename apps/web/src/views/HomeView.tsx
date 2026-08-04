@@ -113,7 +113,7 @@ export function HomeView() {
       {heroId && (
         <section className="mx-12 mt-2 rounded-[34px] bg-card p-[7px] shadow-panel max-[820px]:mx-4">
           <div className={`relative h-[400px] overflow-hidden rounded-[27px] ${HUE_CLASS[hueFor(heroId)]} max-[820px]:h-[340px]`}>
-            {/* real backdrop when we have one; soft, masked, never hotlinked (§1.1) */}
+ {/* real backdrop when we have one; soft, masked, never hotlinked */}
             {heroBackdrop && (
               <img
                 src={heroBackdrop}

@@ -23,7 +23,7 @@ function fontStoreDir(): string {
   return path.join(process.env.HOKAGO_CONFIG_DIR ?? "./data/config", "fonts");
 }
 
-/** Hash-dedup a font's bytes into the shared Font store and link it to this file (§1.1, §13.2). */
+/** Hash-dedup a font's bytes into the shared Font store and link it to this file . */
 async function storeFontFile(db: PrismaClient, mediaFileId: string, bytes: Buffer, filename: string): Promise<void> {
   const ext = path.extname(filename).toLowerCase();
   const format = FONT_EXT_FORMAT[ext];
@@ -99,7 +99,7 @@ async function extractFromFontsDir(db: PrismaClient, mediaFileId: string, fontsD
 }
 
 /**
- * Eager font extraction at scan time (§13.2) — Jellyfin's lazy, play-time
+ * Eager font extraction at scan time — Jellyfin's lazy, play-time
  * extraction shipped repeated silent-fallback bugs. All three sources
  * converge on the same hash-deduped Font store via storeFontFile, so a font
  * shared across files (or across the MKV/.mks/fonts-dir sources for one

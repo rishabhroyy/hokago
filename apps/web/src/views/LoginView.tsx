@@ -6,7 +6,7 @@ import { ThemeToggle } from "../ui/useTheme";
 import { useWiiSound } from "../ui/useWiiSound";
 
 /**
- * §7.1 auth: username + password, invites are codes shared manually.
+ * auth: username + password, invites are codes shared manually.
  * No email anywhere, no password reset flow — that's an admin action.
  */
 export function LoginView() {

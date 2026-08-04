@@ -1,4 +1,4 @@
-/** §13 — subtitle/audio track listing and font linking for a media file. Binary byte-range/font/artwork routes are never JSON and stay outside this contract. */
+/** subtitle/audio track listing and font linking for a media file. Binary byte-range/font/artwork routes are never JSON and stay outside this contract. */
 
 import { z } from "zod";
 

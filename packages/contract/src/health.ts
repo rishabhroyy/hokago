@@ -1,6 +1,6 @@
 /**
- * hokago — throwaway health-check contract (§19 Step 1).
- * Proves the Zod → OpenAPI → generated TS client pipeline end to end (§5).
+ * hokago — throwaway health-check contract (Step 1).
+ * Proves the Zod → OpenAPI → generated TS client pipeline end to end .
  * Real route contracts land per-subsystem as those steps come up.
  */
 

@@ -26,7 +26,7 @@ export async function fetchLibraryItems(id: string): Promise<MediaCard[]> {
 }
 
 // Detail prefetch cache: tiles warm it on pointer-enter so the channel-zoom
-// lands on an already-rendered page instead of a skeleton (§9 "never block").
+// lands on an already-rendered page instead of a skeleton ("never block").
 const detailCache = new Map<string, Promise<MediaItemDetail | null>>();
 
 export function prefetchMediaItemDetail(id: string): void {

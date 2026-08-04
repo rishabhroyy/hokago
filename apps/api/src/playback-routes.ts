@@ -51,14 +51,14 @@ interface LiveSession {
 
 // Each audio selection gets its own segment subdirectory — switching tracks
 // mid-stream must never reuse (and silently overwrite with different audio
-// content) segment files a player may still rewind into (§11.4).
+// content) segment files a player may still rewind into .
 function audioOutDir(sessionId: string, audioStreamIndex: number): string {
   return path.join(transcodeDir(sessionId), `a${audioStreamIndex}`);
 }
 
 // PGS/VOBSUB/DVBSUB are bitmap subtitle formats — burned in via ffmpeg's
 // `overlay` filter (decodes the bitmap and composites it). Everything else is
-// text, burned in via libass's `subtitles` filter (§13.4).
+// text, burned in via libass's `subtitles` filter .
 const BITMAP_SUBTITLE_FORMATS = new Set(["PGS", "VOBSUB", "DVBSUB"]);
 
 // ffmpeg's `0:a:N` addresses the Nth AUDIO-type stream, not the absolute
@@ -90,7 +90,7 @@ async function buildCandidateInput(
 
   const videoStream = mediaFile.streams.find((s) => s.type === "VIDEO");
   // The selected audio stream's codec drives the DIRECT_PLAY/DIRECT_STREAM/
-  // TRANSCODE decision (§11.4) — picking a non-default track with an
+ // TRANSCODE decision — picking a non-default track with an
   // incompatible codec must be able to force a remux/transcode same as the
   // default track would.
   const audioStream =
@@ -138,7 +138,7 @@ async function buildCandidateInput(
   };
 }
 
-/** §11.1/§11.2 — three-tier playback decision, on-demand HLS, seek-restart. apps/api owns the live ffmpeg process directly (separate container/PID namespace from apps/worker). */
+/** / — three-tier playback decision, on-demand HLS, seek-restart. apps/api owns the live ffmpeg process directly (separate container/PID namespace from apps/worker). */
 export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<void> {
   app.post(
     "/playback/start",
@@ -339,7 +339,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     },
   );
 
-  // Audio-track switch (§11.4/Step 8) — always restarts ffmpeg, unlike /seek,
+ // Audio-track switch (/Step 8) — always restarts ffmpeg, unlike /seek,
   // because the target segment may already exist on disk with the *previous*
   // audio track muxed in and reusing it would silently serve the wrong audio.
   // A fresh per-track outDir (audioOutDir) sidesteps that instead of trying to

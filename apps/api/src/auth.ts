@@ -26,7 +26,7 @@ export async function verifyPassword(hash: string, password: string): Promise<bo
 }
 
 // Refresh tokens are high-entropy random values, not user-chosen secrets —
-// a fast hash is fine for at-rest storage/lookup (§7.1's `refresh_token_hash`).
+// a fast hash is fine for at-rest storage/lookup ('s `refresh_token_hash`).
 export function generateOpaqueToken(): string {
   return randomBytes(32).toString("base64url");
 }

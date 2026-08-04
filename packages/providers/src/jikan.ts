@@ -36,10 +36,10 @@ function lifecycleFromStatus(status: string | null): MetadataLifecycleState {
 }
 
 /**
- * Anime fallback provider (§8.2), used when AniList misses. Backed by
+ * Anime fallback provider , used when AniList misses. Backed by
  * Cloudflare edge caching that honors If-Modified-Since — the only one of
  * the three providers where a conditional revalidation can return a real 304
- * (§8.3), which resolveMetadata uses on MetadataCache TTL expiry to avoid a
+ * , which resolveMetadata uses on MetadataCache TTL expiry to avoid a
  * full re-fetch. (Jikan has no ETag — verified live against api.jikan.moe,
  * which returns Cache-Control/Last-Modified but no ETag header.)
  */

@@ -1,4 +1,4 @@
-/** §9.6.8 — admin queue UI, backed directly by BullMQ. */
+/** admin queue UI, backed directly by BullMQ. */
 
 import { z } from "zod";
 

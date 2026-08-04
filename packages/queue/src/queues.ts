@@ -27,10 +27,10 @@ export interface MetadataJobData {
   year: number | null;
 }
 
-/** Deterministic BullMQ jobIds so re-enqueueing already-queued work is a no-op (§9.6.1/§9.6.2). */
+/** Deterministic BullMQ jobIds so re-enqueueing already-queued work is a no-op (/). */
 export const scanJobId = (libraryId: string): string => libraryId;
 export const artworkJobId = (mediaItemId: string): string => `artwork-${mediaItemId}`;
 export const metadataJobId = (provider: string, mediaItemId: string): string => `metadata-${provider}-${mediaItemId}`;
 
-/** After this many failures, poison-pill: stop retrying, flip MediaItem.state (§9.6.6). */
+/** After this many failures, poison-pill: stop retrying, flip MediaItem.state . */
 export const JOB_FAILURE_THRESHOLD = 3;

@@ -34,11 +34,11 @@ const artworkQueue = new Queue<ArtworkJobData>(QUEUE_NAMES.ARTWORK, {
   },
 });
 
-// One provider instance and one queue per provider (§8, §19 Step 6) — each
+// One provider instance and one queue per provider (Step 6) — each
 // queue gets its own BullMQ `limiter`, matching that provider's real rate
 // budget exactly. A job only ever calls its own queue's provider; when that
 // provider misses, the job itself enqueues the next provider in the chain
-// (§8.2 "chain, not fan-out") rather than calling it inline, so every HTTP
+// ("chain, not fan-out") rather than calling it inline, so every HTTP
 // call to every provider is actually governed by its queue's limiter.
 const METADATA_PROVIDERS: Record<string, MetadataProvider> = {
   TVMAZE: new TvMazeProvider(),
@@ -60,7 +60,7 @@ const metadataQueues: Record<string, Queue<MetadataJobData>> = {
       attempts: JOB_FAILURE_THRESHOLD,
       backoff: { type: "exponential", delay: 2000 },
       // Postgres (ExternalId/JobFailure), not this terminal job's Redis key, is
-      // the source of truth for "does this item still need resolving" (§9.6.2
+ // the source of truth for "does this item still need resolving" (
       // self-healing, non-negotiable #9). Without this, the deterministic jobId
       // (metadataJobId) permanently blocks any later re-enqueue for the same
       // provider+item once the first attempt reaches a terminal state.
@@ -92,10 +92,10 @@ async function enqueueScan(libraryId: string): Promise<void> {
   await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId: scanJobId(libraryId) });
 }
 
-// Backpressure (§9.6.5): one add() per file as the scan walks it, never a
+// Backpressure : one add per file as the scan walks it, never a
 // bulk dump of thousands of jobs — the artwork worker's concurrency cap below
 // is what actually bounds ffmpeg load. Swallow failures here — the boot
-// reconciler re-derives any artwork job that never got enqueued (§9.6.2), so
+// reconciler re-derives any artwork job that never got enqueued , so
 // one bad enqueue must not fail the whole scan and lose every later directory.
 async function enqueueArtwork(job: ArtworkJobData): Promise<void> {
   try {
@@ -120,7 +120,7 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
   await ingestLibrary(db, library.id, library.rootPath, {
     resumeFromCursor: library.scanCursor,
     contentProfile: library.contentProfile,
-    // Checkpointing (§9.6.3): persist progress after every completed
+ // Checkpointing : persist progress after every completed
     // directory so a killed scan resumes instead of restarting from zero.
     onDirectoryComplete: async (dir) => {
       await db.library.update({ where: { id: library.id }, data: { scanCursor: dir } });
@@ -142,7 +142,7 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
   const { mediaItemId, filePath, dir, durationMs } = job.data;
   try {
     // Re-probe rather than trust anything carried across the queue boundary
-    // (§9.6.2 re-derive, don't accumulate) — attachedPics never crossed the
+ // (re-derive, don't accumulate) — attachedPics never crossed the
     // wire in ArtworkJobData, so this is also the only correct way to get them.
     const probe = await probeFile(filePath);
     await storeArtwork(db, mediaItemId, dir, filePath, probe?.attachedPics ?? [], durationMs ?? probe?.durationMs ?? null);
@@ -154,7 +154,7 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
       update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
     });
     if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
-      // Poison pill (§9.6.6): stop retrying, stay playable, surface to admins.
+ // Poison pill : stop retrying, stay playable, surface to admins.
       await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } });
       return; // swallow — no rethrow, so BullMQ won't keep retrying a dead job
     }
@@ -196,7 +196,7 @@ function makeProcessMetadata(providerName: string) {
         update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
       });
       if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
-        // Poison pill (§9.6.6): stop retrying this provider, stay playable —
+ // Poison pill : stop retrying this provider, stay playable —
         // the item just keeps whatever confidence/metadata it already has.
         return;
       }
@@ -211,10 +211,10 @@ const scanWorker = new Worker<ScanJobData>(QUEUE_NAMES.SCAN, processScan, {
 });
 const artworkWorker = new Worker<ArtworkJobData>(QUEUE_NAMES.ARTWORK, processArtwork, {
   connection,
-  concurrency: 2, // backpressure (§9.6.5): bounded ffmpeg concurrency
+  concurrency: 2, // backpressure : bounded ffmpeg concurrency
 });
 
-// Per-provider rate budgets (§8, doc's real published limits) enforced by
+// Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.
 const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
   TVMAZE: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_TVMAZE, makeProcessMetadata("TVMAZE"), {
@@ -235,7 +235,7 @@ const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
 };
 
 /**
- * Boot reconciler (§9.6.2): Valkey/BullMQ state is a cache, Postgres is truth.
+ * Boot reconciler : Valkey/BullMQ state is a cache, Postgres is truth.
  * Re-derive missing work from Postgres on every start instead of trusting
  * whatever's still queued — deterministic jobIds make re-enqueueing
  * already-queued work a no-op, so this is safe to run every time.
@@ -302,7 +302,7 @@ async function reconcile(): Promise<void> {
 }
 
 /**
- * Graceful shutdown (§9.6.4): stop taking new jobs, give in-flight jobs a
+ * Graceful shutdown : stop taking new jobs, give in-flight jobs a
  * short grace period, then reap any ffmpeg/ffprobe child still running —
  * BullMQ closing does not kill children spawned by a job's own code.
  */

@@ -1,7 +1,7 @@
 import path from "node:path";
 
 /**
- * Full VOD playlist generated upfront (§11.2) — the client sees the whole
+ * Full VOD playlist generated upfront — the client sees the whole
  * video as ready-to-seek immediately, even though most segment files don't
  * exist on disk yet. Segments are produced on request by whatever route
  * serves segment-N.ts; this function only ever describes the shape.
@@ -31,27 +31,27 @@ export interface SegmentJobInput {
   outputDir: string;
   /** DIRECT_PLAY never reaches here — no ffmpeg process is spawned for it. */
   method: "DIRECT_STREAM" | "TRANSCODE";
-  /** Which segment index to start producing from — seek-restart target (§11.2). */
+ /** Which segment index to start producing from — seek-restart target . */
   startSegment: number;
   segmentSeconds: number;
   videoCodec?: string;
   audioCodec?: string;
-  /** Which audio stream to map (§11.4 track switching) — index among audio-type streams, not absolute container index. Defaults to 0. */
+ /** Which audio stream to map (track switching) — index among audio-type streams, not absolute container index. Defaults to 0. */
   audioStreamIndex?: number;
   maxWidth?: number;
   maxHeight?: number;
   maxVideoBitrateKbps?: number;
-  /** §11.3 — gate with needsToneMap() before setting; only meaningful for TRANSCODE (real re-encode, same honest limitation as force_key_frames below). */
+ /** gate with needsToneMap before setting; only meaningful for TRANSCODE (real re-encode, same honest limitation as force_key_frames below). */
   toneMap?: boolean;
   /**
-   * §13.4 — a selected subtitle track that requires burn-in. `bitmap: true`
+ * — a selected subtitle track that requires burn-in. `bitmap: true`
    * for PGS/VOBSUB/DVBSUB: decoded and composited via `overlay`. `false` for
    * text formats (ASS/SSA/SRT/VTT): rendered via libass's `subtitles` filter.
    */
   subtitleBurnIn?: { streamIndex: number; bitmap: boolean };
 }
 
-// §11.3 — naive PQ/Rec.2020 -> SDR reads grey and foggy. Convert to
+// — naive PQ/Rec.2020 -> SDR reads grey and foggy. Convert to
 // scene-linear light, regrade into bt709 primaries, apply the actual tone
 // curve, convert back to a display-referred bt709 signal.
 const TONE_MAP_FILTERS = [
@@ -71,7 +71,7 @@ function escapeFilterPath(p: string): string {
 
 /**
  * `-f segment` muxer, not `-f hls` — the app owns playlist content (already
- * built by buildM3u8), ffmpeg only ever produces the .ts bytes (§11.2).
+ * built by buildM3u8), ffmpeg only ever produces the .ts bytes .
  * `-ss` before `-i` seeks the input for a fast keyframe-aligned-ish start;
  * `-segment_start_number` keeps output filenames matching the segment index
  * the playlist already promised.
@@ -87,7 +87,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     // Remux only: streams are copied verbatim, so segment boundaries land
     // wherever the source's existing keyframes are — -force_key_frames only
     // works when we control encoding, which a copy remux by definition does
-    // not (honest limitation, §11.2). Same reason tone-map/burn-in can't
+ // not (honest limitation). Same reason tone-map/burn-in can't
     // apply here either — decision.ts never selects DIRECT_STREAM when either
     // is required, so this branch never needs to carry them.
     args.push("-map", "0:v:0", "-map", audioMap, "-c", "copy");
@@ -116,7 +116,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     }
     args.push("-c:a", input.audioCodec ?? "aac");
     // Deterministic segment boundaries — only meaningful when re-encoding,
-    // which is exactly the branch this is in (§11.2).
+ // which is exactly the branch this is in .
     args.push("-force_key_frames", `expr:gte(t,n_forced*${input.segmentSeconds})`);
   }
 

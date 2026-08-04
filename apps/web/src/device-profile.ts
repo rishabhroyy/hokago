@@ -15,7 +15,7 @@ export interface BrowserDeviceProfile {
   enableDirectStream?: boolean;
 }
 
-// subtitleMode "external": JASSUB renders soft subs client-side (§13.1) — this
+// subtitleMode "external": JASSUB renders soft subs client-side — this
 // is the whole point of Step 8, so burn-in is never requested here.
 export const BROWSER_DEVICE_PROFILE: BrowserDeviceProfile = {
   supportedContainers: ["mp4", "webm"],

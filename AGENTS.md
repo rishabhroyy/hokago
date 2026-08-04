@@ -13,6 +13,7 @@ pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via 
 - `pnpm --filter @hokago/fonts build` — subsets @fontsource fonts into `packages/fonts/vendor/` (gitignored)
 - `pnpm --filter @hokago/db migrate:dev|migrate:deploy|studio`
 - `pnpm --filter @hokago/scanner scan <path>` — run the step-2 scan→NFO→art pipeline directly (not job-queued yet)
+- `pnpm --filter @hokago/scanner seed:anime [path] [name]` — scan + inline provider resolution (AniList→MAL chain, no queues); creates bare SERIES items for empty folders so they resolve real metadata/art via providers. `--retry-missing` re-runs only items with no `ExternalId` (fast; use after rate-limit backoff).
 - `pnpm --filter @hokago/providers search` — ad-hoc provider search script
 
 ## Codegen is mandatory, and order matters
@@ -36,6 +37,8 @@ pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via 
 - `apps/web` — React 19 + Vite + Tailwind v4 + vidstack + JASSUB. Single hardcoded design in `apps/web/tailwind.config.ts` + `src/app.css`, with a dark-mode toggle (see `src/ui/useTheme.tsx`). No theme system, no tokens contract.
 - `packages/metadata` — **interfaces only** (license firewall). No provider data/code in the core repo, ever. AGPL/non-commercial adapters live in `packages-optional/` (never vendored, runtime-fetched).
 - `packages/scanner` — evidence-based pipeline. Parser registry lives in `packages/scanner/src/parsers/` (anitomy for ANIME, scene regexes for GENERAL), noisy-OR confidence in `evidence.ts`. Known limitation (deferred): container-level confidence isn't computed yet, only leaves.
+- `packages/providers` — keyless providers (TVmaze, AniList, Jikan) + match gate in `match.ts`: normalized exact equality, falling back to ordered-subsequence containment (short folder name vs fuller provider title, e.g. "Frieren" → "Frieren: Beyond Journey's End"), guarded by min query length + year ±1.
+- Detail-page descriptive fields (overview, originalTitle, rating 0–10, genres, studio) flow provider → `MetadataMatch` → `fillDescriptiveFields` (only when unset) → `MediaItemDetail` contract → DetailView. Tagline intentionally absent (no keyless provider exposes one).
 
 ## Build order (was §19 of docs/design.md; that file is gone)
 

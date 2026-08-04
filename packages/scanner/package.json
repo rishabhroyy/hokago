@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "scan": "tsx scripts/scan.ts"
+    "scan": "tsx scripts/scan.ts",
+    "seed:anime": "tsx scripts/seed-anime.ts"
   },
   "dependencies": {
     "@hokago/db": "workspace:*",

@@ -16,6 +16,9 @@ interface TvMazeShow {
   name: string;
   premiered: string | null;
   status: string;
+  genres: string[];
+  rating: { average: number | null };
+  network: { name: string } | null;
   image: { medium: string | null; original: string | null } | null;
   summary: string | null;
 }
@@ -48,6 +51,9 @@ function toMatch(show: TvMazeShow): MetadataMatch {
     premieredAt: show.premiered ?? undefined,
     lifecycleState: lifecycleFromStatus(show.status),
     artwork: show.image?.original ? [{ kind: "POSTER", url: show.image.original }] : undefined,
+    genres: show.genres.length > 0 ? show.genres : undefined,
+    rating: show.rating.average != null ? show.rating.average : undefined,
+    studio: show.network?.name ?? undefined,
   };
 }
 

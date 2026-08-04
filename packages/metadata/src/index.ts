@@ -80,6 +80,14 @@ export interface MetadataMatch {
   lifecycleState?: MetadataLifecycleState;
   titles?: MetadataTitle[];
   artwork?: MetadataArtworkCandidate[];
+  /** Native-language title (AniList native, Jikan title_japanese) — distinct from `title`. */
+  originalTitle?: string;
+  /** Genre labels as the provider reports them — no canonicalization here. */
+  genres?: string[];
+  /** Normalized 0–10 aggregate. AniList averageScore is 0–100: providers divide before returning. */
+  rating?: number;
+  /** Studio or network of record. */
+  studio?: string;
 }
 
 export interface MetadataSearchOptions {

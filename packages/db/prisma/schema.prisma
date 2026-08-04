@@ -317,6 +317,11 @@ model MediaItem {
   originalTitle String?
   overview      String?
   year          Int?
+  /// Normalized to a 0–10 scale, provider-agnostic. Single aggregate, not per-source (extra Json holds per-provider if ever needed).
+  rating        Float?
+  genres        String[]     @default([])
+  /// Studio or network of record (AniList studios[0], TVmaze network, Jikan studios[0]).
+  studio        String?
  /// From ffprobe. THE movie/episode discriminator (c).
   runtimeMs     Int?
 

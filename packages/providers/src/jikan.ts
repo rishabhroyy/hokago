@@ -12,9 +12,13 @@ const BASE_URL = process.env.HOKAGO_JIKAN_BASE_URL ?? "https://api.jikan.moe/v4"
 interface JikanAnime {
   mal_id: number;
   title: string;
+  title_japanese: string | null;
   aired: { from: string | null } | null;
   status: string | null;
   synopsis: string | null;
+  score: number | null;
+  genres: { name: string }[] | null;
+  studios: { name: string }[] | null;
   images: { jpg: { large_image_url: string | null } } | null;
 }
 
@@ -65,6 +69,10 @@ export class JikanProvider implements MetadataProvider {
       premieredAt: anime.aired?.from ?? undefined,
       lifecycleState: lifecycleFromStatus(anime.status),
       artwork: anime.images?.jpg.large_image_url ? [{ kind: "POSTER", url: anime.images.jpg.large_image_url }] : undefined,
+      originalTitle: anime.title_japanese ?? undefined,
+      genres: anime.genres && anime.genres.length > 0 ? anime.genres.map((g) => g.name) : undefined,
+      rating: anime.score ?? undefined,
+      studio: anime.studios?.find((s) => s.name)?.name ?? undefined,
     }));
     return { matches, lastModified };
   }

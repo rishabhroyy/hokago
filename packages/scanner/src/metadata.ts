@@ -87,6 +87,24 @@ async function fillDescriptiveFields(db: PrismaClient, mediaItemId: string, matc
       data: { premieredAt: new Date(match.premieredAt) },
     });
   }
+  if (match.originalTitle) {
+    await db.mediaItem.updateMany({
+      where: { id: mediaItemId, originalTitle: null },
+      data: { originalTitle: match.originalTitle },
+    });
+  }
+  if (match.genres && match.genres.length > 0) {
+    await db.mediaItem.updateMany({
+      where: { id: mediaItemId, genres: { isEmpty: true } },
+      data: { genres: match.genres },
+    });
+  }
+  if (match.rating != null) {
+    await db.mediaItem.updateMany({ where: { id: mediaItemId, rating: null }, data: { rating: match.rating } });
+  }
+  if (match.studio) {
+    await db.mediaItem.updateMany({ where: { id: mediaItemId, studio: null }, data: { studio: match.studio } });
+  }
   if (match.lifecycleState) {
     await db.mediaItem.updateMany({
       where: { id: mediaItemId, lifecycleState: "UNKNOWN" },

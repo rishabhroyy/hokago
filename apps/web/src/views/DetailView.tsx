@@ -216,6 +216,9 @@ export function DetailView({ itemId }: { itemId: string }) {
               <h1 className="mb-3 font-display text-[40px] font-black leading-[1.04] tracking-[-0.01em] [text-wrap:balance]">
                 {item.title}
               </h1>
+              {item.originalTitle && item.originalTitle !== item.title && (
+                <p className="mb-3 -mt-1 text-[15px] font-medium tracking-[0.02em] text-ink-3">{item.originalTitle}</p>
+              )}
               <div className="mb-5 flex flex-wrap items-center gap-2 text-[12.5px] font-semibold text-ink-2">
                 <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">
                   {item.kind === "MOVIE" ? "Movie" : "Series"}
@@ -223,10 +226,34 @@ export function DetailView({ itemId }: { itemId: string }) {
                 {item.year != null && (
                   <span className="rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line">{item.year}</span>
                 )}
+                {item.rating != null && (
+                  <span className="flex items-center gap-1.5 rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line">
+                    <Icon name="star" className="h-3.5 w-3.5 text-wii-deep" />
+                    {item.rating.toFixed(1)}
+                  </span>
+                )}
                 {item.kind === "SERIES" && hasEpisodes && (
                   <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">{item.episodes.length} episodes</span>
                 )}
               </div>
+
+              {item.genres.length > 0 && (
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  {item.genres.map((genre) => (
+                    <span
+                      key={genre}
+                      className="rounded-full bg-wii-deep/[.08] px-3 py-1 text-[12px] font-bold tracking-[0.03em] text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2"
+                    >
+                      {genre}
+                    </span>
+                  ))}
+                  {item.studio && (
+                    <span className="ml-1 text-[12px] font-medium text-ink-3">
+                      {item.kind === "MOVIE" ? "Studio" : "Network"}: {item.studio}
+                    </span>
+                  )}
+                </div>
+              )}
 
               <div className="mb-5 flex items-center gap-3 max-[820px]:flex-wrap">
                 {playMediaFileId && (

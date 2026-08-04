@@ -20,6 +20,9 @@ query ($search: String) {
       status
       description(asHtml: false)
       coverImage { extraLarge }
+      genres
+      averageScore
+      studios(isMain: true) { nodes { name } }
     }
   }
 }`;
@@ -37,6 +40,9 @@ interface AniListMedia {
   status: string | null;
   description: string | null;
   coverImage: { extraLarge: string | null } | null;
+  genres: string[] | null;
+  averageScore: number | null;
+  studios: { nodes: { name: string | null }[] | null } | null;
 }
 
 interface AniListResponse {
@@ -92,6 +98,10 @@ export class AniListProvider implements MetadataProvider {
       lifecycleState: lifecycleFromStatus(m.status),
       titles: titleVariants(m.title),
       artwork: m.coverImage?.extraLarge ? [{ kind: "POSTER", url: m.coverImage.extraLarge }] : undefined,
+      originalTitle: m.title.native ?? undefined,
+      genres: m.genres && m.genres.length > 0 ? m.genres : undefined,
+      rating: m.averageScore != null ? m.averageScore / 10 : undefined,
+      studio: m.studios?.nodes?.find((n) => n.name)?.name ?? undefined,
     }));
     return { matches };
   }

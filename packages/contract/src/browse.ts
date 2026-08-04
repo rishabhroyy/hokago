@@ -59,6 +59,11 @@ export type AudioTrackInfo = z.infer<typeof AudioTrackInfo>;
 
 export const MediaItemDetail = MediaCard.extend({
   overview: z.string().nullable(),
+  originalTitle: z.string().nullable(),
+  /** 0–10 normalized aggregate from the matched provider (TVmaze average, AniList averageScore/10, Jikan score). */
+  rating: z.number().nullable(),
+  genres: z.array(z.string()),
+  studio: z.string().nullable(),
   children: z.array(MediaCard),
   /** Flattened grandchildren (episodes across all seasons) — empty unless kind === SERIES. */
   episodes: z.array(EpisodeCard),

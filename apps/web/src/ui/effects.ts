@@ -51,7 +51,7 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
     const r = artEl.getBoundingClientRect();
     const cs = getComputedStyle(artEl);
     const overlay = document.createElement("div");
-    overlay.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;background-image:${cs.backgroundImage};background-color:${cs.backgroundColor};border-radius:${cs.borderRadius};box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 40px 10px rgba(120,170,255,.55);z-index:9999;overflow:hidden;transition:left .42s cubic-bezier(.4,0,.2,1),top .42s cubic-bezier(.4,0,.2,1),width .42s cubic-bezier(.4,0,.2,1),height .42s cubic-bezier(.4,0,.2,1),border-radius .42s cubic-bezier(.4,0,.2,1);`;
+    overlay.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;background-image:${cs.backgroundImage};background-color:${cs.backgroundColor};border-radius:${cs.borderRadius};box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 40px 10px rgba(120,170,255,.55);z-index:9999;overflow:hidden;pointer-events:none;`;
     // the poster is a child <img> — clone it into the overlay or the zoom
     // would be a blank beige block hiding the whole screen.
     const poster = artEl.querySelector("img");
@@ -64,26 +64,42 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
     const shine = document.createElement("div");
     shine.style.cssText =
       "position:absolute;top:-30%;left:-60%;width:38%;height:160%;transform:skewX(-18deg);" +
-      "background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.85) 50%,rgba(255,255,255,0) 100%);" +
-      "transition:left .55s cubic-bezier(.4,0,.2,1);";
+      "background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.85) 50%,rgba(255,255,255,0) 100%);";
     overlay.appendChild(shine);
     document.body.appendChild(overlay);
-    requestAnimationFrame(() => {
-      overlay.style.left = "0";
-      overlay.style.top = "0";
-      overlay.style.width = "100vw";
-      overlay.style.height = "100vh";
-      overlay.style.borderRadius = "0";
-      shine.style.left = "135%";
+
+    // Web Animations API — CSS transitions can't reliably start when the
+    // element and its end styles land in the same frame (the browser paints
+    // only the end state, so the zoom never visibly animates). WAAPI plays
+    // over real time regardless.
+    overlay.animate(
+      [
+        { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, borderRadius: cs.borderRadius },
+        { left: "0px", top: "0px", width: "100vw", height: "100vh", borderRadius: "0px" },
+      ],
+      { duration: 420, easing: "cubic-bezier(.4,0,.2,1)", fill: "both" },
+    );
+    shine.animate([{ left: "-60%" }, { left: "135%" }], {
+      duration: 560,
+      easing: "cubic-bezier(.4,0,.2,1)",
+      delay: 60,
+      fill: "both",
     });
+
     // Navigate almost immediately — the fixed overlay covers the swap, and the
     // detail fetch (already warmed by hover prefetch) runs during the zoom
     // instead of after it. Waiting for the full animation first doubled the
     // perceived load time of every title page.
     setTimeout(navigate, 90);
+
     // Shutter reveal: the fullscreen poster splits into two halves that slide
     // apart like a Wii window, showing the page that has loaded underneath.
     setTimeout(() => {
+      overlay.style.left = "0px";
+      overlay.style.top = "0px";
+      overlay.style.width = "100vw";
+      overlay.style.height = "100vh";
+      overlay.style.borderRadius = "0";
       const full = overlay.getBoundingClientRect();
       const halves: Array<[string, string]> = [
         ["inset(0 0 50% 0)", "-100%"],
@@ -93,13 +109,14 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
         const half = overlay.cloneNode(true) as HTMLElement;
         half.style.cssText =
           `position:fixed;left:${full.left}px;top:${full.top}px;width:${full.width}px;height:${full.height}px;` +
-          `z-index:9999;overflow:hidden;clip-path:${inset};` +
-          "transition:transform .34s cubic-bezier(.4,0,.2,1);";
+          `z-index:9999;overflow:hidden;pointer-events:none;clip-path:${inset};`;
         document.body.appendChild(half);
-        requestAnimationFrame(() => {
-          half.style.transform = `translateY(${ty})`;
+        half.animate([{ transform: "translateY(0)" }, { transform: `translateY(${ty})` }], {
+          duration: 340,
+          easing: "cubic-bezier(.4,0,.2,1)",
+          fill: "both",
         });
-        setTimeout(() => half.remove(), 460);
+        setTimeout(() => half.remove(), 420);
       }
       overlay.remove();
     }, 440);

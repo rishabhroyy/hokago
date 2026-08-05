@@ -6,21 +6,38 @@ import { Icon } from "../ui/icons";
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
 
-/** Raw binary upload — jpeg/png/webp/gif, served from our own origin. */
-async function uploadAvatar(file: File): Promise<string> {
-  const res = await fetch("/avatars", {
+interface ApiError {
+  error?: string;
+}
+
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => null)) as ApiError | null;
+  if (res.status === 401 || res.status === 403) return "session expired — sign in again";
+  return body?.error ?? fallback;
+}
+
+function uploadAvatar(file: File): Promise<string> {
+  return fetch("/avatars", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${localStorage.getItem("hokago_access_token") ?? ""}`,
       "Content-Type": "application/octet-stream",
     },
     body: file,
+  }).then(async (res) => {
+    if (!res.ok) throw new Error(await errorMessage(res, "upload failed"));
+    const body = (await res.json().catch(() => null)) as { avatarPath?: string } | null;
+    if (!body?.avatarPath) throw new Error("upload failed — no avatar path returned");
+    return body.avatarPath;
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? "upload failed");
-  }
-  return ((await res.json()) as { avatarPath: string }).avatarPath;
+}
+
+function Note({ children }: { children: string }) {
+  return <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{children}</span>;
+}
+
+function ErrorText({ children }: { children: string }) {
+  return <p className="text-small font-semibold text-accent">{children}</p>;
 }
 
 export function PrefsView() {
@@ -81,7 +98,7 @@ export function PrefsView() {
         params: { path: { id: profile.id } },
         body: { name: trimmed },
       });
-      if (error) throw new Error((error as { error?: string }).error ?? "could not rename profile");
+      if (error) throw new Error((error as ApiError).error ?? "could not rename profile");
       refreshPrimaryProfile();
       setName("");
       setNameNote("display name updated");
@@ -114,7 +131,7 @@ export function PrefsView() {
       const { error } = await api.POST("/auth/password", {
         body: { currentPassword: cur, newPassword: pw },
       });
-      if (error) throw new Error((error as { error?: string }).error ?? "could not change password");
+      if (error) throw new Error((error as ApiError).error ?? "could not change password");
       setCur("");
       setPw("");
       setConfirm("");
@@ -139,7 +156,7 @@ export function PrefsView() {
       <section className="panel mb-6 rounded-[32px] p-10">
         <div className="mb-[18px] flex flex-wrap items-center gap-3">
           <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Profile picture</h2>
-          {avatarNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{avatarNote}</span>}
+          {avatarNote && <Note>{avatarNote}</Note>}
         </div>
         <div className="flex items-center gap-5">
           <span className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-title font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70">
@@ -170,7 +187,7 @@ export function PrefsView() {
               {avatarBusy ? "uploading…" : "Choose image"}
             </button>
             <p className="mt-2 text-small text-ink-3">jpeg, png, webp, or gif — stored on this server, no third-party links.</p>
-            {avatarErr && <p className="mt-2 text-small font-semibold text-accent">{avatarErr}</p>}
+            {avatarErr && <ErrorText>{avatarErr}</ErrorText>}
           </div>
         </div>
       </section>
@@ -178,7 +195,7 @@ export function PrefsView() {
       <section className="panel mb-6 rounded-[32px] p-10">
         <div className="mb-[18px] flex flex-wrap items-center gap-3">
           <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Display name</h2>
-          {nameNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{nameNote}</span>}
+          {nameNote && <Note>{nameNote}</Note>}
         </div>
         <form onSubmit={saveName} className="flex flex-col gap-3">
           <input
@@ -188,7 +205,7 @@ export function PrefsView() {
             onChange={(e) => setName(e.target.value)}
             maxLength={40}
           />
-          {nameErr && <p className="text-small font-semibold text-accent">{nameErr}</p>}
+          {nameErr && <ErrorText>{nameErr}</ErrorText>}
           <div>
             <button type="submit" className="btn btn-primary" disabled={nameBusy || !name.trim()}>
               {nameBusy ? "saving…" : "Save name"}
@@ -200,7 +217,7 @@ export function PrefsView() {
       <section className="panel rounded-[32px] p-10">
         <div className="mb-[18px] flex flex-wrap items-center gap-3">
           <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Password</h2>
-          {pwNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{pwNote}</span>}
+          {pwNote && <Note>{pwNote}</Note>}
         </div>
         <form onSubmit={savePassword} className="flex flex-col gap-3">
           <input
@@ -227,7 +244,7 @@ export function PrefsView() {
             onChange={(e) => setConfirm(e.target.value)}
             autoComplete="new-password"
           />
-          {pwErr && <p className="text-small font-semibold text-accent">{pwErr}</p>}
+          {pwErr && <ErrorText>{pwErr}</ErrorText>}
           <div>
             <button type="submit" className="btn btn-primary" disabled={pwBusy}>
               {pwBusy ? "changing…" : "Change password"}

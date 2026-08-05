@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodeCard } from "@hokago/contract/browse";
 import { fetchMediaItemDetail, prefetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
 import { useProfileId } from "../profile";
@@ -9,6 +9,7 @@ import { Row } from "../ui/Row";
 import { cardToTile } from "../ui/tile-mapping";
 import { useWiiSound } from "../ui/useWiiSound";
 import { popAndPing, useReducedMotion, useStaggerEntrance } from "../ui/effects";
+import { sanitizeOverview } from "../ui/sanitize";
 
 function seasonLabel(seasonNumber: number | null): string {
   if (seasonNumber == null) return "Episodes";
@@ -19,17 +20,13 @@ function trackLabel(track: { streamIndex: number; lang: string | null }): string
   return track.lang ? track.lang.toUpperCase() : `Track ${track.streamIndex}`;
 }
 
-/** Overviews arrive with literal <br> markup (AniList etc.) — render them as line breaks. */
+/** Overviews arrive as provider HTML (<i>, <b>, <a>, <br>…) — sanitized and rendered for real. */
 function Overview({ text }: { text: string }) {
   return (
-    <p className="max-w-[680px] text-body leading-[1.75] text-ink-2 [text-wrap:pretty]">
-      {text.split(/<br\s*\/?>/i).map((part, i) => (
-        <Fragment key={i}>
-          {i > 0 && <br />}
-          {part}
-        </Fragment>
-      ))}
-    </p>
+    <p
+      className="max-w-[680px] text-body leading-[1.75] text-ink-2 [text-wrap:pretty] [&_a]:font-semibold [&_a]:text-wii-deep [&_a]:underline"
+      dangerouslySetInnerHTML={{ __html: sanitizeOverview(text) }}
+    />
   );
 }
 

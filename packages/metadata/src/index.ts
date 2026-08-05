@@ -88,6 +88,12 @@ export interface MetadataMatch {
   rating?: number;
   /** Studio or network of record. */
   studio?: string;
+  /**
+   * Authoritative ids for the same title in OTHER providers, handed along by
+   * the matched provider (e.g. AniList's idMal). Persisted as ExternalId rows
+   * so enrichment can pull episodes from a provider the matcher never used.
+   */
+  alternateIds?: Array<{ provider: string; id: string }>;
 }
 
 export interface MetadataSearchOptions {
@@ -127,6 +133,13 @@ export interface MetadataProvider {
    * provider without it simply keeps its locally-derived titles.
    */
   episodes?(providerId: string): Promise<EpisodeMetadata[]>;
+  /**
+   * Optional authoritative ids for the same title in OTHER providers, looked
+   * up directly from a providerId this provider already matched (e.g. AniList
+   * idMal for a known AniList id). Used to backfill ExternalId rows for
+   * matches made before the provider started handing `alternateIds` out.
+   */
+  alternateIds?(providerId: string): Promise<Array<{ provider: string; id: string }>>;
 }
 
 /**

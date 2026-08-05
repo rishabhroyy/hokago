@@ -234,6 +234,12 @@ async function refreshMetadataCacheExpiry(
  * the identity; the provider title lands in `extra.episodeTitle`, which the
  * browse API prefers for display. Degrade, never error: a provider episode
  * fetch failing must not fail the match that already succeeded.
+ *
+ * Source selection: the matched provider when it exposes `episodes`, else the
+ * first OTHER provider this series has an ExternalId for AND that implements
+ * `episodes` — an AniList-matched anime pulls its titles from MAL this way.
+ * For matches made before `alternateIds` existed, ask the matched provider
+ * for the alternate ids directly and persist them first.
  */
 async function enrichEpisodeTitles(
   db: PrismaClient,
@@ -241,11 +247,35 @@ async function enrichEpisodeTitles(
   providerName: string,
   provider: MetadataProvider,
   providerId: string,
+  providers: Record<string, MetadataProvider> = {},
 ): Promise<void> {
-  if (!provider.episodes) return;
   try {
+    let source: { provider: MetadataProvider; providerName: string; providerId: string } | undefined =
+      provider.episodes ? { provider, providerName, providerId } : undefined;
+    if (!source) {
+      const alternates = provider.alternateIds ? await provider.alternateIds(providerId) : [];
+      for (const alt of alternates) {
+        await db.externalId
+          .upsert({
+            where: { mediaItemId_provider: { mediaItemId: seriesId, provider: alt.provider } },
+            create: { mediaItemId: seriesId, provider: alt.provider, providerId: alt.id, confidence: 1 },
+            update: { providerId: alt.id },
+          })
+          .catch(() => {});
+      }
+      const rows = await db.externalId.findMany({ where: { mediaItemId: seriesId } });
+      for (const row of rows) {
+        const candidate = providers[row.provider];
+        if (candidate?.episodes) {
+          source = { provider: candidate, providerName: row.provider, providerId: row.providerId };
+          break;
+        }
+      }
+    }
+    if (!source) return;
+
     const cached = await db.metadataCache.findUnique({
-      where: { provider_externalId: { provider: providerName, externalId: providerId } },
+      where: { provider_externalId: { provider: source.providerName, externalId: source.providerId } },
     });
     const fresh = cached !== null && (cached.expiresAt === null || cached.expiresAt > new Date());
     const cachedPayload = (cached?.payload ?? {}) as Record<string, unknown>;
@@ -255,12 +285,22 @@ async function enrichEpisodeTitles(
       ? (cachedEpisodes as EpisodeMetadata[])
       : undefined;
     if (!episodes) {
-      episodes = await provider.episodes(providerId);
+      const fetchEpisodes = source.provider.episodes;
+      if (!fetchEpisodes) return;
+      episodes = await fetchEpisodes(source.providerId);
+      // The enrichment row's TTL follows the series' own lifecycle, not the
+      // matched provider's cache — an ONGOING anime keeps re-fetching its
+      // episode list even though the match row is ANILIST's.
+      const series = await db.mediaItem.findUnique({
+        where: { id: seriesId },
+        select: { lifecycleState: true },
+      });
+      const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(series?.lifecycleState ?? "UNKNOWN");
       const payload = { ...cachedPayload, episodes } as unknown as Prisma.InputJsonValue;
       await db.metadataCache.upsert({
-        where: { provider_externalId: { provider: providerName, externalId: providerId } },
-        create: { provider: providerName, externalId: providerId, payload, ttlPolicy: "infinite" },
-        update: { payload },
+        where: { provider_externalId: { provider: source.providerName, externalId: source.providerId } },
+        create: { provider: source.providerName, externalId: source.providerId, payload, ttlPolicy, expiresAt },
+        update: { payload, ttlPolicy, expiresAt },
       });
     }
     if (episodes.length === 0) return;
@@ -347,6 +387,17 @@ async function applyMatch(
       update: { providerId: match.providerId, lastResolvedAt: new Date() },
     })
     .catch(() => {});
+  // Alternate ids ride along with the match (e.g. AniList's idMal) so later
+  // enrichment passes can pull episodes from a provider the matcher skipped.
+  for (const alt of match.alternateIds ?? []) {
+    await db.externalId
+      .upsert({
+        where: { mediaItemId_provider: { mediaItemId: target.mediaItemId, provider: alt.provider } },
+        create: { mediaItemId: target.mediaItemId, provider: alt.provider, providerId: alt.id, confidence: 1 },
+        update: { providerId: alt.id },
+      })
+      .catch(() => {});
+  }
   await addProviderMatchEvidence(db, target.mediaItemId, providerName, match);
   await syncProviderTitles(db, target.mediaItemId, match);
   await fillDescriptiveFields(db, target.mediaItemId, match);
@@ -375,6 +426,7 @@ export async function resolveMetadataStep(
   providerName: string,
   provider: MetadataProvider,
   wikidataBridge?: MappingSource,
+  providers: Record<string, MetadataProvider> = {},
 ): Promise<boolean> {
   const query: MetadataQuery = { title: target.title, year: target.year ?? undefined, kind: target.kind };
 
@@ -389,7 +441,7 @@ export async function resolveMetadataStep(
     if (cached) {
       const isFresh = cached.expiresAt === null || cached.expiresAt > new Date();
       if (isFresh && !(await dueForSelfHealing(db, target.mediaItemId, existing.lastResolvedAt))) {
-        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId);
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId, providers);
         return true; // cache hit, zero network
       }
 
@@ -400,13 +452,13 @@ export async function resolveMetadataStep(
       if (result.notModified) {
         await refreshMetadataCacheExpiry(db, providerName, existing.providerId, cached.lifecycleState);
         await touchLastResolvedAt(db, target.mediaItemId, providerName);
-        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId);
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId, providers);
         return true;
       }
       const revalidated = findAcceptedMatch(query, result.matches);
       if (revalidated) {
         await applyMatch(db, target, providerName, revalidated, result.lastModified, wikidataBridge);
-        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, revalidated.providerId);
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, revalidated.providerId, providers);
         return true;
       }
       await touchLastResolvedAt(db, target.mediaItemId, providerName);
@@ -418,6 +470,6 @@ export async function resolveMetadataStep(
   const match = findAcceptedMatch(query, result.matches);
   if (!match) return false;
   await applyMatch(db, target, providerName, match, result.lastModified, wikidataBridge);
-  await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, match.providerId);
+  await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, match.providerId, providers);
   return true;
 }

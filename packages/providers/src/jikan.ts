@@ -1,4 +1,5 @@
 import type {
+  EpisodeMetadata,
   MetadataLifecycleState,
   MetadataMatch,
   MetadataProvider,
@@ -24,6 +25,16 @@ interface JikanAnime {
 
 interface JikanResponse {
   data: JikanAnime[];
+}
+
+interface JikanEpisode {
+  mal_id: number;
+  title: string | null;
+}
+
+interface JikanEpisodeResponse {
+  data: JikanEpisode[];
+  pagination: { has_next_page: boolean };
 }
 
 function lifecycleFromStatus(status: string | null): MetadataLifecycleState {
@@ -75,5 +86,33 @@ export class JikanProvider implements MetadataProvider {
       studio: anime.studios?.find((s) => s.name)?.name ?? undefined,
     }));
     return { matches, lastModified };
+  }
+
+  /**
+   * Per-episode titles from MAL. The catalog is a flat absolute-episode list
+   * (no seasons — Japanese broadcast order), so seasonNumber is always 1 and
+   * episodeNumber is the absolute position, matching how the scanner numbers
+   * single-season series. Titles MAL leaves blank or generically ("Episode N")
+   * are dropped so they can't clobber filename-derived ones.
+   */
+  async episodes(providerId: string): Promise<EpisodeMetadata[]> {
+    const out: EpisodeMetadata[] = [];
+    let page = 1;
+    for (;;) {
+      const res = await fetch(`${BASE_URL}/anime/${encodeURIComponent(providerId)}/episodes?page=${page}`);
+      if (!res.ok) {
+        if (res.status === 404) break;
+        throw new Error(`Jikan episodes failed: ${res.status} ${res.statusText}`);
+      }
+      const body = (await res.json()) as JikanEpisodeResponse;
+      for (const ep of body.data) {
+        const title = ep.title?.trim();
+        if (!title || /^episode\s*\d+$/i.test(title)) continue;
+        out.push({ seasonNumber: 1, episodeNumber: ep.mal_id, title });
+      }
+      if (!body.pagination?.has_next_page) break;
+      page += 1;
+    }
+    return out;
   }
 }

@@ -15,6 +15,7 @@ query ($search: String) {
   Page(page: 1, perPage: 10) {
     media(search: $search, type: ANIME) {
       id
+      idMal
       title { romaji english native }
       startDate { year }
       status
@@ -27,6 +28,13 @@ query ($search: String) {
   }
 }`;
 
+const ALTERNATE_ID_QUERY = `
+query ($id: Int) {
+  Media(id: $id) {
+    idMal
+  }
+}`;
+
 interface AniListTitle {
   romaji: string | null;
   english: string | null;
@@ -35,6 +43,7 @@ interface AniListTitle {
 
 interface AniListMedia {
   id: number;
+  idMal: number | null;
   title: AniListTitle;
   startDate: { year: number | null } | null;
   status: string | null;
@@ -102,7 +111,23 @@ export class AniListProvider implements MetadataProvider {
       genres: m.genres && m.genres.length > 0 ? m.genres : undefined,
       rating: m.averageScore != null ? m.averageScore / 10 : undefined,
       studio: m.studios?.nodes?.find((n) => n.name)?.name ?? undefined,
+      // idMal is authoritative — lets the resolver persist a MAL ExternalId so
+      // episode titles (which AniList doesn't carry) can be pulled from Jikan.
+      alternateIds: m.idMal != null ? [{ provider: "MAL", id: String(m.idMal) }] : undefined,
     }));
     return { matches };
+  }
+
+  /** Direct id→idMal lookup for an already-matched AniList id (Media(id:) is exact, no search ambiguity). */
+  async alternateIds(providerId: string): Promise<Array<{ provider: string; id: string }>> {
+    const res = await fetch(BASE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ query: ALTERNATE_ID_QUERY, variables: { id: Number(providerId) } }),
+    });
+    if (!res.ok) throw new Error(`AniList alternateIds failed: ${res.status} ${res.statusText}`);
+    const body = (await res.json()) as { data?: { Media?: { idMal: number | null } | null } };
+    const idMal = body.data?.Media?.idMal;
+    return idMal != null ? [{ provider: "MAL", id: String(idMal) }] : [];
   }
 }

@@ -181,6 +181,7 @@ function makeProcessMetadata(providerName: string) {
         providerName,
         provider,
         wikidataBridge,
+        METADATA_PROVIDERS,
       );
       await db.jobFailure.deleteMany({ where: { mediaItemId, jobType } });
       if (!matched) {

@@ -34,7 +34,7 @@ async function resolveInline(mediaItemId: string, libraryId: string, kind: "MOVI
     if (!provider) continue;
     try {
       const matched = await Promise.race([
-        resolveMetadataStep(db, { mediaItemId, libraryId, kind, title, year }, name, provider, wikidataBridge),
+        resolveMetadataStep(db, { mediaItemId, libraryId, kind, title, year }, name, provider, wikidataBridge, PROVIDERS),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out after 30s")), 30_000)),
       ]);
       if (matched) return;

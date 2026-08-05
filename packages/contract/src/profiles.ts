@@ -25,9 +25,12 @@ export type CreateProfileBody = z.infer<typeof CreateProfileBody>;
 
 export const UpdateProfileBody = z.object({
   name: z.string().optional(),
-  avatarPath: z.string().nullable().optional(),
   maturityRating: z.string().nullable().optional(),
 });
 export type UpdateProfileBody = z.infer<typeof UpdateProfileBody>;
+
+// avatarPath is not patchable directly — the upload endpoint owns it (it must
+// point at a file we stored, never an arbitrary client-supplied path).
+export const AvatarUploadResponse = z.object({ avatarPath: z.string() });
 
 export const NotFoundError = z.object({ error: z.string() });

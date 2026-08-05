@@ -15,6 +15,8 @@ import {
   RefreshBody,
   RefreshResponse,
   RevokedResponse,
+  ChangePasswordBody,
+  ChangePasswordResponse,
   SessionSummary,
   SessionParams,
   CreateInviteBody,
@@ -47,6 +49,9 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
     const passwordHash = await hashPassword(password);
     const account = await db.$transaction(async (tx) => {
       const created = await tx.account.create({ data: { username, passwordHash } });
+      // Every account gets a first profile named after the username — the
+      // frontend treats profiles[0] as the primary profile everywhere.
+      await tx.profile.create({ data: { accountId: created.id, name: username } });
       await tx.invite.update({ where: { id: invite.id }, data: { usedAt: new Date() } });
       return created;
     });
@@ -112,6 +117,23 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
       if (!session) return reply.code(404).send({ error: "session not found" });
       await db.session.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
       return { revoked: true };
+    },
+  );
+
+  app.post(
+    "/auth/password",
+    {
+      preHandler: app.authenticate,
+      schema: { body: ChangePasswordBody, response: { 200: ChangePasswordResponse, 401: ErrorResponse } },
+    },
+    async (req, reply) => {
+      const account = await db.account.findUnique({ where: { id: req.accountId } });
+      if (!account) return reply.code(401).send({ error: "invalid credentials" });
+      const valid = await verifyPassword(account.passwordHash, req.body.currentPassword);
+      if (!valid) return reply.code(401).send({ error: "current password is incorrect" });
+      const passwordHash = await hashPassword(req.body.newPassword);
+      await db.account.update({ where: { id: account.id }, data: { passwordHash } });
+      return { changed: true };
     },
   );
 

@@ -5,6 +5,7 @@ export type Route =
   | { view: "library"; libraryId: string }
   | { view: "detail"; itemId: string }
   | { view: "player"; mediaFileId: string; mediaItemId: string; profileId: string; audioStreamIndex: number | null }
+  | { view: "prefs" }
   | { view: "admin" }
   | { view: "login" }
   | { view: "notfound" };
@@ -15,6 +16,7 @@ function parse(pathname: string, search: string): Route {
 
   if (parts[0] === "login") return { view: "login" };
   if (parts[0] === "admin") return { view: "admin" };
+  if (parts[0] === "prefs") return { view: "prefs" };
   if (parts[0] === "library" && parts[1]) return { view: "library", libraryId: parts[1] };
   if (parts[0] === "title" && parts[1]) return { view: "detail", itemId: parts[1] };
   if (parts[0] === "watch" && parts[1]) {
@@ -35,6 +37,7 @@ export const paths = {
   home: () => "/",
   login: () => "/login",
   admin: () => "/admin",
+  prefs: () => "/prefs",
   library: (id: string) => `/library/${id}`,
   detail: (id: string) => `/title/${id}`,
   player: (mediaFileId: string, mediaItemId: string, profileId: string, audioStreamIndex?: number | null) =>

@@ -31,6 +31,14 @@ export const RefreshResponse = z.object({ accessToken: z.string() });
 
 export const RevokedResponse = z.object({ revoked: z.boolean() });
 
+export const ChangePasswordBody = z.object({
+  currentPassword: z.string(),
+  newPassword: z.string().min(1),
+});
+export type ChangePasswordBody = z.infer<typeof ChangePasswordBody>;
+
+export const ChangePasswordResponse = z.object({ changed: z.boolean() });
+
 export const SessionSummary = z.object({
   id: z.string(),
   device: z.string().nullable(),

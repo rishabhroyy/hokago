@@ -5,6 +5,7 @@ import { HomeView } from "./views/HomeView";
 import { LibraryView } from "./views/LibraryView";
 import { DetailView } from "./views/DetailView";
 import { LoginView } from "./views/LoginView";
+import { PrefsView } from "./views/PrefsView";
 import { NotFoundView } from "./views/NotFoundView";
 import { WatchPage } from "./WatchPage";
 import { AdminView } from "./admin/AdminView";
@@ -23,6 +24,8 @@ function Shell() {
       return <DetailView itemId={route.itemId} />;
     case "player":
       return <WatchPage mediaFileId={route.mediaFileId} />;
+    case "prefs":
+      return <PrefsView />;
     case "notfound":
       return <NotFoundView />;
     default:

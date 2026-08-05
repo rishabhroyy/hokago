@@ -15,6 +15,7 @@ import { registerStaticRoutes } from "./static-routes.js";
 import { registerAuth } from "./auth.js";
 import { registerAuthRoutes } from "./auth-routes.js";
 import { registerProfileRoutes } from "./profile-routes.js";
+import { registerAvatarRoutes } from "./avatar-routes.js";
 import { registerBrowseRoutes } from "./browse-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
 import { registerPresence } from "./presence.js";
@@ -23,6 +24,10 @@ import { seedVendoredFonts } from "./font-seed.js";
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
+// Avatar uploads are raw image bytes, not JSON — parse them into a Buffer.
+app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
+  done(null, body);
+});
 // serve:false — no fixed root; static-routes.ts passes a per-file rootPath to
 // reply.sendFile() since media/font/artwork paths live wherever the operator's
 // library roots are, not under one shared static directory.
@@ -42,6 +47,7 @@ await registerAdminRoutes(app);
 await registerAdminMgmtRoutes(app);
 await registerAuthRoutes(app);
 await registerProfileRoutes(app);
+await registerAvatarRoutes(app);
 await registerBrowseRoutes(app);
 await registerPlaybackRoutes(app);
 await registerWatchStateRoutes(app);

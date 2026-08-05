@@ -16,6 +16,7 @@ const API_PATHS = [
   "/media-files",
   "/fonts",
   "/artwork",
+  "/avatars",
   "/health",
   "/auth",
   "/profiles",

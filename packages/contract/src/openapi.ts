@@ -27,6 +27,8 @@ import {
   RefreshBody,
   RefreshResponse,
   RevokedResponse,
+  ChangePasswordBody,
+  ChangePasswordResponse,
   SessionSummary,
   SessionParams,
   CreateInviteBody,
@@ -209,6 +211,16 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: {
       200: { description: "OK", ...json(RevokedResponse) },
       404: { description: "Session not found", ...json(AuthErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/auth/password",
+    summary: "Change the authenticated account's password",
+    request: { body: json(ChangePasswordBody) },
+    responses: {
+      200: { description: "OK", ...json(ChangePasswordResponse) },
+      401: { description: "Current password incorrect", ...json(AuthErrorResponse) },
     },
   });
   registry.registerPath({

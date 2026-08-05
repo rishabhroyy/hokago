@@ -213,20 +213,36 @@ export function TopNav() {
         </div>
         <div ref={menuRef} className="relative">
           <button
-            className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-card-head font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70 transition-transform duration-150 ease-snap hover:scale-105 active:scale-92"
+            className="flex h-[36px] w-[36px] items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-card-head font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70 transition-transform duration-150 ease-snap hover:scale-105 active:scale-92"
             title={profile?.name ?? "account"}
             onClick={() => setMenuOpen((o) => !o)}
           >
-            {(profile?.name?.[0] ?? "h").toLowerCase()}
+            {profile?.avatarPath ? (
+              <img src={profile.avatarPath} alt="" className="h-full w-full object-cover" />
+            ) : (
+              (profile?.name?.[0] ?? "h").toLowerCase()
+            )}
           </button>
           {menuOpen && (
             <div className="panel absolute right-0 top-[46px] w-[220px] overflow-hidden rounded-[22px] py-1.5">
-              <div className="border-b border-line/70 px-4 pb-2.5 pt-2">
-                <div className="text-meta font-bold text-ink">{profile?.name ?? "…"}</div>
-                <div className="font-mono text-kicker uppercase tracking-[0.12em] text-ink-3">
-                  {isAdmin ? "admin" : "member"}
+              <div className="flex items-center gap-2.5 border-b border-line/70 px-4 pb-2.5 pt-2">
+                {profile?.avatarPath && (
+                  <img src={profile.avatarPath} alt="" className="h-6 w-6 rounded-full object-cover" />
+                )}
+                <div className="min-w-0">
+                  <div className="truncate text-meta font-bold text-ink">{profile?.name ?? "…"}</div>
+                  <div className="font-mono text-kicker uppercase tracking-[0.12em] text-ink-3">
+                    {isAdmin ? "admin" : "member"}
+                  </div>
                 </div>
               </div>
+              <button
+                onClick={() => navigate(paths.prefs())}
+                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
+              >
+                <Icon name="gear" className="h-4 w-4" />
+                Preferences
+              </button>
               {isAdmin && (
                 <button
                   onClick={() => navigate(paths.admin())}

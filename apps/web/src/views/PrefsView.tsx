@@ -127,15 +127,18 @@ export function PrefsView() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[640px] px-6 pb-16 pt-24 max-[820px]:px-4">
-      <div className="mb-8">
-        <h1 className="font-display text-title font-bold">preferences</h1>
-        <p className="mt-1 text-meta text-ink-2">look after your own account — picture, name, password.</p>
+    <div className="mx-auto w-full max-w-[640px] px-12 pb-12 pt-[86px] max-[820px]:px-5">
+      <div className="pb-[26px] pt-[30px]">
+        <div className="mb-[18px] flex items-baseline gap-3.5">
+          <h1 className="font-display text-title font-bold tracking-[-0.01em]">preferences</h1>
+          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">account settings</span>
+        </div>
+        <p className="mt-1 text-body text-ink-2">look after your own account — picture, name, password.</p>
       </div>
 
-      <section className="panel mb-6 rounded-[26px] p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-card-head font-bold text-ink">Profile picture</h2>
+      <section className="panel mb-6 rounded-[32px] p-10">
+        <div className="mb-[18px] flex flex-wrap items-center gap-3">
+          <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Profile picture</h2>
           {avatarNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{avatarNote}</span>}
         </div>
         <div className="flex items-center gap-5">
@@ -172,9 +175,9 @@ export function PrefsView() {
         </div>
       </section>
 
-      <section className="panel mb-6 rounded-[26px] p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-card-head font-bold text-ink">Display name</h2>
+      <section className="panel mb-6 rounded-[32px] p-10">
+        <div className="mb-[18px] flex flex-wrap items-center gap-3">
+          <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Display name</h2>
           {nameNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{nameNote}</span>}
         </div>
         <form onSubmit={saveName} className="flex flex-col gap-3">
@@ -194,9 +197,9 @@ export function PrefsView() {
         </form>
       </section>
 
-      <section className="panel rounded-[26px] p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-card-head font-bold text-ink">Password</h2>
+      <section className="panel rounded-[32px] p-10">
+        <div className="mb-[18px] flex flex-wrap items-center gap-3">
+          <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Password</h2>
           {pwNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{pwNote}</span>}
         </div>
         <form onSubmit={savePassword} className="flex flex-col gap-3">

@@ -102,7 +102,7 @@ export function Tile({
           <span className="pointer-events-none absolute inset-0 z-[1] rounded-[15px] ring-1 ring-inset ring-white/20" />
 
           {item.badge && (
-            <span className="absolute left-2 top-2 z-[3] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9px] dark:bg-paper font-bold uppercase tracking-[0.08em] text-wii-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
+            <span className="absolute left-2 top-2 z-[3] rounded-full bg-white/95 px-2 py-[3px] font-mono text-kicker dark:bg-paper font-bold uppercase tracking-[0.08em] text-wii-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
               {item.badge}
             </span>
           )}
@@ -117,12 +117,12 @@ export function Tile({
         </div>
       </div>
       <div
-        className="t-name mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-[13.5px] font-bold text-ink transition-colors group-hover:text-wii-deep"
+        className="t-name mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-card-title font-bold text-ink transition-colors group-hover:text-wii-deep"
         title={item.title}
       >
         {item.title}
       </div>
-      <div className="t-sub mt-0.5 px-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-3">{item.subLabel}</div>
+      <div className="t-sub mt-0.5 px-1 font-mono text-kicker uppercase tracking-[0.1em] text-ink-3">{item.subLabel}</div>
     </button>
   );
 }

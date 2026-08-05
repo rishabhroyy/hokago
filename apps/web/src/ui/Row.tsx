@@ -31,12 +31,12 @@ export function Row({
   return (
     <section className="mt-11">
       <div className="mb-1 flex items-baseline justify-between px-12 max-[820px]:px-5">
-        <h3 className="relative pl-4 font-display text-[21px] font-bold tracking-[0.01em] text-ink before:absolute before:left-0 before:top-1/2 before:h-[20px] before:w-[6px] before:-translate-y-1/2 before:rounded-full before:bg-gradient-to-b before:from-wii-2 before:to-wii-deep before:shadow-[0_0_8px_rgba(79,184,224,0.6)]">
+        <h3 className="relative pl-4 font-display text-section font-bold tracking-[0.01em] text-ink before:absolute before:left-0 before:top-1/2 before:h-[20px] before:w-[6px] before:-translate-y-1/2 before:rounded-full before:bg-gradient-to-b before:from-wii-2 before:to-wii-deep before:shadow-[0_0_8px_rgba(79,184,224,0.6)]">
           {title}
         </h3>
         {onSeeAll && (
           <button
-            className="text-[12.5px] font-bold text-ink-3 transition-colors hover:text-wii-deep"
+            className="text-small font-bold text-ink-3 transition-colors hover:text-wii-deep"
             onClick={onSeeAll}
           >
             See all

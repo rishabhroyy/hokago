@@ -9,8 +9,8 @@ export function NotFoundView() {
         <span className="mb-6 flex h-20 w-20 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,rgba(69,173,221,0.5),rgba(24,122,165,0.4))] text-wii-deep">
           <Icon name="cloudsun" className="h-10 w-10" />
         </span>
-        <h1 className="mb-2 font-display text-[24px] font-bold">channel not found</h1>
-        <p className="mb-7 text-[13.5px] text-ink-2">this page drifted off the menu.</p>
+        <h1 className="mb-2 font-display text-title font-bold">channel not found</h1>
+        <p className="mb-7 text-meta text-ink-2">this page drifted off the menu.</p>
         <button className="btn btn-primary" onClick={() => navigate(paths.home())}>
           <Icon name="back" className="h-4 w-4" />
           Back home

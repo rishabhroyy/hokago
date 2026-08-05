@@ -71,8 +71,8 @@ export function LoginView() {
           <span className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,#45ADDD,#187AA5)] text-white shadow-btn-blue">
             <LogoMark className="h-10 w-10" />
           </span>
-          <h1 className="font-display text-[26px] font-bold">hokago</h1>
-          <p className="mt-1 text-[13px] text-ink-2">
+          <h1 className="font-display text-title font-bold">hokago</h1>
+          <p className="mt-1 text-meta text-ink-2">
             {mode === "login" ? "sign in to your channels" : "join with an invite code"}
           </p>
         </div>
@@ -108,12 +108,12 @@ export function LoginView() {
           />
 
           {error && (
-            <p className="rounded-2xl bg-accent/10 px-4 py-2.5 text-center text-[12.5px] font-semibold text-accent">
+            <p className="rounded-2xl bg-accent/10 px-4 py-2.5 text-center text-small font-semibold text-accent">
               {error}
             </p>
           )}
           {notice && (
-            <p className="rounded-2xl bg-wii/12 px-4 py-2.5 text-center text-[12.5px] font-semibold text-wii-deep">
+            <p className="rounded-2xl bg-wii/12 px-4 py-2.5 text-center text-small font-semibold text-wii-deep">
               {notice}
             </p>
           )}
@@ -125,7 +125,7 @@ export function LoginView() {
 
         <button
           type="button"
-          className="mt-5 w-full text-center text-[12.5px] font-bold text-ink-3 transition-colors hover:text-wii-deep"
+          className="mt-5 w-full text-center text-small font-bold text-ink-3 transition-colors hover:text-wii-deep"
           onClick={() => {
             s.hover();
             setMode(mode === "login" ? "register" : "login");

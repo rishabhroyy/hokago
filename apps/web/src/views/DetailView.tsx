@@ -26,9 +26,9 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
 
   return (
     <div>
-      <h3 className="mb-[18px] mt-9 flex items-baseline gap-3 font-display text-[20px] font-bold tracking-[0.01em]">
+      <h3 className="mb-[18px] mt-9 flex items-baseline gap-3 font-display text-section font-bold tracking-[0.01em]">
         {seasonLabel(season)}
-        <span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-[10.5px] font-bold text-wii-ink ring-1 ring-line">
+        <span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-kicker font-bold text-wii-ink ring-1 ring-line">
           {eps.length}
         </span>
       </h3>
@@ -53,11 +53,11 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
                 )}
                 <span className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[42%] bg-gradient-to-b from-white/20 to-transparent" />
                 <span className="pointer-events-none absolute inset-0 z-[1] rounded-[13px] ring-1 ring-inset ring-white/20" />
-                <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-[9.5px] dark:bg-paper font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
+                <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-kicker dark:bg-paper font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
                   EP {ep.episodeNumber ?? "?"}
                 </span>
                 {ep.runtimeMs != null && (
-                  <span className="absolute bottom-2 right-[9px] z-[2] rounded-full bg-black/55 px-2 py-[3px] font-mono text-[9.5px] font-bold text-white backdrop-blur-sm">
+                  <span className="absolute bottom-2 right-[9px] z-[2] rounded-full bg-black/55 px-2 py-[3px] font-mono text-kicker font-bold text-white backdrop-blur-sm">
                     {Math.round(ep.runtimeMs / 60_000)}m
                   </span>
                 )}
@@ -68,7 +68,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
                 </span>
               </div>
             </div>
-            <div className="mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-[13.5px] font-bold text-ink transition-colors group-hover:text-wii-deep" title={ep.title}>
+            <div className="mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-card-title font-bold text-ink transition-colors group-hover:text-wii-deep" title={ep.title}>
               {ep.title}
             </div>
           </button>
@@ -80,7 +80,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
 
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
-    <button className="btn btn-ghost absolute left-12 top-[84px] z-[4] !px-[18px] !py-2.5 text-[13.5px] max-[820px]:left-4" onClick={onClick}>
+    <button className="btn btn-ghost absolute left-12 top-[84px] z-[4] !px-[18px] !py-2.5 text-meta max-[820px]:left-4" onClick={onClick}>
       <Icon name="back" className="h-[15px] w-[15px]" />
       Back
     </button>
@@ -213,13 +213,13 @@ export function DetailView({ itemId }: { itemId: string }) {
             </div>
 
             <div className="min-w-0 flex-1 pt-1">
-              <h1 className="mb-3 font-display text-[40px] font-black leading-[1.04] tracking-[-0.01em] [text-wrap:balance]">
+              <h1 className="mb-3 font-display text-title-xl font-black leading-[1.04] tracking-[-0.01em] [text-wrap:balance]">
                 {item.title}
               </h1>
               {item.originalTitle && item.originalTitle !== item.title && (
-                <p className="mb-3 -mt-1 text-[15px] font-medium tracking-[0.02em] text-ink-3">{item.originalTitle}</p>
+                <p className="mb-3 -mt-1 text-body font-medium tracking-[0.02em] text-ink-3">{item.originalTitle}</p>
               )}
-              <div className="mb-5 flex flex-wrap items-center gap-2 text-[12.5px] font-semibold text-ink-2">
+              <div className="mb-5 flex flex-wrap items-center gap-2 text-small font-semibold text-ink-2">
                 <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">
                   {item.kind === "MOVIE" ? "Movie" : "Series"}
                 </span>
@@ -242,13 +242,13 @@ export function DetailView({ itemId }: { itemId: string }) {
                   {item.genres.map((genre) => (
                     <span
                       key={genre}
-                      className="rounded-full bg-wii-deep/[.08] px-3 py-1 text-[12px] font-bold tracking-[0.03em] text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2"
+                      className="rounded-full bg-wii-deep/[.08] px-3 py-1 text-small font-bold tracking-[0.03em] text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2"
                     >
                       {genre}
                     </span>
                   ))}
                   {item.studio && (
-                    <span className="ml-1 text-[12px] font-medium text-ink-3">
+                    <span className="ml-1 text-small font-medium text-ink-3">
                       {item.kind === "MOVIE" ? "Studio" : "Network"}: {item.studio}
                     </span>
                   )}
@@ -285,11 +285,11 @@ export function DetailView({ itemId }: { itemId: string }) {
 
               {item.audioTracks.length >= 2 && (
                 <div className="mb-5 flex items-center gap-2">
-                  <span className="mr-1 font-mono text-[10.5px] font-bold uppercase tracking-[0.14em] text-ink-3">Audio</span>
+                  <span className="mr-1 font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">Audio</span>
                   {item.audioTracks.map((track) => (
                     <button
                       key={track.streamIndex}
-                      className={`rounded-full px-4 py-2 text-[12.5px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
+                      className={`rounded-full px-4 py-2 text-small font-bold transition-all duration-150 ease-snap active:scale-95 ${
                         selectedAudio === track.streamIndex
                           ? "wii-btn text-white shadow-btn-blue"
                           : "bg-card text-ink-2 shadow-panel hover:text-wii-deep"
@@ -306,7 +306,7 @@ export function DetailView({ itemId }: { itemId: string }) {
               )}
 
               {item.overview && (
-                <p className="max-w-[680px] text-[14.5px] leading-[1.75] text-ink-2 [text-wrap:pretty]">{item.overview}</p>
+                <p className="max-w-[680px] text-body leading-[1.75] text-ink-2 [text-wrap:pretty]">{item.overview}</p>
               )}
             </div>
           </div>

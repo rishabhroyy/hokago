@@ -42,6 +42,20 @@ export default {
         sans: ['"Plus Jakarta Sans"', "sans-serif"],
         mono: ['"JetBrains Mono"', "monospace"],
       },
+      fontSize: {
+        // Purpose-named role scale. Display tier is Zen Maru (rounded, warm);
+        // body/UI tier is Plus Jakarta; kicker is the uppercase mono label.
+        display: ["48px", { lineHeight: "1.04", letterSpacing: "-0.015em" }], // home hero
+        "title-xl": ["40px", { lineHeight: "1.04", letterSpacing: "-0.01em" }], // detail hero
+        title: ["28px", { lineHeight: "1.15", letterSpacing: "-0.01em" }], // page titles
+        section: ["21px", { lineHeight: "1.2" }], // row / section heads
+        "card-head": ["16px", { lineHeight: "1.35" }], // card heads in the admin console
+        "card-title": ["13.5px", { lineHeight: "1.3" }], // tile names
+        body: ["14.5px", { lineHeight: "1.75" }], // prose
+        meta: ["13px", { lineHeight: "1.5" }], // chips, table cells, lists
+        small: ["12px", { lineHeight: "1.4" }], // dense UI, table jazz, badges
+        kicker: ["10.5px", { lineHeight: "1.4" }], // uppercase mono labels
+      },
       transitionTimingFunction: {
         snap: "cubic-bezier(.4,1.4,.5,1)", // press / hover / pop
         smooth: "cubic-bezier(.4,0,.2,1)", // fades / view transitions

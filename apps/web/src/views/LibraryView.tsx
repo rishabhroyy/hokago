@@ -50,7 +50,7 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
   const chip = (value: "ALL" | "MOVIE" | "SERIES", label: string, count: number) => (
     <button
       key={value}
-      className={`flex items-center gap-2 rounded-full px-[18px] py-[9px] text-[13px] font-bold transition-all duration-150 ease-snap active:scale-95 ${
+      className={`flex items-center gap-2 rounded-full px-[18px] py-[9px] text-meta font-bold transition-all duration-150 ease-snap active:scale-95 ${
         filter === value
           ? "wii-btn text-white shadow-btn-blue"
           : "bg-card text-ink-2 shadow-panel hover:-translate-y-0.5 hover:text-wii-deep"
@@ -62,7 +62,7 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
     >
       {label}
       <span
-        className={`rounded-full px-1.5 font-mono text-[10px] font-bold ${filter === value ? "bg-white/25 text-white" : "bg-paper-2 text-ink-3"}`}
+        className={`rounded-full px-1.5 font-mono text-kicker font-bold ${filter === value ? "bg-white/25 text-white" : "bg-paper-2 text-ink-3"}`}
       >
         {count}
       </span>
@@ -73,9 +73,9 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
     <div className="min-h-screen px-12 pb-10 pt-[86px] max-[820px]:px-5">
       <div className="pb-[26px] pt-[30px]">
         <div className="mb-[18px] flex items-baseline gap-3.5">
-          <h2 className="font-display text-[30px] font-bold tracking-[-0.01em]">{library?.name ?? "Library"}</h2>
+          <h2 className="font-display text-title font-bold tracking-[-0.01em]">{library?.name ?? "Library"}</h2>
           {items.length > 0 && (
-            <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-ink-3">
+            <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
               {filtered.length} {filtered.length === 1 ? "title" : "titles"}
             </span>
           )}
@@ -90,10 +90,10 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
       {loaded && filtered.length === 0 ? (
         <div className="flex flex-col items-center px-6 py-[76px] pb-24 text-center">
           <Icon name="sparkle" className="h-10 w-10 text-gold opacity-65" />
-          <p className="mt-[14px] font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-ink-2">
+          <p className="mt-[14px] font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-2">
             nothing on this shelf yet
           </p>
-          <span className="mt-1 text-[14px] text-ink-2">
+          <span className="mt-1 text-body text-ink-2">
             scan a folder from the admin panel and it will appear here.
           </span>
         </div>

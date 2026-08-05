@@ -51,7 +51,15 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
     const r = artEl.getBoundingClientRect();
     const cs = getComputedStyle(artEl);
     const overlay = document.createElement("div");
-    overlay.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;background-image:${cs.backgroundImage};background-color:${cs.backgroundColor};border-radius:${cs.borderRadius};box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 40px 10px rgba(120,170,255,.55);z-index:9999;transition:left .42s cubic-bezier(.4,0,.2,1),top .42s cubic-bezier(.4,0,.2,1),width .42s cubic-bezier(.4,0,.2,1),height .42s cubic-bezier(.4,0,.2,1),border-radius .42s cubic-bezier(.4,0,.2,1),opacity .3s ease .42s;`;
+    overlay.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;background-image:${cs.backgroundImage};background-color:${cs.backgroundColor};border-radius:${cs.borderRadius};box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 40px 10px rgba(120,170,255,.55);z-index:9999;overflow:hidden;transition:left .42s cubic-bezier(.4,0,.2,1),top .42s cubic-bezier(.4,0,.2,1),width .42s cubic-bezier(.4,0,.2,1),height .42s cubic-bezier(.4,0,.2,1),border-radius .42s cubic-bezier(.4,0,.2,1),opacity .3s ease .42s;`;
+    // the poster is a child <img> — clone it into the overlay or the zoom
+    // would be a blank beige block hiding the whole screen.
+    const poster = artEl.querySelector("img");
+    if (poster) {
+      const clone = poster.cloneNode(true) as HTMLImageElement;
+      clone.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;";
+      overlay.appendChild(clone);
+    }
     document.body.appendChild(overlay);
     requestAnimationFrame(() => {
       overlay.style.left = "0";

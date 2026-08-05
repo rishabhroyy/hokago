@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodeCard } from "@hokago/contract/browse";
 import { fetchMediaItemDetail, prefetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
 import { useProfileId } from "../profile";
@@ -17,6 +17,20 @@ function seasonLabel(seasonNumber: number | null): string {
 
 function trackLabel(track: { streamIndex: number; lang: string | null }): string {
   return track.lang ? track.lang.toUpperCase() : `Track ${track.streamIndex}`;
+}
+
+/** Overviews arrive with literal <br> markup (AniList etc.) — render them as line breaks. */
+function Overview({ text }: { text: string }) {
+  return (
+    <p className="max-w-[680px] text-body leading-[1.75] text-ink-2 [text-wrap:pretty]">
+      {text.split(/<br\s*\/?>/i).map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && <br />}
+          {part}
+        </Fragment>
+      ))}
+    </p>
+  );
 }
 
 function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: EpisodeCard[]; onOpen: (ep: EpisodeCard, el: HTMLElement) => void }) {
@@ -188,7 +202,7 @@ export function DetailView({ itemId }: { itemId: string }) {
   const hasEpisodes = item.episodes.length > 0;
 
   return (
-    <div className="detail min-h-screen">
+    <div className={`detail min-h-screen ${reduced ? "" : "animate-[riseIn_.5s_cubic-bezier(.4,0,.2,1)]"}`}>
       <Banner itemId={item.id} backdropUrl={item.backdropUrl} posterUrl={item.posterUrl} onBack={() => navigate(paths.home())} />
 
       {/* the sheet: one glossy page holding everything about this title */}
@@ -269,18 +283,6 @@ export function DetailView({ itemId }: { itemId: string }) {
                     {item.kind === "SERIES" ? "Play S1 · E1" : "Play"}
                   </button>
                 )}
-                <button
-                  className="flex h-12 w-12 items-center justify-center rounded-full bg-card text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
-                  title="Add to list"
-                >
-                  <Icon name="plus" className="h-[19px] w-[19px]" />
-                </button>
-                <button
-                  className="flex h-12 w-12 items-center justify-center rounded-full bg-card text-ink shadow-panel transition-all duration-150 ease-snap hover:-translate-y-0.5 hover:text-wii-deep active:scale-90"
-                  title="Download"
-                >
-                  <Icon name="download" className="h-[19px] w-[19px]" />
-                </button>
               </div>
 
               {item.audioTracks.length >= 2 && (
@@ -305,9 +307,7 @@ export function DetailView({ itemId }: { itemId: string }) {
                 </div>
               )}
 
-              {item.overview && (
-                <p className="max-w-[680px] text-body leading-[1.75] text-ink-2 [text-wrap:pretty]">{item.overview}</p>
-              )}
+              {item.overview && <Overview text={item.overview} />}
             </div>
           </div>
 

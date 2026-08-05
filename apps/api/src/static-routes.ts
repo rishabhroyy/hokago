@@ -105,12 +105,17 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
  // Artwork store — bytes fetched once server-side, never a URL.
   app.get<{ Params: { id: string } }>("/artwork/:id", async (req, reply) => {
     const artwork = await db.artwork.findUnique({ where: { id: req.params.id } });
-    if (!artwork || !existsSync(artwork.bytesPath)) return reply.code(404).send({ error: "artwork not found" });
+    if (!artwork) return reply.code(404).send({ error: "artwork not found" });
+    // Absolute since the store started writing absolute paths; legacy rows
+    // may carry cwd-relative paths, resolve those against the API's own cwd
+    // (the repo root in dev) rather than 404ing.
+    const bytesPath = path.isAbsolute(artwork.bytesPath) ? artwork.bytesPath : path.resolve(artwork.bytesPath);
+    if (!existsSync(bytesPath)) return reply.code(404).send({ error: "artwork not found" });
 
     reply.header("Cross-Origin-Resource-Policy", "cross-origin");
     reply.header("Cache-Control", "public, max-age=31536000, immutable");
-    reply.type(ARTWORK_MIME[path.extname(artwork.bytesPath).toLowerCase()] ?? "application/octet-stream");
-    return reply.send(createReadStream(artwork.bytesPath));
+    reply.type(ARTWORK_MIME[path.extname(bytesPath).toLowerCase()] ?? "application/octet-stream");
+    return reply.send(createReadStream(bytesPath));
   });
 
  // Which fonts a media file's ASS track(s) need (MediaFileFont join) —

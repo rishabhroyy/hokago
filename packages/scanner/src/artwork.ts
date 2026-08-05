@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -21,8 +22,29 @@ export interface ArtworkDescriptor {
   meta: Record<string, unknown> | null;
 }
 
+/**
+ * Config root, always absolute. Never cwd-relative: scripts and workers can
+ * run from any package dir and must share one store — a cwd-relative default
+ * made `storeBytes` write artwork into e.g. `packages/scanner/data/config`,
+ * and the stored relative `bytesPath` then 404'd from the API's own cwd.
+ */
 function configDir(): string {
-  return process.env.HOKAGO_CONFIG_DIR ?? "./data/config";
+  return process.env.HOKAGO_CONFIG_DIR ? path.resolve(process.env.HOKAGO_CONFIG_DIR) : defaultConfigDir();
+}
+
+/** Walk up to the monorepo root (pnpm-workspace.yaml) — works from src/, dist/, and scripts/. */
+function repoRoot(): string {
+  let dir = import.meta.dirname;
+  for (;;) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error("hokago repo root not found");
+    dir = parent;
+  }
+}
+
+function defaultConfigDir(): string {
+  return path.join(repoRoot(), "data", "config");
 }
 
 function artworkStoreDir(): string {
@@ -34,7 +56,9 @@ export async function storeBytes(bytes: Buffer, ext: string): Promise<{ bytesPat
   const hash = createHash("sha256").update(bytes).digest("hex");
   const dir = artworkStoreDir();
   await mkdir(dir, { recursive: true });
-  const bytesPath = path.join(dir, `${hash}${ext}`);
+  // Absolute at write time — consumers resolve `bytesPath` directly and
+  // must never depend on the writer's cwd.
+  const bytesPath = path.resolve(dir, `${hash}${ext}`);
   await writeIfMissing(bytesPath, bytes);
   return { bytesPath, hash };
 }

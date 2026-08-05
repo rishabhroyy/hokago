@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,8 +20,22 @@ function isFontFilename(filename: string): boolean {
   return path.extname(filename).toLowerCase() in FONT_EXT_FORMAT;
 }
 
+function repoRoot(): string {
+  let dir = import.meta.dirname;
+  for (;;) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error("hokago repo root not found");
+    dir = parent;
+  }
+}
+
 function fontStoreDir(): string {
-  return path.join(process.env.HOKAGO_CONFIG_DIR ?? "./data/config", "fonts");
+  // Same never-cwd-relative rule as the artwork store — see artwork.ts.
+  const base = process.env.HOKAGO_CONFIG_DIR
+    ? path.resolve(process.env.HOKAGO_CONFIG_DIR)
+    : path.join(repoRoot(), "data", "config");
+  return path.join(base, "fonts");
 }
 
 /** Hash-dedup a font's bytes into the shared Font store and link it to this file . */

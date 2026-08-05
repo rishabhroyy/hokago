@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 
 import { Prisma, type PrismaClient, type LifecycleState, type TitleType } from "@hokago/db";
 import type {
@@ -407,6 +408,19 @@ async function applyMatch(
 }
 
 /**
+ * The item's poster slot is considered intact only when at least one row
+ * exists AND its bytes are still on disk. A missing row or a dangling path
+ * (moved store, failed write, deleted config) makes the cache-hit path fall
+ * through to revalidation, which re-fetches artwork — "Scan" in the admin
+ * console repairs lost posters instead of just re-confirming the cache.
+ */
+async function posterIntact(db: PrismaClient, mediaItemId: string): Promise<boolean> {
+  const rows = await db.artwork.findMany({ where: { mediaItemId, kind: "POSTER" }, select: { bytesPath: true } });
+  if (rows.length === 0) return false;
+  return rows.every((a) => existsSync(a.bytesPath));
+}
+
+/**
  * One provider's turn in the chain — not the whole chain. Each
  * provider gets its own BullMQ queue with its own `limiter` (own rate
  * budget), so a job here only ever calls this one provider's API; the
@@ -442,7 +456,9 @@ export async function resolveMetadataStep(
       const isFresh = cached.expiresAt === null || cached.expiresAt > new Date();
       if (isFresh && !(await dueForSelfHealing(db, target.mediaItemId, existing.lastResolvedAt))) {
         await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId, providers);
-        return true; // cache hit, zero network
+        // zero-network fast path only when the poster is actually servable —
+        // a broken/missing poster falls through to revalidation and re-fetch.
+        if (await posterIntact(db, target.mediaItemId)) return true;
       }
 
       const result = await provider.search(query, {

@@ -1,4 +1,5 @@
 import type {
+  EpisodeMetadata,
   MetadataLifecycleState,
   MetadataMatch,
   MetadataProvider,
@@ -26,6 +27,12 @@ interface TvMazeShow {
 interface TvMazeSearchHit {
   score: number;
   show: TvMazeShow;
+}
+
+interface TvMazeEpisode {
+  season: number;
+  number: number | null;
+  name: string;
 }
 
 function lifecycleFromStatus(status: string): MetadataLifecycleState {
@@ -98,5 +105,14 @@ export class TvMazeProvider implements MetadataProvider {
     if (!showRes.ok) throw new Error(`TVmaze show fetch failed: ${showRes.status} ${showRes.statusText}`);
     const show = (await showRes.json()) as TvMazeShow;
     return { matches: [toMatch(show)], lastModified: String(updatedAt) };
+  }
+
+  async episodes(providerId: string): Promise<EpisodeMetadata[]> {
+    const res = await fetch(`${BASE_URL}/shows/${encodeURIComponent(providerId)}/episodes`);
+    if (!res.ok) throw new Error(`TVmaze episodes fetch failed: ${res.status} ${res.statusText}`);
+    const list = (await res.json()) as TvMazeEpisode[];
+    return list
+      .filter((ep) => ep.number != null && ep.name)
+      .map((ep) => ({ seasonNumber: ep.season, episodeNumber: ep.number!, title: ep.name }));
   }
 }

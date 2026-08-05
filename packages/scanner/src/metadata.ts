@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { Prisma, type PrismaClient, type LifecycleState, type TitleType } from "@hokago/db";
 import type {
+  EpisodeMetadata,
   MappingSource,
   MetadataArtworkCandidate,
   MetadataLifecycleState,
@@ -224,6 +225,71 @@ async function refreshMetadataCacheExpiry(
 }
 
 /**
+ * Episode-title enrichment, keyed by (seasonNumber, episodeNumber).
+ *
+ * The episode list rides inside the provider's own MetadataCache payload, so
+ * it inherits the match's freshness/TTL policy — an ENDED series fetches its
+ * episode list once, an ONGOING one re-fetches on the same cadence as its
+ * show metadata. Local EPISODE items keep their filename-derived `title` as
+ * the identity; the provider title lands in `extra.episodeTitle`, which the
+ * browse API prefers for display. Degrade, never error: a provider episode
+ * fetch failing must not fail the match that already succeeded.
+ */
+async function enrichEpisodeTitles(
+  db: PrismaClient,
+  seriesId: string,
+  providerName: string,
+  provider: MetadataProvider,
+  providerId: string,
+): Promise<void> {
+  if (!provider.episodes) return;
+  try {
+    const cached = await db.metadataCache.findUnique({
+      where: { provider_externalId: { provider: providerName, externalId: providerId } },
+    });
+    const fresh = cached !== null && (cached.expiresAt === null || cached.expiresAt > new Date());
+    const cachedPayload = (cached?.payload ?? {}) as Record<string, unknown>;
+    const cachedEpisodes = fresh ? cachedPayload.episodes : undefined;
+
+    let episodes: EpisodeMetadata[] | undefined = Array.isArray(cachedEpisodes)
+      ? (cachedEpisodes as EpisodeMetadata[])
+      : undefined;
+    if (!episodes) {
+      episodes = await provider.episodes(providerId);
+      const payload = { ...cachedPayload, episodes } as unknown as Prisma.InputJsonValue;
+      await db.metadataCache.upsert({
+        where: { provider_externalId: { provider: providerName, externalId: providerId } },
+        create: { provider: providerName, externalId: providerId, payload, ttlPolicy: "infinite" },
+        update: { payload },
+      });
+    }
+    if (episodes.length === 0) return;
+
+    const byKey = new Map(episodes.map((ep) => [`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title]));
+    const locals = await db.mediaItem.findMany({
+      where: {
+        kind: "EPISODE",
+        OR: [{ parentId: seriesId }, { parent: { parentId: seriesId } }],
+      },
+      select: { id: true, seasonNumber: true, episodeNumber: true, extra: true },
+    });
+    for (const ep of locals) {
+      if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
+      const title = byKey.get(`${ep.seasonNumber}:${ep.episodeNumber}`);
+      if (!title) continue;
+      const extra = (ep.extra ?? {}) as Record<string, unknown>;
+      if (extra.episodeTitle === title) continue;
+      await db.mediaItem.update({
+        where: { id: ep.id },
+        data: { extra: { ...extra, episodeTitle: title } as Prisma.InputJsonValue },
+      });
+    }
+  } catch {
+    // degrade, never error — enrichment is polish, not a dependency
+  }
+}
+
+/**
  * Wikidata is an ID bridge only ("✅ (ID bridge)", not descriptive/artwork)
  * — it turns this provider's own item ID into an IMDb ID. `IdMapping` is the
  * dataset-level cache (reusable across any item sharing this provider+ID, so a
@@ -323,6 +389,7 @@ export async function resolveMetadataStep(
     if (cached) {
       const isFresh = cached.expiresAt === null || cached.expiresAt > new Date();
       if (isFresh && !(await dueForSelfHealing(db, target.mediaItemId, existing.lastResolvedAt))) {
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId);
         return true; // cache hit, zero network
       }
 
@@ -333,11 +400,13 @@ export async function resolveMetadataStep(
       if (result.notModified) {
         await refreshMetadataCacheExpiry(db, providerName, existing.providerId, cached.lifecycleState);
         await touchLastResolvedAt(db, target.mediaItemId, providerName);
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, existing.providerId);
         return true;
       }
       const revalidated = findAcceptedMatch(query, result.matches);
       if (revalidated) {
         await applyMatch(db, target, providerName, revalidated, result.lastModified, wikidataBridge);
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, revalidated.providerId);
         return true;
       }
       await touchLastResolvedAt(db, target.mediaItemId, providerName);
@@ -349,5 +418,6 @@ export async function resolveMetadataStep(
   const match = findAcceptedMatch(query, result.matches);
   if (!match) return false;
   await applyMatch(db, target, providerName, match, result.lastModified, wikidataBridge);
+  await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, match.providerId);
   return true;
 }

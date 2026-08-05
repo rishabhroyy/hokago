@@ -105,9 +105,28 @@ export interface MetadataSearchResult {
   notModified?: boolean;
 }
 
+/**
+ * One episode's display metadata as the provider catalogs it, keyed by
+ * (seasonNumber, episodeNumber) — the same pair the scanner derives from
+ * filenames, so episodes can be joined without any provider-specific ids.
+ */
+export interface EpisodeMetadata {
+  seasonNumber: number;
+  episodeNumber: number;
+  /** Display title — as released, not derived from a filename. */
+  title: string;
+}
+
 export interface MetadataProvider {
   readonly provider: ProviderName;
   search(query: MetadataQuery, options?: MetadataSearchOptions): Promise<MetadataSearchResult>;
+  /**
+   * Optional per-episode titles for a series the caller already matched via
+   * `search` (keyed by the providerId it returned). Only providers whose
+   * catalog exposes episode lists implement this; a series resolved by a
+   * provider without it simply keeps its locally-derived titles.
+   */
+  episodes?(providerId: string): Promise<EpisodeMetadata[]>;
 }
 
 /**

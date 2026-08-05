@@ -23,6 +23,7 @@ const episodeSelect = {
   seasonNumber: true,
   episodeNumber: true,
   runtimeMs: true,
+  extra: true,
 } as const;
 
 function toCard<T extends { artwork: ArtworkRef[]; files: { id: string }[] }>(
@@ -120,7 +121,11 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
     return {
       ...toCard(rest),
       children: children.map(toCard),
-      episodes: episodes.map(toCard),
+      episodes: episodes.map((ep) => {
+        const card = toCard(ep);
+        const episodeTitle = (ep.extra as { episodeTitle?: string } | null)?.episodeTitle;
+        return episodeTitle ? { ...card, title: episodeTitle } : card;
+      }),
       audioTracks,
       collections: collectionEntries.map((entry) => ({
         id: entry.collection.id,

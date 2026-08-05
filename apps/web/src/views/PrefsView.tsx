@@ -5,6 +5,7 @@ import { Icon } from "../ui/icons";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 /** Raw binary upload — jpeg/png/webp/gif, served from our own origin. */
 async function uploadAvatar(file: File): Promise<string> {
@@ -21,6 +22,18 @@ async function uploadAvatar(file: File): Promise<string> {
     throw new Error(body.error ?? "upload failed");
   }
   return ((await res.json()) as { avatarPath: string }).avatarPath;
+}
+
+function ZoneStatus({ err, note }: { err: string | null; note: string | null }) {
+  const ok = !err;
+  const msg = err ?? note;
+  if (!msg) return null;
+  return (
+    <p className={`mt-3 flex items-center gap-1.5 text-small font-semibold ${ok ? "text-wii-deep" : "text-accent"}`}>
+      <Icon name={ok ? "check" : "alert"} className="h-3.5 w-3.5 shrink-0" />
+      {msg}
+    </p>
+  );
 }
 
 export function PrefsView() {
@@ -50,6 +63,10 @@ export function PrefsView() {
     if (!file || !profile) return;
     setAvatarErr(null);
     setAvatarNote(null);
+    if (!AVATAR_TYPES.has(file.type)) {
+      setAvatarErr("that file type is not supported — use jpeg, png, webp, or gif");
+      return;
+    }
     if (file.size > MAX_AVATAR_BYTES) {
       setAvatarErr("image is too big — keep it under 8 MB");
       return;
@@ -127,111 +144,111 @@ export function PrefsView() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[640px] px-6 pb-16 pt-24 max-[820px]:px-4">
-      <div className="mb-8">
-        <h1 className="font-display text-title font-bold">preferences</h1>
-        <p className="mt-1 text-meta text-ink-2">look after your own account — picture, name, password.</p>
+    <div className="min-h-screen px-12 pb-20 pt-[86px] max-[820px]:px-5">
+      <div className="pb-[26px]">
+        <div className="mb-[18px] flex items-baseline gap-3.5">
+          <h2 className="font-display text-title font-bold tracking-[-0.01em]">preferences</h2>
+          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
+            account settings
+          </span>
+        </div>
+        <p className="max-w-[52ch] text-body text-ink-2">
+          look after your own account — the picture people see, the name beside it, and the password that
+          keeps it yours.
+        </p>
       </div>
 
-      <section className="panel mb-6 rounded-[26px] p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-card-head font-bold text-ink">Profile picture</h2>
-          {avatarNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{avatarNote}</span>}
-        </div>
-        <div className="flex items-center gap-5">
-          <span className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-title font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70">
-            {preview ? (
-              <img src={preview} alt="" className="h-full w-full object-cover" />
-            ) : profile?.avatarPath ? (
-              <img src={profile.avatarPath} alt="" className="h-full w-full object-cover" />
-            ) : (
-              (profile?.name?.[0] ?? "h").toLowerCase()
-            )}
-          </span>
-          <div className="min-w-0">
-            <input
-              ref={fileRef}
-              type="file"
-              accept={ACCEPT}
-              className="hidden"
-              onChange={onPick}
-              disabled={avatarBusy}
-            />
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={avatarBusy}
-              onClick={() => fileRef.current?.click()}
-            >
-              <Icon name="edit" className="h-4 w-4" />
-              {avatarBusy ? "uploading…" : "Choose image"}
-            </button>
-            <p className="mt-2 text-small text-ink-3">jpeg, png, webp, or gif — stored on this server, no third-party links.</p>
-            {avatarErr && <p className="mt-2 text-small font-semibold text-accent">{avatarErr}</p>}
+      <div className="panel mx-auto w-full max-w-[720px] rounded-panel px-7 shadow-panel max-[820px]:px-5">
+        <section className="border-b border-line/60 py-7 first:pt-7">
+          <div className="flex items-start gap-5">
+            <span className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-title font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70">
+              {preview ? (
+                <img src={preview} alt="" className="h-full w-full object-cover" />
+              ) : profile?.avatarPath ? (
+                <img src={profile.avatarPath} alt="" className="h-full w-full object-cover" />
+              ) : (
+                (profile?.name?.[0] ?? "h").toLowerCase()
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <h3 className="font-display text-section font-bold">Profile picture</h3>
+              <p className="mt-1 text-small text-ink-3">
+                jpeg, png, webp, or gif — served from this server, never a third-party link.
+              </p>
+              <div className="mt-4">
+                <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={onPick} disabled={avatarBusy} />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={avatarBusy}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Icon name="edit" className="h-4 w-4" />
+                  {avatarBusy ? "uploading…" : profile?.avatarPath ? "Change picture" : "Choose image"}
+                </button>
+              </div>
+              <ZoneStatus err={avatarErr} note={avatarNote} />
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="panel mb-6 rounded-[26px] p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-card-head font-bold text-ink">Display name</h2>
-          {nameNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{nameNote}</span>}
-        </div>
-        <form onSubmit={saveName} className="flex flex-col gap-3">
-          <input
-            className="input"
-            placeholder={profile?.name ?? "profile name"}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={40}
-          />
-          {nameErr && <p className="text-small font-semibold text-accent">{nameErr}</p>}
-          <div>
-            <button type="submit" className="btn btn-primary" disabled={nameBusy || !name.trim()}>
+        <section className="border-b border-line/60 py-7">
+          <h3 className="font-display text-section font-bold">Display name</h3>
+          <p className="mt-1 text-small text-ink-3">shows in the corner of the screen.</p>
+          <form onSubmit={saveName} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <input
+              className="input flex-1"
+              placeholder={profile?.name ?? "profile name"}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={40}
+            />
+            <button type="submit" className="btn btn-primary shrink-0" disabled={nameBusy || !name.trim()}>
               {nameBusy ? "saving…" : "Save name"}
             </button>
-          </div>
-        </form>
-      </section>
+          </form>
+          <ZoneStatus err={nameErr} note={nameNote} />
+        </section>
 
-      <section className="panel rounded-[26px] p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-card-head font-bold text-ink">Password</h2>
-          {pwNote && <span className="ml-auto rounded-full bg-wii/12 px-3 py-1 text-small font-semibold text-wii-deep">{pwNote}</span>}
-        </div>
-        <form onSubmit={savePassword} className="flex flex-col gap-3">
-          <input
-            className="input"
-            type="password"
-            placeholder="Current password"
-            value={cur}
-            onChange={(e) => setCur(e.target.value)}
-            autoComplete="current-password"
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="New password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            autoComplete="new-password"
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="Confirm new password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            autoComplete="new-password"
-          />
-          {pwErr && <p className="text-small font-semibold text-accent">{pwErr}</p>}
-          <div>
-            <button type="submit" className="btn btn-primary" disabled={pwBusy}>
-              {pwBusy ? "changing…" : "Change password"}
-            </button>
-          </div>
-        </form>
-      </section>
+        <section className="py-7">
+          <h3 className="font-display text-section font-bold">Password</h3>
+          <p className="mt-1 text-small text-ink-3">
+            forgot it? there is no reset flow — that is an admin action.
+          </p>
+          <form onSubmit={savePassword} className="mt-4 flex max-w-[420px] flex-col gap-3">
+            <input
+              className="input"
+              type="password"
+              placeholder="Current password"
+              value={cur}
+              onChange={(e) => setCur(e.target.value)}
+              autoComplete="current-password"
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="New password"
+              value={pw}
+              onChange={(e) => setPw(e.target.value)}
+              autoComplete="new-password"
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Confirm new password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
+            />
+            <div className="pt-1">
+              <button type="submit" className="btn btn-primary" disabled={pwBusy}>
+                {pwBusy ? "changing…" : "Change password"}
+              </button>
+            </div>
+          </form>
+          <ZoneStatus err={pwErr} note={pwNote} />
+        </section>
+      </div>
     </div>
   );
 }

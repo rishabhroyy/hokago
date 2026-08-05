@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ContinueWatchingEntry } from "@hokago/contract/playback";
 import { api } from "../api-client";
 import {
@@ -52,6 +52,23 @@ export function HomeView() {
     };
   }, []);
 
+  // Streaming-style genre rails: group every top-level item by its genres,
+  // rank the genres by how full they are, and show the richest rails.
+  const genreRails = useMemo(() => {
+    const byGenre = new Map<string, MediaCard[]>();
+    for (const card of recentlyAdded) {
+      for (const g of card.genres) {
+        const list = byGenre.get(g);
+        if (list) list.push(card);
+        else byGenre.set(g, [card]);
+      }
+    }
+    return [...byGenre.entries()]
+      .filter(([, list]) => list.length >= 3)
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 6);
+  }, [recentlyAdded]);
+
   const openDetail = (item: TileItem) => navigate(paths.detail(item.id));
   const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.id);
 
@@ -73,13 +90,13 @@ export function HomeView() {
           <span className="mb-6 flex h-24 w-24 items-center justify-center rounded-[28px] bg-[linear-gradient(135deg,#45ADDD,#187AA5)] text-white shadow-btn-blue">
             <LogoMark className="h-12 w-12" />
           </span>
-          <h1 className="mb-2 font-display text-[28px] font-bold">welcome to hokago</h1>
-          <p className="mb-8 text-[14px] leading-relaxed text-ink-2">
+          <h1 className="mb-2 font-display text-title font-bold">welcome to hokago</h1>
+          <p className="mb-8 text-body leading-relaxed text-ink-2">
             nothing on the menu yet — add a library from the admin panel and your channels will show up here.
           </p>
-          <a href="/admin" className="btn btn-primary">
+          <button className="btn btn-primary" onClick={() => navigate(paths.admin())}>
             Open admin panel
-          </a>
+          </button>
         </div>
       </div>
     );
@@ -138,12 +155,15 @@ export function HomeView() {
                 <img
                   src={heroPoster}
                   alt=""
-                  className="absolute right-[3.5%] top-1/2 h-[86%] -translate-y-1/2 rotate-2 rounded-[20px] border-[5px] border-white/90 object-cover shadow-[0_18px_40px_-14px_rgba(60,40,30,0.5)]"
+                  className="absolute right-[3.5%] top-1/2 h-[86%] -translate-y-1/2 rotate-2 rounded-[20px] border-[5px] border-white/90 object-cover shadow-[0_18px_40px_-14px_rgba(60,40,30,0.5)] max-[1024px]:right-[-6%] max-[1024px]:h-[52%] max-[1024px]:rotate-0 max-[1024px]:opacity-45 max-[1024px]:border-white/60"
                 />
               )}
             </div>
             <div className="pointer-events-none absolute inset-x-0 top-0 z-[2] h-[42%] bg-gradient-to-b from-white/25 to-transparent" />
-            <div className="pointer-events-none absolute inset-0 z-[2] bg-gradient-to-r from-[rgba(50,35,25,0.38)] via-[rgba(50,35,25,0.08)] to-transparent" />
+            {/* left→right scrim keeps the title block readable over channel art;
+                below 820px the art sits under full-width text, so it darkens harder
+                and (with the poster shrunk/dimmed above) carries the whole card */}
+            <div className="pointer-events-none absolute inset-0 z-[2] bg-[linear-gradient(to_right,rgba(50,35,25,0.38),rgba(50,35,25,0.08)_55%,rgba(50,35,25,0)_78%)] max-[820px]:bg-[linear-gradient(to_right,rgba(50,35,25,0.72),rgba(50,35,25,0.5)_50%,rgba(50,35,25,0.22)_82%,rgba(50,35,25,0.12))]" />
             {/* faint dot texture over the scene — the "printed channel" finish */}
             <div
               className="pointer-events-none absolute inset-0 z-[2] opacity-[0.5]"
@@ -152,15 +172,15 @@ export function HomeView() {
 
             <div className="relative z-[3] flex h-full max-w-[640px] flex-col justify-end px-12 pb-11 text-white max-[820px]:px-[22px] max-[820px]:pb-[34px]">
               <div className="mb-3.5 max-[820px]:mb-3">
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/45 bg-white/20 px-3.5 py-1.5 font-mono text-[10.5px] font-bold uppercase tracking-[0.16em] backdrop-blur-md">
+                <span className="inline-flex items-center gap-2 rounded-full border border-white/45 bg-white/20 px-3.5 py-1.5 font-mono text-kicker font-bold uppercase tracking-[0.16em] backdrop-blur-md">
                   <span className="h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                   {heroEntry ? "Continue watching" : "Recently added"}
                 </span>
               </div>
-              <h1 className="mb-3 font-display text-[48px] font-black leading-[1.02] tracking-[-0.015em] drop-shadow-[0_2px_8px_rgba(60,40,30,0.35)] [text-wrap:balance] max-[820px]:text-[34px] max-[820px]:leading-[1.1]">
+              <h1 className="mb-3 font-display text-display font-black leading-[1.02] tracking-[-0.015em] drop-shadow-[0_2px_8px_rgba(60,40,30,0.35)] [text-wrap:balance] max-[820px]:text-[34px] max-[820px]:leading-[1.1]">
                 {heroTitle}
               </h1>
-              <div className="mb-4 flex items-center gap-2.5 text-[12.5px] font-semibold">
+              <div className="mb-4 flex items-center gap-2.5 text-small font-semibold">
                 <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 backdrop-blur-md">{heroSub}</span>
                 {heroYear != null && (
                   <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 font-mono backdrop-blur-md">
@@ -214,6 +234,9 @@ export function HomeView() {
         onPrefetch={prefetch}
       />
       <Row title="Recently added" items={recentlyAdded.map(cardToTile)} onOpen={openDetail} onPrefetch={prefetch} />
+      {genreRails.map(([genre, items]) => (
+        <Row key={genre} title={genre} items={items.map(cardToTile)} onOpen={openDetail} onPrefetch={prefetch} />
+      ))}
     </div>
   );
 }

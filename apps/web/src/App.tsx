@@ -7,9 +7,12 @@ import { DetailView } from "./views/DetailView";
 import { LoginView } from "./views/LoginView";
 import { NotFoundView } from "./views/NotFoundView";
 import { WatchPage } from "./WatchPage";
+import { AdminView } from "./admin/AdminView";
 
-function Routes() {
+function Shell() {
   const { route } = useRouter();
+  // Admin is a full-screen console with its own sidebar — no top pill nav.
+  if (route.view === "admin") return <AdminView />;
   if (route.view === "login") return <LoginView />;
   // Anonymous session — don't render views that will just 401 into a blank page.
   if (!localStorage.getItem("hokago_access_token")) return <LoginView />;
@@ -27,12 +30,21 @@ function Routes() {
   }
 }
 
+function Chrome() {
+  const { route } = useRouter();
+  return (
+    <>
+      {route.view !== "admin" && <TopNav />}
+      <Shell />
+    </>
+  );
+}
+
 export function App() {
   return (
     <SoundProvider>
       <RouterProvider>
-        <TopNav />
-        <Routes />
+        <Chrome />
       </RouterProvider>
     </SoundProvider>
   );

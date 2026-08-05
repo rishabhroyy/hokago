@@ -12,6 +12,7 @@ const cardSelect = {
   title: true,
   sortTitle: true,
   year: true,
+  genres: true,
   createdAt: true,
   artwork: { select: { id: true, kind: true, priority: true } },
   files: { select: { id: true }, take: 1 },

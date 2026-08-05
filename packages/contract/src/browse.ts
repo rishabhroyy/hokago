@@ -33,6 +33,7 @@ export const MediaCard = z.object({
   backdropUrl: z.string().nullable(),
   /** Primary playable file, if any (leaf MOVIE/EPISODE items only) — null for SERIES/SEASON. */
   mediaFileId: z.string().nullable(),
+  genres: z.array(z.string()),
   createdAt: z.coerce.date(),
 });
 export type MediaCard = z.infer<typeof MediaCard>;

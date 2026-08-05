@@ -57,6 +57,27 @@ import {
   QueueRetriedResponse,
   QueueCleanBody,
   QueueCleanResponse,
+  AdminSummary,
+  AdminLibrary,
+  AdminLibraryParams,
+  AdminLibraryCreateBody,
+  AdminLibraryUpdateBody,
+  AdminScanResponse,
+  AdminAccount,
+  AdminAccountParams,
+  AdminAccountCreateBody,
+  AdminAccountUpdateBody,
+  AdminAccountResponse,
+  AdminDeletedResponse,
+  AdminInvite,
+  AdminInviteParams,
+  AdminSession,
+  ServerSettings,
+  ServerSettingsUpdateBody,
+  ProviderSetting,
+  ProviderSettingParams,
+  ProviderSettingUpdateBody,
+  AttentionItem,
   ErrorResponse as AdminErrorResponse,
 } from "./admin.js";
 import {
@@ -329,6 +350,169 @@ export function buildOpenApiDocument(): OpenAPIObject {
       200: { description: "OK", ...json(QueueCleanResponse) },
       404: { description: "Unknown queue", ...json(AdminErrorResponse) },
     },
+  });
+
+ // Admin management (/admin-api)
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/summary",
+    summary: "Dashboard summary: counts, bytes, queue states, attention",
+    responses: { 200: { description: "OK", ...json(AdminSummary) } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/libraries",
+    summary: "List all libraries",
+    responses: { 200: { description: "OK", ...json(z.array(AdminLibrary)) } },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/admin-api/libraries",
+    summary: "Create a library",
+    request: { body: json(AdminLibraryCreateBody) },
+    responses: {
+      201: { description: "Created", ...json(AdminLibrary) },
+      409: { description: "rootPath already in use", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/admin-api/libraries/{id}",
+    summary: "Update a library",
+    request: { params: AdminLibraryParams, body: json(AdminLibraryUpdateBody) },
+    responses: {
+      200: { description: "OK", ...json(AdminLibrary) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/admin-api/libraries/{id}",
+    summary: "Delete a library and everything under it",
+    request: { params: AdminLibraryParams },
+    responses: {
+      200: { description: "OK", ...json(AdminDeletedResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/admin-api/libraries/{id}/scan",
+    summary: "Enqueue a scan for a library",
+    request: { params: AdminLibraryParams },
+    responses: {
+      200: { description: "OK", ...json(AdminScanResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/accounts",
+    summary: "List all accounts",
+    responses: { 200: { description: "OK", ...json(z.array(AdminAccount)) } },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/admin-api/accounts",
+    summary: "Create an account",
+    request: { body: json(AdminAccountCreateBody) },
+    responses: {
+      201: { description: "Created", ...json(AdminAccountResponse) },
+      409: { description: "Username taken", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/admin-api/accounts/{id}",
+    summary: "Update an account",
+    request: { params: AdminAccountParams, body: json(AdminAccountUpdateBody) },
+    responses: {
+      200: { description: "OK", ...json(AdminAccountResponse) },
+      400: { description: "Self-lockout attempt", ...json(AdminErrorResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/admin-api/accounts/{id}",
+    summary: "Delete an account",
+    request: { params: AdminAccountParams },
+    responses: {
+      200: { description: "OK", ...json(AdminDeletedResponse) },
+      400: { description: "Cannot delete self", ...json(AdminErrorResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/invites",
+    summary: "List invite codes",
+    responses: { 200: { description: "OK", ...json(z.array(AdminInvite)) } },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/admin-api/invites",
+    summary: "Create an invite code",
+    request: { body: json(CreateInviteBody.optional()) },
+    responses: { 200: { description: "OK", ...json(InviteResponse) } },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/admin-api/invites/{id}",
+    summary: "Revoke an invite code",
+    request: { params: AdminInviteParams },
+    responses: {
+      200: { description: "OK", ...json(AdminDeletedResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/sessions",
+    summary: "List all sessions",
+    responses: { 200: { description: "OK", ...json(z.array(AdminSession)) } },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/admin-api/sessions/{id}/revoke",
+    summary: "Revoke a session",
+    request: { params: AdminInviteParams },
+    responses: {
+      200: { description: "OK", ...json(RevokedResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/settings",
+    summary: "Get server settings",
+    responses: { 200: { description: "OK", ...json(ServerSettings) } },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/admin-api/settings",
+    summary: "Update server settings",
+    request: { body: json(ServerSettingsUpdateBody) },
+    responses: { 200: { description: "OK", ...json(ServerSettings) } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/providers",
+    summary: "List provider toggles",
+    responses: { 200: { description: "OK", ...json(z.array(ProviderSetting)) } },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/admin-api/providers/{provider}",
+    summary: "Toggle a provider",
+    request: { params: ProviderSettingParams, body: json(ProviderSettingUpdateBody) },
+    responses: { 200: { description: "OK", ...json(ProviderSetting) } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/attention",
+    summary: "Items needing attention",
+    responses: { 200: { description: "OK", ...json(z.array(AttentionItem)) } },
   });
 
  // Media files

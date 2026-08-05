@@ -1,7 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { Queue, getConnection, QUEUE_NAMES, type QueueName } from "@hokago/queue";
 import {
   QueueListResponse,
@@ -15,8 +11,6 @@ import {
   ErrorResponse,
 } from "@hokago/contract/admin";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const connection = getConnection();
 const queues: Record<QueueName, Queue> = {
@@ -34,26 +28,25 @@ function queueOrNotFound(name: string): Queue | null {
   return name in queues ? queues[name as QueueName] : null;
 }
 
+/** name + paused + job-counts for every queue — shared by /admin/queues and the dashboard summary. */
+export async function queueSummaries() {
+  return Promise.all(
+    Object.entries(queues).map(async ([name, queue]) => ({
+      name,
+      paused: await queue.isPaused(),
+      counts: await queue.getJobCounts(...JOB_STATES),
+    })),
+  );
+}
+
 /** Admin queue UI : view/pause/resume/retry-failed/clean per queue, backed directly by BullMQ.
  *  The HTML shell is public (it's just markup — the browser can't attach a Bearer
  *  header to a navigation), but every data/action endpoint requires an admin JWT. */
 export async function registerAdminRoutes(app: ZodFastifyInstance): Promise<void> {
   const adminOnly = { preHandler: [app.authenticate, app.requireAdmin] };
 
-  app.get("/admin", async (_req, reply) => {
-    const html = await readFile(path.join(__dirname, "admin.html"), "utf-8");
-    reply.type("text/html").send(html);
-  });
-
   app.get("/admin/queues", { ...adminOnly, schema: { response: { 200: QueueListResponse } } }, async () => {
-    const result = await Promise.all(
-      Object.entries(queues).map(async ([name, queue]) => ({
-        name,
-        paused: await queue.isPaused(),
-        counts: await queue.getJobCounts(...JOB_STATES),
-      })),
-    );
-    return result;
+    return queueSummaries();
   });
 
   app.get(

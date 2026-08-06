@@ -10,7 +10,7 @@
    every Tailwind utility that references these emits `var(--…)` and flips
    with the theme. Values are verbatim from the approved hokago UI. */
 :root {
-  --e-snap: cubic-bezier(.4, 1.4, .5, 1); /* press / hover / pop */
+  --e-snap: cubic-bezier(.25, .5, .3, 1); /* press / hover — quiet, no bounce */
   --e: cubic-bezier(.4, 0, .2, 1); /* fades / view transitions */
   --paper: #F6F0E6;
   --paper-2: #EFE7D8;
@@ -72,16 +72,16 @@ body {
   color: #35302B;
   font-family: "Plus Jakarta Sans", sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* wii-dream wallpaper: warm paper, blue dot
-     grid, soft top light, and three huge out-of-focus pastel auras — vivid
-     blue top-right, coral left, gold low-center */
+  /* wii-dream wallpaper: warm paper, faint blue dot grid, soft top light; the
+     pastel auras are dialed far back so the surface reads calm and the titles
+     (and the single blue accent) carry the color instead of the page */
   background-color: #F5EFE4;
   background-image:
-    radial-gradient(130% 70% at 50% -10%, rgba(255, 248, 233, 0.95), transparent 52%),
-    radial-gradient(48% 42% at 92% -4%, rgba(79, 184, 224, 0.22), transparent 68%),
-    radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.14), transparent 70%),
-    radial-gradient(36% 50% at 50% 70%, rgba(227, 163, 76, 0.1), transparent 72%),
-    radial-gradient(rgba(79, 184, 224, 0.09) 1px, transparent 1.3px);
+    radial-gradient(130% 70% at 50% -10%, rgba(255, 248, 233, 0.9), transparent 52%),
+    radial-gradient(48% 42% at 92% -4%, rgba(79, 184, 224, 0.07), transparent 68%),
+    radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.05), transparent 70%),
+    radial-gradient(36% 50% at 50% 70%, rgba(227, 163, 76, 0.04), transparent 72%),
+    radial-gradient(rgba(79, 184, 224, 0.05) 1px, transparent 1.3px);
   background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
   background-repeat: no-repeat;
   background-attachment: fixed;
@@ -92,11 +92,11 @@ body {
   color: var(--ink);
   background-color: #171410;
   background-image:
-    radial-gradient(130% 70% at 50% -10%, rgba(255, 244, 224, 0.05), transparent 52%),
-    radial-gradient(48% 42% at 92% -4%, rgba(99, 195, 230, 0.09), transparent 68%),
-    radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.05), transparent 70%),
-    radial-gradient(36% 50% at 50% 70%, rgba(237, 184, 102, 0.045), transparent 72%),
-    radial-gradient(rgba(143, 224, 245, 0.05) 1px, transparent 1.3px);
+    radial-gradient(130% 70% at 50% -10%, rgba(255, 244, 224, 0.04), transparent 52%),
+    radial-gradient(48% 42% at 92% -4%, rgba(99, 195, 230, 0.05), transparent 68%),
+    radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.03), transparent 70%),
+    radial-gradient(36% 50% at 50% 70%, rgba(237, 184, 102, 0.03), transparent 72%),
+    radial-gradient(rgba(143, 224, 245, 0.04) 1px, transparent 1.3px);
   background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
   background-repeat: no-repeat;
   background-attachment: fixed;
@@ -107,19 +107,17 @@ body {
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #C8DDE8; border-radius: 100px; border: 3px solid #F5EFE4; }
-::-webkit-scrollbar-thumb:hover { background: #8FE0F5; }
+::-webkit-scrollbar-thumb:hover { background: #6FB0CC; }
 ::-webkit-scrollbar-track { background: transparent; }
 .dark ::-webkit-scrollbar-thumb { background: #3A342D; border: 3px solid #171410; }
-.dark ::-webkit-scrollbar-thumb:hover { background: #4E86A0; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #477285; }
 
 :focus-visible { outline: 2.5px solid #4FB8E0; outline-offset: 2px; }
 
 /* Applied via inline el.style.animation in effects.ts — Tailwind v4 only emits
    a @keyframes when a matching animate-* utility is used, so these must be raw. */
-@keyframes popsel { 0%,100% { transform: scale(1); } 42% { transform: scale(1.1); } }
-@keyframes riseIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes shimmer { from { background-position: -300px 0; } to { background-position: 300px 0; } }
-@keyframes drift { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-14px) rotate(2deg); } }
 
 /* skeleton placeholder: soft paper shimmer instead of a flat pulse */
 .skeleton {
@@ -131,7 +129,8 @@ body {
   background: linear-gradient(90deg, #26221D 25%, #2E2A24 50%, #26221D 75%);
 }
 
-/* glossy top-sheen on pill buttons (.btn), from the approved hokago UI */
+/* soft top-sheen on pill buttons (.btn) — kept, but subtler so buttons
+   read as surfaces rather than chrome */
 .btn::after {
   content: "";
   position: absolute;
@@ -140,7 +139,7 @@ body {
   right: 6%;
   height: 46%;
   border-radius: 100px 100px 60% 60% / 100% 100% 34% 34%;
-  background: linear-gradient(rgba(255, 255, 255, 0.5), transparent);
+  background: linear-gradient(rgba(255, 255, 255, 0.28), transparent);
   pointer-events: none;
 }
 
@@ -165,11 +164,11 @@ body {
   background: linear-gradient(180deg, #45ADDD, #187AA5);
   box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 6px 18px -6px rgba(46,155,196,0.65);
   text-shadow: 0 1px 2px rgba(23,122,158,0.4);
-  transition: transform .15s cubic-bezier(.4,1.4,.5,1), box-shadow .2s ease;
+  transition: transform .15s cubic-bezier(.25,.5,.3,1), box-shadow .2s ease;
 }
 .btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 4px 24px -2px rgba(79,184,224,0.8), 0 0 0 3px rgba(255,255,255,0.9), 0 0 0 5px rgba(79,184,224,0.5);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 8px 22px -10px rgba(46,155,196,0.5);
 }
 .btn-primary:active { transform: scale(.96); }
 
@@ -189,9 +188,9 @@ body {
   border: 1px solid rgba(255,255,255,0.9);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 4px 12px -4px rgba(120,80,60,0.3);
   backdrop-filter: blur(8px);
-  transition: transform .15s cubic-bezier(.4,1.4,.5,1), box-shadow .2s ease, color .15s ease;
+  transition: transform .15s cubic-bezier(.25,.5,.3,1), box-shadow .2s ease, color .15s ease;
 }
-.btn-ghost:hover { transform: translateY(-2px); color: #2E9BC4; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 18px -4px rgba(79,184,224,0.55); }
+.btn-ghost:hover { transform: translateY(-1px); color: #2E9BC4; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 14px -8px rgba(79,184,224,0.35); }
 .btn-ghost:active { transform: scale(.96); }
 
 /* dark: frosted charcoal pill — still reads on the colorful banners it sits
@@ -204,7 +203,7 @@ body {
 }
 .dark .btn-ghost:hover {
   color: var(--wii-deep);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 6px 18px -4px rgba(99,195,230,0.35);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 6px 14px -8px rgba(99,195,230,0.3);
 }
 
 /* floating white panel — nav, login card, about cards */
@@ -235,7 +234,7 @@ body {
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .input::placeholder { color: #8B8177; }
-.input:focus { border-color: #4FB8E0; box-shadow: inset 0 2px 4px rgba(120,80,60,0.07), 0 0 0 3.5px rgba(79,184,224,0.28); }
+.input:focus { border-color: #4FB8E0; box-shadow: inset 0 2px 4px rgba(120,80,60,0.07), 0 0 0 3px rgba(79,184,224,0.18); }
 
 .dark .input {
   background: #1F1C17;
@@ -246,7 +245,7 @@ body {
 .dark .input::placeholder { color: var(--ink-3); }
 .dark .input:focus {
   border-color: var(--wii);
-  box-shadow: inset 0 2px 4px rgba(0,0,0,0.35), 0 0 0 3.5px rgba(99,195,230,0.28);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.35), 0 0 0 3px rgba(99,195,230,0.16);
 }
 
 @media (prefers-reduced-motion: reduce) {

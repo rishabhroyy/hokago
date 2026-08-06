@@ -141,7 +141,7 @@ export function HomeView() {
             {/* channel-art scene */}
             <div className="pointer-events-none absolute inset-0 z-[1]">
               {!heroPoster && !heroBackdrop && (
-                <span className="absolute bottom-[-34px] right-[4%] h-[250px] w-[250px] animate-bob text-white opacity-90 max-[820px]:h-[168px] max-[820px]:w-[168px] max-[820px]:opacity-55">
+                <span className="absolute bottom-[-34px] right-[4%] h-[250px] w-[250px] text-white opacity-70 max-[820px]:h-[168px] max-[820px]:w-[168px] max-[820px]:opacity-45">
                   <Icon name={iconFor(heroId)} className="h-full w-full drop-shadow-[0_6px_14px_rgba(90,50,30,0.3)]" />
                 </span>
               )}

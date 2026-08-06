@@ -8,7 +8,7 @@ import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
 import { cardToTile } from "../ui/tile-mapping";
 import { useWiiSound } from "../ui/useWiiSound";
-import { popAndPing, useReducedMotion, useStaggerEntrance } from "../ui/effects";
+import { useReducedMotion, useStaggerEntrance } from "../ui/effects";
 import { sanitizeOverview } from "../ui/sanitize";
 
 function seasonLabel(seasonNumber: number | null): string {
@@ -51,7 +51,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
             onPointerEnter={() => s.hover()}
             onClick={(e) => onOpen(ep, e.currentTarget)}
           >
-            <div className="relative rounded-[18px] bg-card p-[5px] shadow-panel transition-shadow duration-200 group-hover:shadow-wii-ring">
+            <div className="relative rounded-[18px] bg-card p-[5px] shadow-panel transition-shadow duration-200 group-hover:shadow-cardLift">
               <div
                 className={`relative aspect-video overflow-hidden rounded-[13px] ${ep.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(ep.id)]}`}
               >
@@ -188,8 +188,6 @@ export function DetailView({ itemId }: { itemId: string }) {
   const openEpisode = (ep: EpisodeCard, el: HTMLElement) => {
     if (!ep.mediaFileId) return;
     s.select();
-    const r = el.getBoundingClientRect();
-    popAndPing(el, r.left + r.width / 2, r.top + r.height / 2, reduced);
     navigate(paths.player(ep.mediaFileId, ep.id, profileId ?? "dev"));
   };
 
@@ -272,7 +270,6 @@ export function DetailView({ itemId }: { itemId: string }) {
                     className="btn btn-primary"
                     onClick={(e) => {
                       s.select();
-                      popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
                       navigate(paths.player(playMediaFileId, playMediaItemId!, profileId ?? "dev", selectedAudio));
                     }}
                   >

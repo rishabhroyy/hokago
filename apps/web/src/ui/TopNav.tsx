@@ -12,7 +12,7 @@ import { useSoundToggle, useWiiSound } from "./useWiiSound";
 import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
 import { HUE_CLASS, hueFor, iconFor } from "./Tile";
-import { popAndPing, starShower, useKonami, useReducedMotion } from "./effects";
+import { starShower, useKonami } from "./effects";
 import { ThemeToggle } from "./useTheme";
 
 function useClock() {
@@ -77,13 +77,10 @@ export function TopNav() {
     starShower();
   });
 
-  const reduced = useReducedMotion();
-
   if (route.view === "player" || route.view === "login") return null;
 
   const go = (path: string, e: React.MouseEvent<HTMLElement>) => {
     s.select();
-    popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
     navigate(path);
   };
 
@@ -119,7 +116,6 @@ export function TopNav() {
         >
           <LogoMark className="h-6 w-6" />
           hokago
-          <span className="pointer-events-none absolute inset-0 animate-shine bg-[linear-gradient(115deg,transparent_42%,rgba(255,255,255,0.8)_50%,transparent_58%)]" />
         </button>
         <div className="flex gap-1 max-[820px]:hidden">
           <button className={linkCls(route.view === "home")} onClick={(e) => go(paths.home(), e)}>

@@ -24,6 +24,9 @@ async function main() {
 
   const passwordHash = await hashPassword(password);
   const account = await db.account.create({ data: { username, passwordHash, isAdmin: true } });
+  // Same rule as registration: every account gets a primary profile named
+  // after the username, or prefs/avatar features silently no-op.
+  await db.profile.create({ data: { accountId: account.id, name: username } });
   console.log(`created admin account "${username}" (id: ${account.id})`);
 }
 

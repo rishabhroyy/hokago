@@ -64,9 +64,15 @@ export function PrefsView() {
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file || !profile) return;
+    if (!file) return;
     setAvatarErr(null);
     setAvatarNote(null);
+    if (!profile) {
+      // Should never happen (every account gets a profile on register/login)
+      // but a missing profile must not swallow the action silently.
+      setAvatarErr("no profile on your account yet — sign out and back in");
+      return;
+    }
     if (file.size > MAX_AVATAR_BYTES) {
       setAvatarErr("image is too big — keep it under 8 MB");
       return;
@@ -87,9 +93,13 @@ export function PrefsView() {
 
   const saveName = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profile || nameBusy) return;
+    if (nameBusy) return;
     const trimmed = name.trim();
     if (!trimmed) return;
+    if (!profile) {
+      setNameErr("no profile on your account yet — sign out and back in");
+      return;
+    }
     setNameBusy(true);
     setNameErr(null);
     setNameNote(null);

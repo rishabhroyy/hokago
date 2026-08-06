@@ -28,6 +28,19 @@ import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
 
+/**
+ * Every account has a primary profile (profiles[0] by creation order) — the
+ * whole frontend treats it as the account. Registration and bootstrap-admin
+ * seed one, but accounts created through arbitrary scripts or old seeds may
+ * lack it; lazily provisioning here heals any such account on its first
+ * login rather than silently disabling prefs/avatar features.
+ */
+async function ensurePrimaryProfile(accountId: string, username: string): Promise<void> {
+  const profile = await db.profile.findFirst({ where: { accountId }, orderBy: { createdAt: "asc" } });
+  if (profile) return;
+  await db.profile.create({ data: { accountId, name: username } });
+}
+
 /** username/password auth, argon2id, JWT access + opaque refresh token, sessions table makes tokens genuinely revocable. */
 export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void> {
   app.post(
@@ -70,6 +83,8 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
 
       const valid = await verifyPassword(account.passwordHash, password);
       if (!valid) return reply.code(401).send({ error: "invalid credentials" });
+
+      await ensurePrimaryProfile(account.id, account.username);
 
       const refreshToken = generateOpaqueToken();
       const session = await db.session.create({

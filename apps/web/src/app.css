@@ -12,6 +12,8 @@
 :root {
   --e-snap: cubic-bezier(.4, 1.4, .5, 1); /* press / hover / pop */
   --e: cubic-bezier(.4, 0, .2, 1); /* fades / view transitions */
+  --glow-x: 0%; /* lamp-glow pointer trail, written by useLampTrail */
+  --glow-y: 0%;
   --paper: #F6F0E6;
   --paper-2: #EFE7D8;
   --card: #FFFFFF;
@@ -84,9 +86,9 @@ body {
    The wii-dream canvas now lives on two fixed compositor layers and breathes
    in real time. Layer 1 (::before) carries the whole scene — blue dot grid,
    top light, and the three huge pastel auras (blue top-right, coral left,
-   gold low-center) — and very slowly drifts, scales, and tilts as one field,
-   like the wallpaper is gently alive. Layer 2 (::after) is just the warm
-   lamp-glow at the top, breathing on its own faster rhythm. Everything moves
+   gold low-center) — and slowly drifts, scales, and tilts as one field, like
+   the wallpaper is gently alive. Layer 2 (::after) is a warm lamp-glow that
+   breathes on its own faster rhythm and trails the pointer. Everything moves
    via transform + opacity only, so the browser composites it instead of
    repainting gradients every frame (animating background-position would
    fight the 60fps rule). Reduced-motion kills both to a static start frame
@@ -116,12 +118,15 @@ body::after {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  /* a warm lamp-glow that gently breathes — the "lit room" heartbeat */
+  /* a warm lamp-glow that breathes (opacity keyframes) and trails the
+     pointer via --glow-x/--glow-y, which useLampTrail writes per-frame */
   background:
     radial-gradient(80% 55% at 50% -12%, rgba(255, 242, 214, 0.5), transparent 62%),
     radial-gradient(120% 90% at 50% 115%, rgba(255, 236, 200, 0.18), transparent 60%);
   mix-blend-mode: soft-light;
-  animation: lamp-breathe 16s ease-in-out infinite;
+  transform: translate(var(--glow-x, 0%), var(--glow-y, 0%));
+  will-change: transform, opacity;
+  animation: lamp-breathe 9s ease-in-out infinite;
 }
 
 /* dark: same living-room composition, dimmed into the espresso base */
@@ -143,12 +148,12 @@ body::after {
 
 @keyframes aura-drift {
   0%    { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; }
-  50%   { transform: translate(-1.4%, 1.1%) scale(1.05) rotate(0.5deg); opacity: 0.96; }
+  50%   { transform: translate(-3.4%, 2.4%) scale(1.06) rotate(0.9deg); opacity: 0.94; }
   100%  { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; }
 }
 
 @keyframes lamp-breathe {
-  0%, 100% { opacity: 0.85; }
+  0%, 100% { opacity: 0.68; }
   50%      { opacity: 1; }
 }
 

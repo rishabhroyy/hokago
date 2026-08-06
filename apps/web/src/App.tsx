@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { RouterProvider, useRouter } from "./router";
 import { SoundProvider } from "./ui/useWiiSound";
+import { useLivingRoom } from "./ui/livingRoom";
 import { TopNav } from "./ui/TopNav";
 import { HomeView } from "./views/HomeView";
 import { LibraryView } from "./views/LibraryView";
@@ -92,10 +93,24 @@ function Chrome() {
   );
 }
 
+/** Fixed full-viewport bokeh layer, above the wallpaper, behind everything. */
+function LivingRoom() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useLivingRoom(ref);
+  return (
+    <canvas
+      ref={ref}
+      aria-hidden
+      className="pointer-events-none fixed inset-0 z-[-1]"
+    />
+  );
+}
+
 export function App() {
   useLampTrail();
   return (
     <SoundProvider>
+      <LivingRoom />
       <RouterProvider>
         <Chrome />
       </RouterProvider>

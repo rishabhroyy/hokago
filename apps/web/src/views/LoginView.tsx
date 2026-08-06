@@ -56,10 +56,10 @@ export function LoginView() {
         <ThemeToggle />
       </div>
       {/* floating channel-art decorations */}
-      <span className="pointer-events-none absolute left-[12%] top-[16%] h-16 w-16 text-wii/40">
+      <span className="pointer-events-none absolute left-[12%] top-[16%] h-16 w-16 animate-bob text-wii/50">
         <Icon name="cloudsun" className="h-full w-full" />
       </span>
-      <span className="pointer-events-none absolute bottom-[18%] right-[14%] h-12 w-12 text-accent/30">
+      <span className="pointer-events-none absolute bottom-[18%] right-[14%] h-12 w-12 animate-bob text-accent/40 [animation-delay:-2s]">
         <Icon name="sparkle" className="h-full w-full" />
       </span>
       <span className="pointer-events-none absolute right-[22%] top-[20%] h-8 w-8 text-gold/50">

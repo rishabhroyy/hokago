@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { Icon, type IconName } from "./icons";
 import { useWiiSound } from "./useWiiSound";
-import { useReducedMotion, zoomOpen } from "./effects";
+import { spawnStar, useReducedMotion, zoomOpen } from "./effects";
 
 export const HUE_CLASS: Record<number, string> = {
   1: "bg-gradient-to-br from-p1a to-p1b",
@@ -66,7 +66,7 @@ export function Tile({
 
   return (
     <button
-      className="tile group w-full cursor-pointer bg-transparent text-left transition-transform duration-200 ease-snap hover:-translate-y-1.5 active:translate-y-[-2px] active:scale-[.98]"
+      className="tile group w-full cursor-pointer bg-transparent text-left transition-transform duration-200 ease-snap hover:-translate-y-2 active:translate-y-[-3px] active:scale-[.98]"
       style={{ perspective: 640 }}
       onPointerEnter={() => {
         s.hover();
@@ -76,14 +76,14 @@ export function Tile({
       onPointerLeave={onLeave}
       onClick={(e) => {
         s.select();
+        if (!reduced) spawnStar(e.clientX, e.clientY);
         if (artRef.current) zoomOpen(artRef.current, () => onOpen(item, artRef.current!), reduced);
       }}
     >
-      {/* wii channel: white frame, art floats inside — a soft lift on hover
-          instead of the old pulsing glow ring */}
+      {/* wii channel: glossy white frame, art floats inside */}
       <div
         ref={artRef}
-        className={`art relative rounded-[20px] bg-card p-[5px] shadow-panel transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-cardLift`}
+        className={`art relative rounded-[20px] bg-card p-[5px] shadow-panel transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"}`}
       >
         <div
           className={`relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-[15px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
@@ -109,7 +109,7 @@ export function Tile({
           {item.progress != null && (
             <span className="absolute inset-x-2 bottom-2 z-[3] h-[5px] overflow-hidden rounded-full bg-black/25 shadow-[inset_0_1px_2px_rgba(0,0,0,0.2)]">
               <b
-                className="block h-full rounded-full bg-gradient-to-r from-wii-2 to-wii"
+                className="block h-full rounded-full bg-gradient-to-r from-wii-2 to-wii shadow-[0_0_6px_rgba(79,184,224,0.9)]"
                 style={{ width: `${Math.round(item.progress * 100)}%` }}
               />
             </span>

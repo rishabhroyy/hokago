@@ -1,5 +1,5 @@
-// Wii-flavored interaction effects: the channel-zoom open, staggered entrance,
-// gold star sprinkles (konami), and the reduced-motion guard.
+// Wii-flavored interaction effects: channel-zoom open, select-pop + star ping,
+// staggered entrance, Konami code.
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 const STAR_PATH = "M12 2C12 8 14 10 20 12 14 14 12 16 12 22 12 16 10 14 4 12 10 10 12 8 12 2Z";
@@ -19,14 +19,26 @@ export function useReducedMotion(): boolean {
 
 export function spawnStar(x: number, y: number) {
   const star = document.createElement("div");
-  star.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:9999;color:#E3A34C;transform:translate(-50%,-50%) scale(.5) rotate(-6deg);transition:transform .55s cubic-bezier(.2,.7,.3,1),opacity .55s ease;opacity:1;filter:drop-shadow(0 1px 3px rgba(227,163,76,.3));`;
-  star.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="${STAR_PATH}"/></svg>`;
+  star.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:9999;color:#E3A34C;transform:translate(-50%,-50%) scale(.4) rotate(-8deg);transition:transform .6s cubic-bezier(.2,.7,.3,1),opacity .6s ease;opacity:1;filter:drop-shadow(0 2px 5px rgba(227,163,76,.55));`;
+  star.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="${STAR_PATH}"/></svg>`;
   document.body.appendChild(star);
   requestAnimationFrame(() => {
-    star.style.transform = `translate(-50%,-130%) scale(1.05) rotate(22deg)`;
+    star.style.transform = `translate(-50%,-150%) scale(1.2) rotate(34deg)`;
     star.style.opacity = "0";
   });
-  setTimeout(() => star.remove(), 600);
+  setTimeout(() => star.remove(), 650);
+}
+
+/** Springy pop on the clicked element + a small gold star ping at the pointer. */
+export function popAndPing(el: HTMLElement, clientX: number, clientY: number, reduced: boolean) {
+  if (reduced) return;
+  el.style.animation = "popsel .34s cubic-bezier(.4,1.4,.5,1)";
+  const onEnd = () => {
+    el.style.animation = "";
+    el.removeEventListener("animationend", onEnd);
+  };
+  el.addEventListener("animationend", onEnd);
+  spawnStar(clientX, clientY);
 }
 
 /**
@@ -82,30 +94,40 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
     const overlay = document.createElement("div");
     overlay.style.cssText =
       `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:${borderRadius};` +
-      `box-shadow:0 0 0 2px rgba(255,255,255,.5),0 16px 40px -18px rgba(80,60,40,.35);` +
+      `box-shadow:0 0 0 3px rgba(255,255,255,.85),0 0 44px 14px rgba(255,255,255,.3);` +
       "z-index:9999;overflow:hidden;pointer-events:none;";
     overlay.style.background = channelColor(artEl);
-    // a faint diagonal light keeps the flat color from reading as a poster,
-    // without the bright band — the sweep was the loudest thing in the zoom
+    // a diagonal sheen gives the flat color depth without any image pixels
     const sheen = document.createElement("div");
     sheen.style.cssText =
       "position:absolute;inset:0;pointer-events:none;" +
-      "background:linear-gradient(155deg,rgba(255,255,255,.14) 0%,rgba(255,255,255,.05) 34%,rgba(255,255,255,0) 55%,rgba(0,0,0,.1) 100%);";
+      "background:linear-gradient(155deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.08) 34%,rgba(255,255,255,0) 55%,rgba(0,0,0,.16) 100%);";
     overlay.appendChild(sheen);
+    // the wii gloss: a skewed white band sweeps across while the channel opens
+    const shine = document.createElement("div");
+    shine.style.cssText =
+      "position:absolute;top:-30%;left:-60%;width:38%;height:160%;transform:skewX(-18deg);pointer-events:none;" +
+      "background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.85) 50%,rgba(255,255,255,0) 100%);";
+    overlay.appendChild(shine);
     document.body.appendChild(overlay);
 
     // Web Animations API — CSS transitions can't reliably start when the
     // element and its end styles land in the same frame (the browser paints
     // only the end state, so the zoom never visibly animates). WAAPI plays
-    // over real time regardless. A clean ease-out: the wii pop still opens
-    // the channel without the overshoot bounce.
+    // over real time regardless. The overshoot easing is the wii "pop".
     overlay.animate(
       [
         { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, borderRadius },
         { left: "0px", top: "0px", width: "100vw", height: "100vh", borderRadius: "18px" },
       ],
-      { duration: 400, easing: "cubic-bezier(.35,.1,.3,1)", fill: "both" },
+      { duration: 460, easing: "cubic-bezier(.3,1.45,.45,1)", fill: "both" },
     );
+    shine.animate([{ left: "-60%" }, { left: "135%" }], {
+      duration: 620,
+      easing: "cubic-bezier(.4,0,.2,1)",
+      delay: 40,
+      fill: "both",
+    });
 
     // Navigate almost immediately — the fixed overlay covers the swap, and the
     // detail fetch (already warmed by hover prefetch) runs during the zoom
@@ -115,7 +137,7 @@ export function zoomOpen(artEl: HTMLElement, navigate: () => void, reduced: bool
 
     // Shutter reveal: the fullscreen channel splits into two halves that
     // slide apart like a Wii window, showing the page underneath. Wait past
-    // the zoom's settle tail (400ms) so the halves clone at the exact
+    // the zoom's overshoot tail (460ms) so the halves clone at the exact
     // settled 100vw geometry and the seam lands dead-center.
     setTimeout(() => {
       overlay.style.left = "0px";
@@ -157,7 +179,7 @@ export function useStaggerEntrance(containerRef: RefObject<HTMLElement | null>, 
     const children = Array.from(containerRef.current.children) as HTMLElement[];
     const cleanups: Array<() => void> = [];
     children.forEach((el, i) => {
-      const delay = Math.min(i * 0.03, 0.4);
+      const delay = Math.min(i * 0.035, 0.5);
       el.style.animation = `riseIn .5s cubic-bezier(.4,0,.2,1) ${delay}s both`;
       const onEnd = () => {
         el.style.animation = "";

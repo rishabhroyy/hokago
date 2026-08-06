@@ -72,84 +72,34 @@ body {
   color: #35302B;
   font-family: "Plus Jakarta Sans", sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* base paper sits behind the living-room layers in ::before/::after */
+  /* wii-dream wallpaper: warm paper, blue dot
+     grid, soft top light, and three huge out-of-focus pastel auras — vivid
+     blue top-right, coral left, gold low-center */
   background-color: #F5EFE4;
-}
-.dark body {
-  color: var(--ink);
-  background-color: #171410;
-}
-
-/* ═════ living-room wallpaper ════════════════════════════════════════════
-   The wii-dream canvas now lives on two fixed compositor layers and breathes
-   in real time. Layer 1 (::before) carries the whole scene — blue dot grid,
-   top light, and the three huge pastel auras (blue top-right, coral left,
-   gold low-center) — and very slowly drifts, scales, and tilts as one field,
-   like the wallpaper is gently alive. Layer 2 (::after) is just the warm
-   lamp-glow at the top, breathing on its own faster rhythm. Everything moves
-   via transform + opacity only, so the browser composites it instead of
-   repainting gradients every frame (animating background-position would
-   fight the 60fps rule). Reduced-motion kills both to a static start frame
-   — which is exactly today's old wallpaper. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: -14vh -10vw;
-  z-index: -2;
-  pointer-events: none;
-  /* oversize the layer so the drift never shows an edge */
-  background-color: #F6F0E6;
   background-image:
     radial-gradient(130% 70% at 50% -10%, rgba(255, 248, 233, 0.95), transparent 52%),
     radial-gradient(48% 42% at 92% -4%, rgba(79, 184, 224, 0.22), transparent 68%),
     radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.14), transparent 70%),
     radial-gradient(36% 50% at 50% 70%, rgba(227, 163, 76, 0.1), transparent 72%),
     radial-gradient(rgba(79, 184, 224, 0.09) 1px, transparent 1.3px);
-  background-size: 130% 130%, 130% 130%, 130% 130%, 130% 130%, 30px 30px;
-  will-change: transform;
-  animation: aura-drift 150s ease-in-out infinite;
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  /* a warm lamp-glow that gently breathes — the "lit room" heartbeat */
-  background:
-    radial-gradient(80% 55% at 50% -12%, rgba(255, 242, 214, 0.5), transparent 62%),
-    radial-gradient(120% 90% at 50% 115%, rgba(255, 236, 200, 0.18), transparent 60%);
-  mix-blend-mode: soft-light;
-  animation: lamp-breathe 16s ease-in-out infinite;
-}
-
-/* dark: same living-room composition, dimmed into the espresso base */
-.dark body::before {
-  background-color: #1E1A15;
+/* dark wallpaper: same aura composition, dimmed into the espresso base */
+.dark body {
+  color: var(--ink);
+  background-color: #171410;
   background-image:
     radial-gradient(130% 70% at 50% -10%, rgba(255, 244, 224, 0.05), transparent 52%),
     radial-gradient(48% 42% at 92% -4%, rgba(99, 195, 230, 0.09), transparent 68%),
     radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.05), transparent 70%),
     radial-gradient(36% 50% at 50% 70%, rgba(237, 184, 102, 0.045), transparent 72%),
     radial-gradient(rgba(143, 224, 245, 0.05) 1px, transparent 1.3px);
-}
-
-.dark body::after {
-  background:
-    radial-gradient(80% 55% at 50% -12%, rgba(255, 214, 160, 0.12), transparent 62%),
-    radial-gradient(120% 90% at 50% 115%, rgba(255, 200, 150, 0.05), transparent 60%);
-}
-
-@keyframes aura-drift {
-  0%    { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; }
-  50%   { transform: translate(-1.4%, 1.1%) scale(1.05) rotate(0.5deg); opacity: 0.96; }
-  100%  { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; }
-}
-
-@keyframes lamp-breathe {
-  0%, 100% { opacity: 0.85; }
-  50%      { opacity: 1; }
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 ::selection { background: rgba(79, 184, 224, 0.35); }
@@ -301,7 +251,4 @@ body::after {
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; scroll-behavior: auto !important; }
-  /* the living-room layers freeze exactly on their static start frame,
-     which is the original wallpaper */
-  body::before, body::after { animation: none !important; }
 }

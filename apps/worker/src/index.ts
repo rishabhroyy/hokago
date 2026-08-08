@@ -206,13 +206,22 @@ function makeProcessMetadata(providerName: string) {
   };
 }
 
+// One scan job per library; a single walk already parallelizes probe + leaf
+// work internally. HOKAGO_SCAN_CONCURRENCY > 1 lets several libraries scan
+// at once (each keeps its own pools — raise with caution on weak machines).
+const scanConcurrency = Math.max(1, Number(process.env.HOKAGO_SCAN_CONCURRENCY ?? 1));
 const scanWorker = new Worker<ScanJobData>(QUEUE_NAMES.SCAN, processScan, {
   connection,
-  concurrency: 1,
+  concurrency: scanConcurrency,
 });
+// Artwork extraction is ffmpeg/CPU-bound — cap via HOKAGO_ARTWORK_CONCURRENCY
+// (default 4) so a big library scan fans out without melting the box. The
+// scan walk itself is parallelized inside the scanner (probe + leaf ingestion
+// pools), and this queue is what actually bounds total ffmpeg load.
+const artworkConcurrency = Math.max(1, Number(process.env.HOKAGO_ARTWORK_CONCURRENCY ?? 4));
 const artworkWorker = new Worker<ArtworkJobData>(QUEUE_NAMES.ARTWORK, processArtwork, {
   connection,
-  concurrency: 2, // backpressure : bounded ffmpeg concurrency
+  concurrency: artworkConcurrency, // backpressure : bounded ffmpeg concurrency
 });
 
 // Per-provider rate budgets (doc's real published limits) enforced by

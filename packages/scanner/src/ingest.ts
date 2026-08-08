@@ -4,10 +4,11 @@ import { PrismaClient, type ContentProfile } from "@hokago/db";
 
 import { resolveArtwork, upsertArtworkDescriptor } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
-import { LOCAL_SIGNAL_TYPES, parseSeasonDirName } from "./constants.js";
+import { INGEST_CONCURRENCY, LOCAL_SIGNAL_TYPES, PROBE_CONCURRENCY, parseSeasonDirName } from "./constants.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import { extractFonts } from "./fonts.js";
 import { partialHash } from "./hash.js";
+import { mapLimit } from "./limit.js";
 import { findNfoForFile } from "./nfo.js";
 import { parseFilename } from "./parse-filename.js";
 import { probeFile, type ProbeResult } from "./probe.js";
@@ -309,11 +310,17 @@ export async function ingestLibrary(
   for (const dir of sortedDirs) {
     if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) continue;
     const dirFiles = [...(byDir.get(dir) ?? [])].sort((a, b) => a.path.localeCompare(b.path));
-    const probes = new Map<string, ProbeResult | null>();
-    for (const f of dirFiles) probes.set(f.path, await probeFile(f.path));
+
+    // Probe the whole directory in parallel — each probe is an ffprobe spawn
+    // (~100-400ms), and serial probing dominates scan time on big libraries.
+    // Probes are keyed by file path and never mutated, so this is pure fan-out.
+    const probeResults = await mapLimit(dirFiles, PROBE_CONCURRENCY, (f) => probeFile(f.path));
+    const probes = new Map(dirFiles.map((f, i) => [f.path, probeResults[i]]));
 
     if (!isSeasonLikeDirectory(dirFiles, profile)) {
-      for (const file of dirFiles) {
+      // Every file in a non-season directory is independently a movie — no
+      // shared parent rows, so the leaf ingestion can run concurrently.
+      const results = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
         const result = await ingestLeafItem(
           db,
           libraryId,
@@ -324,9 +331,12 @@ export async function ingestLibrary(
           deferArtwork,
           profile,
         );
-        summary.artworkStored += result.artworkStored;
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
         await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
+        return result;
+      });
+      for (const result of results) {
+        summary.artworkStored += result.artworkStored;
         summary.moviesCreated += 1;
       }
       await opts.onDirectoryComplete?.(dir);
@@ -353,31 +363,42 @@ export async function ingestLibrary(
       dirFiles.map((f) => ({ path: f.path, durationMs: probes.get(f.path)?.durationMs ?? null })),
     );
 
-    const outlierMediaItemIds: string[] = [];
-    let agreeingTitles = 0;
-
-    for (const file of dirFiles) {
+    // Episodes share the season row but each leaf's own MediaItem/MediaFile/
+    // Evidence rows are disjoint — the leaf loop can run concurrently. The
+    // SERIES/SEASON evidence sync below stays serial because it needs the
+    // aggregated title agreement count from every file first.
+    const outcomes = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
       const ctx: FileContext = { file, dir, probe: probes.get(file.path) ?? null };
+      const isOutlier = outliers.includes(file.path);
+      const isMain = main.includes(file.path);
       let result: LeafResult | null = null;
-      if (outliers.includes(file.path)) {
+      if (isOutlier) {
         result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null, deferArtwork, profile);
-        summary.moviesCreated += 1;
-        outlierMediaItemIds.push(result.mediaItemId);
-      } else if (main.includes(file.path)) {
+      } else if (isMain) {
         result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber, deferArtwork, profile);
-        summary.episodesCreated += 1;
       }
       if (result) {
-        summary.artworkStored += result.artworkStored;
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
- // Outliers are movies (the Mugen Train shape) — tries the
+        // Outliers are movies (the Mugen Train shape) — tries the
         // anime provider chain for these regardless of the library's profile.
-        if (outliers.includes(file.path)) {
+        if (isOutlier) {
           await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
         }
       }
       const parsedTitle = parseFilename(path.basename(file.path), profile).title;
-      if (parsedTitle && parsedTitle.toLowerCase() === seriesTitle.toLowerCase()) agreeingTitles += 1;
+      return { result, isOutlier, isMain, agrees: parsedTitle !== null && parsedTitle.toLowerCase() === seriesTitle.toLowerCase() };
+    });
+
+    const outlierMediaItemIds: string[] = [];
+    let agreeingTitles = 0;
+    for (const { result, isOutlier, isMain, agrees } of outcomes) {
+      if (agrees) agreeingTitles += 1;
+      if (isOutlier) {
+        summary.moviesCreated += 1;
+        if (result) outlierMediaItemIds.push(result.mediaItemId);
+      }
+      if (isMain) summary.episodesCreated += 1;
+      if (result) summary.artworkStored += result.artworkStored;
     }
 
  // Container-level confidence (the Step 2 gap this closes): SERIES

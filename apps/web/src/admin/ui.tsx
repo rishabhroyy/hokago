@@ -49,7 +49,14 @@ export function Stat({ icon, tone, value, label, sub }: { icon: IconName; tone?:
       <div className="min-w-0">
         <div className="text-section font-extrabold leading-tight tabular-nums text-ink">{value}</div>
         <div className="font-mono text-kicker font-bold uppercase tracking-[0.1em] text-ink-3">{label}</div>
-        {sub && <div className="truncate text-small font-semibold text-ink-2">{sub}</div>}
+        {sub && (
+          <div
+            className="line-clamp-2 text-small font-semibold text-ink-2"
+            title={typeof sub === "string" ? sub : undefined}
+          >
+            {sub}
+          </div>
+        )}
       </div>
     </div>
   );

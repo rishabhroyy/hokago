@@ -172,6 +172,15 @@ body {
   box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 4px 24px -2px rgba(79,184,224,0.8), 0 0 0 3px rgba(255,255,255,0.9), 0 0 0 5px rgba(79,184,224,0.5);
 }
 .btn-primary:active { transform: scale(.96); }
+.btn-primary:disabled,
+.btn-primary:disabled:hover {
+  transform: none;
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: saturate(0.55);
+  box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 6px 18px -6px rgba(46,155,196,0.65);
+}
+.btn-primary:disabled { text-shadow: none; }
 
 /* secondary action — glossy white pill */
 .btn-ghost {
@@ -193,6 +202,17 @@ body {
 }
 .btn-ghost:hover { transform: translateY(-2px); color: #2E9BC4; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 18px -4px rgba(79,184,224,0.55); }
 .btn-ghost:active { transform: scale(.96); }
+.btn-ghost:disabled,
+.btn-ghost:disabled:hover {
+  transform: none;
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: saturate(0.45);
+  color: #35302B;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 4px 12px -4px rgba(120,80,60,0.3);
+}
+.dark .btn-ghost:disabled,
+.dark .btn-ghost:disabled:hover { color: var(--ink); }
 
 /* dark: frosted charcoal pill — still reads on the colorful banners it sits
    over (the left overlay darkens behind it), but sits in the dark theme */

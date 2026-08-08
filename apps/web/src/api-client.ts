@@ -1,20 +1,107 @@
 import { createHokagoClient } from "@hokago/contract/client";
 
-export const api: ReturnType<typeof createHokagoClient> = createHokagoClient("");
+const ACCESS_KEY = "hokago_access_token";
+const REFRESH_KEY = "hokago_refresh_token";
 
-api.use({
-  onRequest({ request }) {
-    const token = localStorage.getItem("hokago_access_token");
-    if (token) request.headers.set("Authorization", `Bearer ${token}`);
-    return request;
-  },
-  onResponse({ request, response }) {
-    // Expired/invalid token on any authenticated endpoint → drop it and send
-    // the user to the login gate instead of rendering a silent empty app.
-    if (response.status === 401 && !request.url.includes("/auth/")) {
-      localStorage.removeItem("hokago_access_token");
-      if (location.pathname !== "/login") location.assign("/login");
-    }
-    return response;
-  },
-});
+// One in-flight refresh at a time — concurrent 401s must not race.
+let refreshInFlight: Promise<string | null> | null = null;
+
+function getAccessToken(): string | null {
+  return localStorage.getItem(ACCESS_KEY);
+}
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+export function clearAuth(): void {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+}
+
+function tokenExpiresInMs(token: string): number | null {
+  try {
+    const payload = JSON.parse(
+      atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+    );
+    return typeof payload.exp === "number" ? payload.exp * 1000 - Date.now() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Exchanges the stored refresh token for a new access token. Raw fetch on
+ * purpose — must never go through this same wrapper (no auth header, no
+ * refresh-on-refresh recursion). Returns the new access token, or null if the
+ * refresh token is gone/expired/revoked.
+ */
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const res = await fetch("/auth/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (!res.ok) return null;
+        const data = (await res.json()) as { accessToken: string };
+        localStorage.setItem(ACCESS_KEY, data.accessToken);
+        return data.accessToken;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+/**
+ * The token to send: the cached one when it's still got legs, otherwise a
+ * silent refresh. This is what makes sessions survive the 15-minute access
+ * token TTL — the refresh token (30 days, sliding) does the rest.
+ */
+async function ensureAccessToken(): Promise<string | null> {
+  const token = getAccessToken();
+  if (!token) return null;
+  const remaining = tokenExpiresInMs(token);
+  if (remaining === null || remaining > 60_000) return token;
+  return refreshAccessToken();
+}
+
+async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const token = await ensureAccessToken();
+  // Start from the request's OWN headers. openapi-fetch passes a Request
+  // object plus a bare init; per the fetch spec, init.headers would REPLACE
+  // the Request's headers entirely — dropping Content-Type: application/json
+  // and making the API answer 415 on every body-sending request.
+  const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  let res = await fetch(input, { ...init, headers });
+  if (res.status !== 401) return res;
+
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  // Never try to refresh our way out of an /auth/ failure — a bad password
+  // isn't a token problem.
+  if (url.includes("/auth/")) return res;
+
+  // One retry with a freshly refreshed token; if the refresh itself fails,
+  // the session is truly over — clear both tokens and show the login gate.
+  const fresh = await refreshAccessToken();
+  if (!fresh) {
+    clearAuth();
+    if (location.pathname !== "/login") location.assign("/login");
+    return res;
+  }
+  headers.set("Authorization", `Bearer ${fresh}`);
+  res = await fetch(input, { ...init, headers });
+  return res;
+}
+
+export const api: ReturnType<typeof createHokagoClient> = createHokagoClient("", { fetch: authFetch });

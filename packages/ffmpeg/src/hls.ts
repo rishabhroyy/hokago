@@ -109,6 +109,10 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     if (input.maxWidth !== undefined || input.maxHeight !== undefined) {
       videoFilters.push(`scale='min(${input.maxWidth ?? -2},iw)':'min(${input.maxHeight ?? -2},ih)'`);
     }
+    // Browsers can't decode high-bit-depth h264 — scale preserves the input
+    // pix_fmt, so a 10-bit source (HEVC Main 10) would come out as h264 High
+    // 10 and every MSE append would be rejected. Force 8-bit 4:2:0.
+    videoFilters.push("format=yuv420p");
 
     if (input.subtitleBurnIn) {
       const { streamIndex, bitmap } = input.subtitleBurnIn;

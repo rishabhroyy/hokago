@@ -230,6 +230,7 @@ model Profile {
   updatedAt      DateTime  @updatedAt
 
   playbackStates PlaybackState[]
+  watchDays      WatchDay[]
   playbackSessions PlaybackSession[]
   hostedParties  WatchParty[]    @relation("PartyHost")
   partyMembers   PartyMember[]
@@ -353,6 +354,7 @@ model MediaItem {
   artwork           Artwork[]
   segments          MediaSegment[]
   playbackStates    PlaybackState[]
+  watchDays         WatchDay[]
   collectionEntries CollectionEntry[]
   watchParties      WatchParty[]
   playbackSessions  PlaybackSession[]
@@ -699,20 +701,49 @@ model MediaFileFont {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model PlaybackState {
-  id          String    @id @default(uuid()) @db.Uuid
-  profileId   String    @db.Uuid
-  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  mediaItemId String    @db.Uuid
-  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
-  positionMs  Int       @default(0)
-  durationMs  Int?
-  watched     Boolean   @default(false)
-  playCount   Int       @default(0)
-  updatedAt   DateTime  @updatedAt
+  id            String    @id @default(uuid()) @db.Uuid
+  profileId     String    @db.Uuid
+  profile       Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  mediaItemId   String    @db.Uuid
+  mediaItem     MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  positionMs    Int       @default(0)
+  durationMs    Int?
+  watched       Boolean   @default(false)
+  /// How many times this item has been watched to completion (rewatch count).
+  playCount     Int       @default(0)
+  /// When the most recent completion happened.
+  lastWatchedAt DateTime?
+  updatedAt     DateTime  @updatedAt
 
   @@unique([profileId, mediaItemId])
   @@index([profileId, updatedAt])
   @@map("playback_state")
+}
+
+/// Per-calendar-day watch statistics, aggregated from playback heartbeats —
+/// deliberately NOT per-session: the unit of record is (profile, item, day).
+model WatchDay {
+  id             String    @id @default(uuid()) @db.Uuid
+  profileId      String    @db.Uuid
+  profile        Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  mediaItemId    String    @db.Uuid
+  mediaItem      MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  /// Calendar day (server-local midnight), the aggregation key.
+  date           DateTime  @db.Date
+  /// Total watch time credited that day (seek jumps excluded, capped).
+  watchedMs      Int       @default(0)
+  /// Start of the day's first watch span.
+  firstStartedAt DateTime?
+  /// End of the day's last watch span — together with firstStartedAt this is
+  /// the "start to end" record for that day.
+  lastEndedAt    DateTime?
+  /// Times this item was completed that day (feeds the rewatch count).
+  completions    Int       @default(0)
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([profileId, mediaItemId, date])
+  @@index([profileId, date])
+  @@map("watch_day")
 }
 
 /// Cascade: chapter → community → fingerprint. MANUAL always wins .

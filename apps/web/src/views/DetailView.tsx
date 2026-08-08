@@ -67,9 +67,25 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
                 <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-kicker dark:bg-paper font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
                   EP {ep.episodeNumber ?? "?"}
                 </span>
+                {ep.watched && (
+                  <span
+                    className="absolute right-[9px] top-2 z-[2] flex h-6 w-6 items-center justify-center rounded-full bg-wii-deep text-white shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]"
+                    title="Watched"
+                  >
+                    <Icon name="check" className="h-3.5 w-3.5" />
+                  </span>
+                )}
                 {ep.runtimeMs != null && (
                   <span className="absolute bottom-2 right-[9px] z-[2] rounded-full bg-black/55 px-2 py-[3px] font-mono text-kicker font-bold text-white backdrop-blur-sm">
                     {Math.round(ep.runtimeMs / 60_000)}m
+                  </span>
+                )}
+                {!ep.watched && ep.positionMs > 0 && ep.runtimeMs != null && ep.runtimeMs > 0 && (
+                  <span className="absolute inset-x-0 bottom-0 z-[2] h-[5px] bg-black/45">
+                    <span
+                      className="block h-full bg-wii"
+                      style={{ width: `${Math.min(100, Math.round((ep.positionMs / (ep.runtimeMs * 1000)) * 100))}%` }}
+                    />
                   </span>
                 )}
                 <span className="absolute inset-0 z-[2] flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
@@ -157,14 +173,15 @@ export function DetailView({ itemId }: { itemId: string }) {
   const [selectedAudio, setSelectedAudio] = useState<number | null>(null);
 
   useEffect(() => {
+    if (!profileId) return;
     setItem(null);
-    fetchMediaItemDetail(itemId)
+    fetchMediaItemDetail(itemId, profileId)
       .then((detail) => {
         setItem(detail);
         setSelectedAudio(detail?.audioTracks[0]?.streamIndex ?? null);
       })
       .catch(() => {});
-  }, [itemId]);
+  }, [itemId, profileId]);
 
   const episodesBySeason = useMemo(() => {
     if (!item) return [];
@@ -182,6 +199,7 @@ export function DetailView({ itemId }: { itemId: string }) {
   }
 
   const firstEpisode = item.episodes[0];
+  const watchedCount = item.episodes.filter((e) => e.watched).length;
   const playMediaFileId = item.kind === "SERIES" ? (firstEpisode?.mediaFileId ?? null) : item.mediaFileId;
   const playMediaItemId = item.kind === "SERIES" ? (firstEpisode?.id ?? null) : item.id;
 
@@ -245,6 +263,19 @@ export function DetailView({ itemId }: { itemId: string }) {
                 )}
                 {item.kind === "SERIES" && hasEpisodes && (
                   <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">{item.episodes.length} episodes</span>
+                )}
+                {item.kind === "SERIES" && hasEpisodes && watchedCount > 0 && (
+                  <span className="rounded-full bg-wii-deep/[.08] px-3 py-1 font-semibold text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2">
+                    {watchedCount}/{item.episodes.length} watched
+                  </span>
+                )}
+                {item.watch?.playCount != null && item.watch.playCount > 0 && (
+                  <span className="rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line" title="Watch history">
+                    watched {item.watch.playCount}×
+                    {item.watch.lastWatchedAt
+                      ? ` · ${item.watch.lastWatchedAt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                      : ""}
+                  </span>
                 )}
               </div>
 

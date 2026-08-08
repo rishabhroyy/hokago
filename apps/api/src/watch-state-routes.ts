@@ -1,11 +1,14 @@
 import { PrismaClient } from "@hokago/db";
 import { broadcastPresence } from "./presence.js";
+import { stopSession } from "./playback-routes.js";
 import {
   HeartbeatBody,
   HeartbeatResponse,
   StopResponse,
   ContinueWatchingQuery,
   ContinueWatchingResponse,
+  WatchHistoryQuery,
+  WatchHistoryResponse,
   type ContinueWatchingEntry,
   ErrorResponse,
 } from "@hokago/contract/playback";
@@ -53,6 +56,17 @@ function toRef<
 // the industry-standard "credits are rolling" heuristic, not literal 100%.
 const WATCHED_THRESHOLD = 0.9;
 
+// Watch time credited per heartbeat is position delta — a forward seek between
+// heartbeats would otherwise count as watch time. 10s heartbeats mean any
+// delta over ~10s is a seek; 2 minutes is a generous ceiling that still
+// absorbs pause/seek slop without crediting a whole jump.
+const MAX_HEARTBEAT_CREDIT_MS = 120_000;
+
+/** Server-local calendar day for `date` — the WatchDay aggregation key. */
+function dayStart(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 /** / — PlaybackState updates live during playback, continue-watching, next-episode rollover. */
 export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise<void> {
   app.post(
@@ -69,12 +83,23 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       if (!session) return reply.code(404).send({ error: "session not found" });
 
       const { positionMs, durationMs } = req.body;
+      const now = new Date();
       const watched = durationMs ? positionMs / durationMs >= WATCHED_THRESHOLD : false;
+
+      // Watch-time credit: delta since the last persisted position, capped so
+      // a forward seek between heartbeats doesn't count as watched time.
+      const deltaMs = Math.max(0, Math.min(positionMs - session.positionMs, MAX_HEARTBEAT_CREDIT_MS));
+
+      const prevState = await db.playbackState.findUnique({
+        where: { profileId_mediaItemId: { profileId: session.profileId, mediaItemId: session.mediaItemId } },
+      });
+      const completed = watched && !(prevState?.watched ?? false);
+      const day = dayStart(now);
 
       await db.$transaction([
         db.playbackSession.update({
           where: { id: session.id },
-          data: { positionMs, lastHeartbeatAt: new Date() },
+          data: { positionMs, lastHeartbeatAt: now },
         }),
         db.playbackState.upsert({
           where: { profileId_mediaItemId: { profileId: session.profileId, mediaItemId: session.mediaItemId } },
@@ -84,8 +109,36 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
             positionMs,
             durationMs,
             watched,
+            playCount: completed ? 1 : 0,
+            lastWatchedAt: completed ? now : null,
           },
-          update: { positionMs, durationMs, watched },
+          update: {
+            positionMs,
+            durationMs,
+            watched,
+            ...(completed
+              ? { playCount: { increment: 1 }, lastWatchedAt: now }
+              : {}),
+          },
+        }),
+        db.watchDay.upsert({
+          where: {
+            profileId_mediaItemId_date: { profileId: session.profileId, mediaItemId: session.mediaItemId, date: day },
+          },
+          create: {
+            profileId: session.profileId,
+            mediaItemId: session.mediaItemId,
+            date: day,
+            watchedMs: deltaMs,
+            firstStartedAt: now,
+            lastEndedAt: now,
+            completions: completed ? 1 : 0,
+          },
+          update: {
+            watchedMs: { increment: deltaMs },
+            lastEndedAt: now,
+            ...(completed ? { completions: { increment: 1 } } : {}),
+          },
         }),
       ]);
 
@@ -101,9 +154,43 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
       if (!session) return reply.code(404).send({ error: "session not found" });
 
-      await db.playbackSession.update({ where: { id: session.id }, data: { endedAt: new Date() } });
+      // Kills the session's ffmpeg child (if any) and frees its transcode
+      // slot — without this every stopped playback leaves ffmpeg running.
+      await stopSession(session.id);
       await broadcastPresence();
       return { ok: true };
+    },
+  );
+
+  app.get(
+    "/watch-history",
+    {
+      preHandler: app.authenticate,
+      schema: { querystring: WatchHistoryQuery, response: { 200: WatchHistoryResponse, 404: ErrorResponse } },
+    },
+    async (req, reply) => {
+      const { profileId, mediaItemId } = req.query;
+
+      // Watch state is per-profile; only allow querying a profile this
+      // account owns (mirrors the profiles routes' ownership rule).
+      const owned = await db.profile.findFirst({
+        where: { id: profileId, accountId: req.accountId },
+        select: { id: true },
+      });
+      if (!owned) return reply.code(404).send({ error: "profile not found" });
+
+      const rows = await db.watchDay.findMany({
+        where: { profileId, mediaItemId },
+        orderBy: { date: "desc" },
+        select: {
+          date: true,
+          watchedMs: true,
+          firstStartedAt: true,
+          lastEndedAt: true,
+          completions: true,
+        },
+      });
+      return rows;
     },
   );
 

@@ -70,7 +70,7 @@ export function HomeView() {
   }, [recentlyAdded]);
 
   const openDetail = (item: TileItem) => navigate(paths.detail(item.id));
-  const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.id);
+  const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.id, profileId);
 
   const heroEntry = continueWatching.find((e) => !e.upNext) ?? null;
   const heroCard = !heroEntry ? (recentlyAdded[0] ?? null) : null;
@@ -79,9 +79,9 @@ export function HomeView() {
   // button is the most likely next click on the page.
   useEffect(() => {
     const id = heroEntry?.mediaItem.id ?? heroCard?.id;
-    if (id) prefetchMediaItemDetail(id);
+    if (id) prefetchMediaItemDetail(id, profileId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heroEntry?.mediaItem.id, heroCard?.id]);
+  }, [heroEntry?.mediaItem.id, heroCard?.id, profileId]);
 
   if (loaded && !heroEntry && !heroCard) {
     return (

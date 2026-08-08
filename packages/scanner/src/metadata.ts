@@ -11,7 +11,7 @@ import type {
   MetadataProvider,
   MetadataQuery,
 } from "@hokago/metadata";
-import { findAcceptedMatch } from "@hokago/providers";
+import { findAcceptedMatch, normalizeTitle } from "@hokago/providers";
 
 import {
   ARTWORK_SOURCE_PRIORITY,
@@ -212,6 +212,25 @@ async function touchLastResolvedAt(db: PrismaClient, mediaItemId: string, provid
     .catch(() => {});
 }
 
+/**
+ * Re-runs episode-title enrichment for a single series with whatever
+ * episode-capable external id it already has (the merged-source pass covers
+ * every provider's list internally). Used by the refresh script; the normal
+ * job path calls the private enrichEpisodeTitles directly.
+ */
+export async function enrichSeriesEpisodeTitles(
+  db: PrismaClient,
+  seriesId: string,
+  providers: Record<string, MetadataProvider> = {},
+): Promise<void> {
+  const rows = await db.externalId.findMany({ where: { mediaItemId: seriesId } });
+  const row = rows.find((r) => providers[r.provider]?.episodes) ?? rows[0];
+  if (!row) return;
+  const provider = providers[row.provider];
+  if (!provider) return;
+  await enrichEpisodeTitles(db, seriesId, row.provider, provider, row.providerId, providers);
+}
+
 async function refreshMetadataCacheExpiry(
   db: PrismaClient,
   providerName: string,
@@ -273,6 +292,16 @@ async function enrichEpisodeTitles(
         }
       }
     }
+    if (!source) {
+      // No direct episode source — Jikan is the MAL API and re-uses its id.
+      const jikan = providers["JIKAN"];
+      if (jikan?.episodes) {
+        const malRow = (await db.externalId.findMany({ where: { mediaItemId: seriesId } })).find(
+          (r) => r.provider === "MAL" || r.provider === "JIKAN",
+        );
+        if (malRow) source = { provider: jikan, providerName: "JIKAN", providerId: malRow.providerId };
+      }
+    }
     if (!source) return;
 
     const cached = await db.metadataCache.findUnique({
@@ -306,7 +335,47 @@ async function enrichEpisodeTitles(
     }
     if (episodes.length === 0) return;
 
-    const byKey = new Map(episodes.map((ep) => [`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title]));
+    // Split-season providers (MAL/Jikan expose one record per season) only
+    // cover part of a multi-cour series — merge every episode-capable source
+    // this series already has, and let the list with the broadest season
+    // coverage win conflicts (e.g. TVMaze S1-S2 over MAL S1).
+    const lists = [{ episodes, maxSeason: Math.max(0, ...episodes.map((e) => e.seasonNumber ?? 0)) }];
+    const allRows = await db.externalId.findMany({ where: { mediaItemId: seriesId } });
+    for (const row of allRows) {
+      if (row.provider === source.providerName) continue;
+      const candidate = providers[row.provider];
+      if (!candidate?.episodes) continue;
+      const cached = await db.metadataCache.findUnique({
+        where: { provider_externalId: { provider: row.provider, externalId: row.providerId } },
+      });
+      if (!cached) continue;
+      // Stale is fine for title enrichment — the cache TTL governs re-fetch
+      // freshness of the *primary* source; supplementary lists only fill gaps.
+      const payload = (cached.payload ?? {}) as Record<string, unknown>;
+      const eps = payload.episodes;
+      if (!Array.isArray(eps) || eps.length === 0) continue;
+      lists.push({ episodes: eps as EpisodeMetadata[], maxSeason: Math.max(0, ...(eps as EpisodeMetadata[]).map((e) => e.seasonNumber ?? 0)) });
+    }
+    lists.sort((a, b) => b.maxSeason - a.maxSeason);
+    const byKey = new Map<string, string>();
+    for (const list of lists) {
+      for (const ep of list.episodes) {
+        if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
+        byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
+      }
+    }
+    // Rank-based index: provider and local numbering can disagree (absolute
+    // vs season-relative), so keep per-season ordered title lists too — the
+    // nth local episode maps to the nth provider episode.
+    const titlesBySeason = new Map<number, string[]>();
+    for (const list of lists) {
+      for (const ep of list.episodes) {
+        if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
+        const arr = titlesBySeason.get(ep.seasonNumber) ?? [];
+        arr.push(ep.title);
+        titlesBySeason.set(ep.seasonNumber, arr);
+      }
+    }
     const locals = await db.mediaItem.findMany({
       where: {
         kind: "EPISODE",
@@ -314,9 +383,70 @@ async function enrichEpisodeTitles(
       },
       select: { id: true, seasonNumber: true, episodeNumber: true, extra: true },
     });
+    const localsBySeason = new Map<number, number[]>();
     for (const ep of locals) {
       if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
-      const title = byKey.get(`${ep.seasonNumber}:${ep.episodeNumber}`);
+      const arr = localsBySeason.get(ep.seasonNumber) ?? [];
+      arr.push(ep.episodeNumber);
+      localsBySeason.set(ep.seasonNumber, arr);
+    }
+
+    // Season-gap backfill: split-season providers only cover the cour they
+    // matched, so later seasons of a multi-cour anime stay title-less. TVMaze
+    // keeps the whole show under one record — title-search it when a local
+    // season has no titles, then merge (and cache) what it returns.
+    const covered = new Set([...byKey.keys()].map((k) => Number(k.split(":")[0])));
+    const localSeasons = new Set(locals.map((l) => l.seasonNumber).filter((s): s is number => s != null));
+    const gapSeasons = [...localSeasons].filter((s) => !covered.has(s));
+    const tvMaze = providers["TVMAZE"] as MetadataProvider | undefined;
+    if (gapSeasons.length > 0 && tvMaze?.search && tvMaze.episodes) {
+      const series = await db.mediaItem.findUnique({ where: { id: seriesId }, select: { title: true } });
+      if (series?.title) {
+        const results = (await tvMaze.search({ title: series.title, kind: "SERIES" })).matches;
+        const hit =
+          results.find(
+            (r) => normalizeTitle(r.title) === normalizeTitle(series.title) || normalizeTitle(r.title).includes(normalizeTitle(series.title)),
+          ) ?? results[0];
+        if (hit) {
+          const backfill = await tvMaze.episodes(hit.providerId);
+          if (backfill.length > 0) {
+            const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(
+              (await db.mediaItem.findUnique({ where: { id: seriesId }, select: { lifecycleState: true } }))?.lifecycleState ?? "UNKNOWN",
+            );
+            await db.metadataCache.upsert({
+              where: { provider_externalId: { provider: "TVMAZE", externalId: hit.providerId } },
+              create: {
+                provider: "TVMAZE",
+                externalId: hit.providerId,
+                payload: { episodes: backfill } as unknown as Prisma.InputJsonValue,
+                ttlPolicy,
+                expiresAt,
+              },
+              update: {
+                payload: { episodes: backfill } as unknown as Prisma.InputJsonValue,
+                ttlPolicy,
+                expiresAt,
+              },
+            });
+            for (const ep of backfill) {
+              if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
+              byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
+              const arr = titlesBySeason.get(ep.seasonNumber) ?? [];
+              arr.push(ep.title);
+              titlesBySeason.set(ep.seasonNumber, arr);
+            }
+          }
+        }
+      }
+    }
+
+    for (const ep of locals) {
+      if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
+      const exact = byKey.get(`${ep.seasonNumber}:${ep.episodeNumber}`);
+      const seasonTitles = titlesBySeason.get(ep.seasonNumber);
+      const seasonNumbers = localsBySeason.get(ep.seasonNumber);
+      const rank = seasonNumbers?.indexOf(ep.episodeNumber) ?? -1;
+      const title = exact ?? (rank >= 0 && seasonTitles ? seasonTitles[rank] : undefined);
       if (!title) continue;
       const extra = (ep.extra ?? {}) as Record<string, unknown>;
       if (extra.episodeTitle === title) continue;

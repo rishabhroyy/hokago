@@ -5,18 +5,29 @@ import path from "node:path";
  * video as ready-to-seek immediately, even though most segment files don't
  * exist on disk yet. Segments are produced on request by whatever route
  * serves segment-N.ts; this function only ever describes the shape.
+ *
+ * `startSegment` (a resume position) sets EXT-X-MEDIA-SEQUENCE so players
+ * begin at the segment ffmpeg was asked to produce from — otherwise the
+ * player preloads segment-0, which a resumed session never writes.
  */
-export function buildM3u8(durationMs: number, segmentSeconds: number): string {
+export function buildM3u8(durationMs: number, segmentSeconds: number, startSegment = 0): string {
   const totalSeconds = durationMs / 1000;
-  const segmentCount = Math.max(1, Math.ceil(totalSeconds / segmentSeconds));
+  let segmentCount = Math.max(1, Math.ceil(totalSeconds / segmentSeconds));
+  // ffmpeg's segment muxer merges sub-`-segment_time_delta` (default 0.2s)
+  // remainders into the previous segment instead of writing a stub file —
+  // a phantom trailing EXTINF would make players fetch a segment that never
+  // exists and wedge the loader queue. Drop ghosts under half a second.
+  if (segmentCount > 1 && totalSeconds - (segmentCount - 1) * segmentSeconds < 0.5) {
+    segmentCount--;
+  }
   const lines = [
     "#EXTM3U",
     "#EXT-X-VERSION:3",
     `#EXT-X-TARGETDURATION:${segmentSeconds}`,
     "#EXT-X-PLAYLIST-TYPE:VOD",
-    "#EXT-X-MEDIA-SEQUENCE:0",
+    `#EXT-X-MEDIA-SEQUENCE:${startSegment}`,
   ];
-  for (let i = 0; i < segmentCount; i++) {
+  for (let i = startSegment; i < segmentCount; i++) {
     const remaining = totalSeconds - i * segmentSeconds;
     const dur = Math.min(segmentSeconds, remaining);
     lines.push(`#EXTINF:${dur.toFixed(3)},`);
@@ -71,15 +82,16 @@ function escapeFilterPath(p: string): string {
 
 /**
  * `-f segment` muxer, not `-f hls` — the app owns playlist content (already
- * built by buildM3u8), ffmpeg only ever produces the .ts bytes .
+ * built by buildM3u8), ffmpeg only ever produces the .ts bytes.
  * `-ss` before `-i` seeks the input for a fast keyframe-aligned-ish start;
  * `-segment_start_number` keeps output filenames matching the segment index
- * the playlist already promised.
+ * the playlist already promised. `-loglevel error` keeps stderr to
+ * failures only (the tail that TranscodeJob.lastError captures).
  */
 export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   const startSeconds = input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
-  const args: string[] = ["-y"];
+  const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
   if (startSeconds > 0) args.push("-ss", String(startSeconds));
   args.push("-i", input.inputPath);
 
@@ -111,8 +123,13 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     }
 
     args.push("-c:v", input.videoCodec ?? "libx264");
+    // Live transcoding is a realtime-serving path, not a one-off rip —
+    // veryfast + CRF 23 keeps the first segment on screen in seconds. The
+    // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
+    // the speed/quality tradeoff instead.
+    args.push("-preset", "veryfast", "-crf", "23");
     if (input.maxVideoBitrateKbps !== undefined) {
-      args.push("-b:v", `${input.maxVideoBitrateKbps}k`);
+      args.push("-maxrate", `${input.maxVideoBitrateKbps}k`, "-bufsize", `${input.maxVideoBitrateKbps * 2}k`);
     }
     args.push("-c:a", input.audioCodec ?? "aac");
     // Deterministic segment boundaries — only meaningful when re-encoding,

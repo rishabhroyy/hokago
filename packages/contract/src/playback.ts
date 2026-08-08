@@ -33,6 +33,8 @@ export const StartPlaybackResponse = z.object({
   method: PlaybackMethod,
   reasons: z.array(z.string()),
   playlistUrl: z.string().nullable(),
+  /** Where playback should resume (ms) — 0 when starting fresh. Server-side state, so callers need no stored position. */
+  resumePositionMs: z.number().default(0),
 });
 export type StartPlaybackResponse = z.infer<typeof StartPlaybackResponse>;
 
@@ -93,5 +95,24 @@ export const ContinueWatchingEntry = z.object({
 });
 export type ContinueWatchingEntry = z.infer<typeof ContinueWatchingEntry>;
 export const ContinueWatchingResponse = z.array(ContinueWatchingEntry);
+
+/** One row per (profile, item, calendar day) — the day-by-day watch history. */
+export const WatchHistoryQuery = z.object({ profileId: z.string(), mediaItemId: z.string() });
+export type WatchHistoryQuery = z.infer<typeof WatchHistoryQuery>;
+
+export const WatchHistoryEntry = z.object({
+  date: z.coerce.date(),
+  /** Total watch time credited that day (seek jumps excluded). */
+  watchedMs: z.number(),
+  /** Start of the day's first watch span. */
+  firstStartedAt: z.coerce.date().nullable(),
+  /** End of the day's last watch span. */
+  lastEndedAt: z.coerce.date().nullable(),
+  /** Completions (rewatch events) that day. */
+  completions: z.number(),
+});
+export type WatchHistoryEntry = z.infer<typeof WatchHistoryEntry>;
+
+export const WatchHistoryResponse = z.array(WatchHistoryEntry);
 
 export const ErrorResponse = z.object({ error: z.string() });

@@ -25,10 +25,13 @@ pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via 
 
 ## Dev workflow
 
-- `docker compose up -d postgres valkey` — publishes 5432/6379 for host-run services. `/config` bind-mounts into `./data/config`; media roots are added per-library (see `docker-compose.yml`).
+- Dev runs host-side (API/worker/web via pnpm); `docker compose up -d postgres valkey` publishes 5432/6379. `/config` bind-mounts into `./data/config`; media roots are added per-library (see `docker-compose.yml`).
+- Deploy runs everything in containers: `docker compose up -d --build` (API runs `prisma migrate deploy` on boot — idempotent, so fresh postgres works). `infra/docker/Dockerfile`: ffmpeg compiled from source in `ffmpeg-builder`, workspace build in `node-builder` (runs all three codegen steps + fonts build).
 - API: `pnpm --filter @hokago/api dev` (tsx watch). Worker: `pnpm --filter @hokago/worker dev`. Web: `pnpm --filter @hokago/web dev`.
 - Vite proxies API paths + `/ws` to `HOKAGO_API_ORIGIN` (default `http://localhost:3000`). `HOKAGO_COEP=credentialless` flips the COEP fallback (default `require-corp`). Keep the proxy path list in `apps/web/vite.config.ts` in sync with any new API prefix.
 - `.env` holds compose-only vars (`HOKAGO_CONFIG_DIR`, `POSTGRES_PASSWORD`, ...). The app code reads `DATABASE_URL` / `VALKEY_URL` directly from the environment.
+- Transcode concurrency is capped per-API-process by `HOKAGO_MAX_TRANSCODES` (default 2); busy slots return 503 and clients retry. Idle sessions (no heartbeat 5 min) are reaped on a 60s sweep plus a boot sweep when the API starts.
+- Scan parallelism: the scan walk probes files and ingests leaves with bounded pools (`PROBE_CONCURRENCY`/`INGEST_CONCURRENCY` in `packages/scanner/src/constants.ts`). Worker-side caps: `HOKAGO_ARTWORK_CONCURRENCY` (default 4, bounds ffmpeg) and `HOKAGO_SCAN_CONCURRENCY` (default 1, parallel libraries).
 
 ## Architecture (own: where things live)
 
@@ -49,6 +52,7 @@ Work top to bottom; don't skip ahead. Ordering principle: build the thing that a
 
 ## Gotchas
 
+- `tsx watch` on the API only watches `apps/api/src` — changes to `packages/*/src` are inert until you rebuild the package (`pnpm --filter @hokago/<pkg> build`) **and** restart the API (`touch apps/api/src/index.ts`). A stale `dist/` looks exactly like a bug that "doesn't take effect".
 - `hokago` is always lowercase — code, UI, packages, commits.
 - Conventional commits (`feat:`/`fix:`/...), small one-concern commits (see `git log`).
 - Model changes: update `packages/db/prisma/schema.prisma` and call it out in the commit. Don't redesign the schema silently.

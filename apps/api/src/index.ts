@@ -19,6 +19,7 @@ import { registerAvatarRoutes } from "./avatar-routes.js";
 import { registerBrowseRoutes } from "./browse-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
 import { registerPresence } from "./presence.js";
+import { reapStaleSessions } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
@@ -59,8 +60,17 @@ app.listen({ port, host: "0.0.0.0" }).catch((err) => {
   process.exit(1);
 });
 
+// Boot sweep: close sessions abandoned by a previous API run (restart, crash)
+// immediately instead of waiting for the first 60s tick — otherwise the
+// dashboard's "watching now" counts zombies for up to 5 minutes after boot.
+reapStaleSessions()
+  .then((reaped) => {
+    if (reaped > 0) app.log.info(`boot sweep: reaped ${reaped} stale playback session(s)`);
+  })
+  .catch((err) => app.log.error({ err }, "boot sweep failed"));
+
 // Reaps any live transcode children on shutdown — apps/api owns them directly
-// (separate PID namespace from apps/worker), so nothing else can reap them .
+// (separate PID namespace from apps/worker), so nothing else can reap them.
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
@@ -72,3 +82,14 @@ async function shutdown(signal: string): Promise<void> {
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// Idle reaper: closes playback sessions whose client stopped heartbeating
+// (closed tab, crashed player) — kills their ffmpeg child and frees the
+// transcode slot, so abandoned playback can't accumulate processes.
+setInterval(() => {
+  reapStaleSessions()
+    .then((reaped) => {
+      if (reaped > 0) app.log.info(`reaped ${reaped} stale playback session(s)`);
+    })
+    .catch((err) => app.log.error({ err }, "stale session reap failed"));
+}, 60_000);

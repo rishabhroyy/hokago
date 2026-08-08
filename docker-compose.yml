@@ -49,7 +49,9 @@ services:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile
-    command: ["node", "apps/api/dist/index.js"]
+    # Migrations before boot — a fresh postgres has no tables and the API
+    # would crash into a restart loop. prisma migrate deploy is idempotent.
+    command: ["sh", "-c", "pnpm --filter @hokago/db run migrate:deploy && node apps/api/dist/index.js"]
     restart: unless-stopped
     depends_on:
       postgres:
@@ -78,6 +80,10 @@ services:
       postgres:
         condition: service_healthy
       valkey:
+        condition: service_started
+      # The API runs migrations on boot — start after it so the worker's
+      # boot reconciler never queries a schema that doesn't exist yet.
+      hokago:
         condition: service_started
     environment:
       DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago

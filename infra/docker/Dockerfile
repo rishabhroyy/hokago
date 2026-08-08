@@ -1,5 +1,4 @@
-# hokago — single image, two entrypoints (api + worker), §6.1.
-# Design doc: docs/design.md §5, §6.1, §14, §19 Step 1.
+# hokago — single image, two entrypoints (api + worker).
 #
 # The worker "owns all ffmpeg" — the binary is built once here and lives in
 # every stage of this image, not a separate Dockerfile.
@@ -44,13 +43,13 @@ RUN git clone --depth 1 --branch v1.5.2 https://github.com/xiph/opus.git \
     && cd opus && ./autogen.sh && ./configure --enable-static --disable-shared \
     && make -j"$(nproc)" && make install
 
-# zimg — backs the zscale filter, load-bearing for §11.3 HDR->SDR tone-mapping.
+# zimg — backs the zscale filter, load-bearing for HDR->SDR tone-mapping.
 RUN git clone --depth 1 --branch release-3.0.6 https://github.com/sekrit-twc/zimg.git \
     && cd zimg && ./autogen.sh && ./configure --enable-static --disable-shared \
     && make -j"$(nproc)" && make install
 
-# ffmpeg itself — CPU only, no vaapi/qsv/nvenc/rkmpp (those are the §14 hwaccel
-# overlay, step 14; this is the always-works floor per §19 ordering principle).
+# ffmpeg itself — CPU only, no vaapi/qsv/nvenc/rkmpp (those are the hwaccel
+# overlay, later in the build order; this is the always-works floor).
 RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
     && cd ffmpeg && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure \
          --pkg-config-flags="--static" \
@@ -81,6 +80,8 @@ COPY apps ./apps
 
 RUN pnpm install --frozen-lockfile=false
 RUN pnpm --filter @hokago/contract generate
+RUN pnpm --filter @hokago/db generate
+RUN pnpm --filter @hokago/fonts build
 RUN pnpm -r build
 
 # ── Stage: runtime ──
@@ -93,6 +94,6 @@ COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 WORKDIR /repo
 COPY --from=node-builder /repo /repo
 
-# entrypoint chosen per service via `command:` in docker-compose.yml (§6.1:
-# same image, different entrypoint — hokago runs apps/api, hokago-worker runs apps/worker)
+# entrypoint chosen per service via `command:` in docker-compose.yml (same
+# image, different entrypoint — hokago runs apps/api, hokago-worker runs apps/worker)
 CMD ["node", "apps/api/dist/index.js"]

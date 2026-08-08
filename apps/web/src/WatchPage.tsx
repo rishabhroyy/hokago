@@ -181,7 +181,17 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     };
     startPlayback()
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled) {
+          // StrictMode double-mount: this /start was the mount-1 attempt, the
+          // effect already cleaned up. Kill the server session so it doesn't
+          // transcode the whole file for a player that will never mount.
+          api
+            .POST("/playback/{sessionId}/stop", {
+              params: { path: { sessionId: data.sessionId } },
+            })
+            .catch(() => {});
+          return;
+        }
         setStart(data);
         // Resume: DIRECT_PLAY has no server-produced segments — the player
         // seeks itself. Transcodes start at the resume segment via the

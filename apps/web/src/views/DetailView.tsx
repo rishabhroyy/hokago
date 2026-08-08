@@ -341,6 +341,19 @@ export function DetailView({ itemId }: { itemId: string }) {
 
           {hasEpisodes && <div className="my-2 h-px bg-line/80" />}
 
+          {!item.isDownloaded && (
+            <div className="mt-8 flex flex-col items-center gap-3 rounded-[26px] border-2 border-dashed border-line px-6 py-14 text-center">
+              <span className="flex h-16 w-16 items-center justify-center rounded-[20px] bg-paper text-ink-2 ring-1 ring-line">
+                <Icon name="download" className="h-7 w-7" />
+              </span>
+              <p className="font-display text-section font-bold text-ink-2">not downloaded yet</p>
+              <p className="max-w-[380px] text-meta leading-relaxed text-ink-3">
+                this title is tracked but no files have landed — drop the episodes into its folder and rescan the
+                library.
+              </p>
+            </div>
+          )}
+
           {episodesBySeason.map(([season, eps]) => (
             <SeasonGrid key={season ?? "none"} season={season} eps={eps} onOpen={openEpisode} />
           ))}

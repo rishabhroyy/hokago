@@ -21,7 +21,18 @@ const db = new PrismaClient();
 const itemInclude = {
   artwork: { select: { id: true, kind: true, priority: true } },
   files: { select: { id: true }, take: 1 },
+  parent: { select: { parentId: true } },
 } as const;
+
+/**
+ * Detail-page target: for an EPISODE that's its series (parent → parent),
+ * everything else the item itself — continue-watching must land on the show,
+ * not on the episode's own (non-existent) detail page.
+ */
+function detailItemId(item: { kind: string; id: string; parentId: string | null; parent: { parentId: string | null } | null }): string {
+  if (item.kind === "EPISODE") return item.parent?.parentId ?? item.parentId ?? item.id;
+  return item.id;
+}
 
 function toRef<
   T extends {
@@ -35,6 +46,7 @@ function toRef<
     year: number | null;
     artwork: ArtworkRef[];
     files: { id: string }[];
+    parent: { parentId: string | null } | null;
   },
 >(item: T) {
   return {
@@ -219,7 +231,13 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
         if (!bySeries.has(seriesKey) || bySeries.get(seriesKey)!.updatedAt < state.updatedAt) {
           bySeries.set(seriesKey, {
             updatedAt: state.updatedAt,
-            entry: { mediaItem: toRef(item), positionMs: state.positionMs, durationMs: state.durationMs, upNext: false },
+            entry: {
+              mediaItem: toRef(item),
+              detailItemId: detailItemId(item),
+              positionMs: state.positionMs,
+              durationMs: state.durationMs,
+              upNext: false,
+            },
           });
         }
         continue;
@@ -237,7 +255,7 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       if (!bySeries.has(seriesKey) || bySeries.get(seriesKey)!.updatedAt < state.updatedAt) {
         bySeries.set(seriesKey, {
           updatedAt: state.updatedAt,
-          entry: { mediaItem: toRef(next), positionMs: 0, durationMs: null, upNext: true },
+          entry: { mediaItem: toRef(next), detailItemId: detailItemId(next), positionMs: 0, durationMs: null, upNext: true },
         });
       }
     }

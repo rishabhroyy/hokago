@@ -69,8 +69,8 @@ export function HomeView() {
       .slice(0, 6);
   }, [recentlyAdded]);
 
-  const openDetail = (item: TileItem) => navigate(paths.detail(item.id));
-  const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.id, profileId);
+  const openDetail = (item: TileItem) => navigate(paths.detail(item.detailId ?? item.id));
+  const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.detailId ?? item.id, profileId);
 
   const heroEntry = continueWatching.find((e) => !e.upNext) ?? null;
   const heroCard = !heroEntry ? (recentlyAdded[0] ?? null) : null;
@@ -215,8 +215,8 @@ export function HomeView() {
                 </button>
                 <button
                   className="btn btn-ghost"
-                  onPointerEnter={() => prefetchMediaItemDetail(heroId)}
-                  onClick={() => navigate(paths.detail(heroId))}
+                  onPointerEnter={() => prefetchMediaItemDetail(heroEntry ? heroEntry.detailItemId : heroId)}
+                  onClick={() => navigate(paths.detail(heroEntry ? heroEntry.detailItemId : heroId))}
                 >
                   <Icon name="info" className="h-4 w-4" />
                   Details

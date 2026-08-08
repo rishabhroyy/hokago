@@ -89,6 +89,8 @@ export const MediaItemRef = z.object({
 
 export const ContinueWatchingEntry = z.object({
   mediaItem: MediaItemRef.passthrough(),
+  /** Detail page to land on — the series for an episode, the item itself otherwise. */
+  detailItemId: z.string(),
   positionMs: z.number(),
   durationMs: z.number().nullable(),
   upNext: z.boolean(),

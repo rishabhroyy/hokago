@@ -33,6 +33,8 @@ export const MediaCard = z.object({
   backdropUrl: z.string().nullable(),
   /** Primary playable file, if any (leaf MOVIE/EPISODE items only) — null for SERIES/SEASON. */
   mediaFileId: z.string().nullable(),
+  /** False for a bare folder item (empty dir) with no episodes/files — "not downloaded" in the UI. */
+  isDownloaded: z.boolean(),
   genres: z.array(z.string()),
   createdAt: z.coerce.date(),
 });

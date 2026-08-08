@@ -24,6 +24,7 @@ const cardSelect = {
   createdAt: true,
   artwork: { select: { id: true, kind: true, priority: true } },
   files: { select: { id: true }, take: 1 },
+  _count: { select: { children: true } },
 } as const;
 
 const episodeSelect = {
@@ -34,15 +35,28 @@ const episodeSelect = {
   extra: true,
 } as const;
 
-function toCard<T extends { artwork: ArtworkRef[]; files: { id: string }[] }>(
+function toCard<
+  T extends {
+    kind: string;
+    artwork: ArtworkRef[];
+    files: { id: string }[];
+    _count: { children: number };
+  },
+>(
   item: T,
-): Omit<T, "artwork" | "files"> & { posterUrl: string | null; backdropUrl: string | null; mediaFileId: string | null } {
-  const { artwork, files, ...rest } = item;
+): Omit<T, "artwork" | "files" | "_count"> & {
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  mediaFileId: string | null;
+  isDownloaded: boolean;
+} {
+  const { artwork, files, _count, ...rest } = item;
   return {
     ...rest,
     posterUrl: primaryArtworkUrl(artwork, "POSTER"),
     backdropUrl: primaryArtworkUrl(artwork, "BACKDROP"),
     mediaFileId: files[0]?.id ?? null,
+    isDownloaded: item.kind === "SERIES" ? _count.children > 0 : files.length > 0,
   };
 }
 
@@ -94,6 +108,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       include: {
         artwork: { select: { id: true, kind: true, priority: true } },
         files: { select: { id: true }, take: 1 },
+        _count: { select: { children: true } },
         children: { select: cardSelect, orderBy: { sortTitle: "asc" } },
         collectionEntries: {
           include: {

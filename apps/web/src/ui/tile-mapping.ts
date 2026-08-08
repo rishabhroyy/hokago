@@ -12,6 +12,7 @@ export function cardToTile(item: MediaCard): TileItem {
     title: item.title,
     posterUrl: item.posterUrl,
     subLabel: kindLabel(item.kind),
+    badge: item.isDownloaded ? undefined : "NOT DOWNLOADED",
   };
 }
 
@@ -26,6 +27,7 @@ export function continueWatchingToTile(entry: ContinueWatchingEntry): TileItem {
     title: item.title,
     posterUrl: item.posterUrl,
     subLabel,
+    detailId: entry.detailItemId,
     badge: entry.upNext ? "NEXT" : undefined,
     progress: !entry.upNext && entry.durationMs ? entry.positionMs / entry.durationMs : undefined,
   };

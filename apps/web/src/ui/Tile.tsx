@@ -37,6 +37,8 @@ export interface TileItem {
   subLabel: string;
   badge?: string;
   progress?: number;
+  /** Detail page to land on when opened — series for an episode, else the item itself. */
+  detailId?: string;
 }
 
 export function Tile({

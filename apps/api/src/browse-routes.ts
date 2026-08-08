@@ -1,5 +1,13 @@
 import { PrismaClient } from "@hokago/db";
-import { LibrarySummary, MediaCard, MediaItemDetail, LibraryItemsParams, MediaItemDetailParams, NotFoundError } from "@hokago/contract/browse";
+import {
+  LibrarySummary,
+  MediaCard,
+  MediaItemDetail,
+  LibraryItemsParams,
+  MediaItemDetailParams,
+  MediaItemDetailQuery,
+  NotFoundError,
+} from "@hokago/contract/browse";
 import { z } from "zod";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 import { primaryArtworkUrl, type ArtworkRef } from "./artwork.js";
@@ -74,7 +82,11 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
     "/media-items/:id",
     {
       preHandler: app.authenticate,
-      schema: { params: MediaItemDetailParams, response: { 200: MediaItemDetail, 404: NotFoundError } },
+      schema: {
+        params: MediaItemDetailParams,
+        querystring: MediaItemDetailQuery,
+        response: { 200: MediaItemDetail, 404: NotFoundError },
+      },
     },
     async (req, reply) => {
     const item = await db.mediaItem.findUnique({
@@ -118,15 +130,51 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
         })
       : [];
 
+    // Watch data is per-profile — only load it when the caller passes a
+    // profile they own. Everything defaults to "not watched / position 0".
+    let watch = null;
+    const stateByItemId = new Map<string, { watched: boolean; positionMs: number }>();
+    if (req.query.profileId) {
+      const owned = await db.profile.findFirst({
+        where: { id: req.query.profileId, accountId: req.accountId },
+        select: { id: true },
+      });
+      if (owned) {
+        const allStates = await db.playbackState.findMany({
+          where: { profileId: owned.id, mediaItemId: { in: [item.id, ...episodes.map((e) => e.id)] } },
+          select: { mediaItemId: true, watched: true, positionMs: true, durationMs: true, playCount: true, lastWatchedAt: true },
+        });
+        const self = allStates.find((s) => s.mediaItemId === item.id);
+        watch = self
+          ? {
+              watched: self.watched,
+              positionMs: self.positionMs,
+              durationMs: self.durationMs,
+              playCount: self.playCount,
+              lastWatchedAt: self.lastWatchedAt,
+            }
+          : { watched: false, positionMs: 0, durationMs: null, playCount: 0, lastWatchedAt: null };
+        for (const s of allStates) {
+          if (s.mediaItemId !== item.id) stateByItemId.set(s.mediaItemId, { watched: s.watched, positionMs: s.positionMs });
+        }
+      }
+    }
+
     return {
       ...toCard(rest),
       children: children.map(toCard),
       episodes: episodes.map((ep) => {
         const card = toCard(ep);
         const episodeTitle = (ep.extra as { episodeTitle?: string } | null)?.episodeTitle;
-        return episodeTitle ? { ...card, title: episodeTitle } : card;
+        const state = stateByItemId.get(ep.id);
+        return {
+          ...(episodeTitle ? { ...card, title: episodeTitle } : card),
+          watched: state?.watched ?? false,
+          positionMs: state?.positionMs ?? 0,
+        };
       }),
       audioTracks,
+      watch,
       collections: collectionEntries.map((entry) => ({
         id: entry.collection.id,
         name: entry.collection.name,

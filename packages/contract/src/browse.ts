@@ -42,6 +42,9 @@ export const LibraryItemsParams = z.object({ id: z.string() });
 
 export const MediaItemDetailParams = z.object({ id: z.string() });
 
+/** Optional profileId scopes the detail response's watch data (episode watched marks, resume positions, item summary). */
+export const MediaItemDetailQuery = z.object({ profileId: z.string().optional() });
+
 export const CollectionEntry = z.object({
   relationType: RelationType,
   anchor: z.string().nullable(),
@@ -52,8 +55,23 @@ export const EpisodeCard = MediaCard.extend({
   seasonNumber: z.number().int().nullable(),
   episodeNumber: z.number().int().nullable(),
   runtimeMs: z.number().int().nullable(),
+  /** Whether the requesting profile has watched this episode to completion. */
+  watched: z.boolean().default(false),
+  /** Resume position for the requesting profile — 0 when never started. */
+  positionMs: z.number().default(0),
 });
 export type EpisodeCard = z.infer<typeof EpisodeCard>;
+
+/** Per-profile watch summary for a media item (from PlaybackState). */
+export const MediaItemWatch = z.object({
+  watched: z.boolean(),
+  positionMs: z.number(),
+  durationMs: z.number().nullable(),
+  /** Rewatch count — times watched to completion. */
+  playCount: z.number(),
+  lastWatchedAt: z.coerce.date().nullable(),
+});
+export type MediaItemWatch = z.infer<typeof MediaItemWatch>;
 
 export const AudioTrackInfo = z.object({ streamIndex: z.number().int(), lang: z.string().nullable() });
 export type AudioTrackInfo = z.infer<typeof AudioTrackInfo>;
@@ -70,6 +88,8 @@ export const MediaItemDetail = MediaCard.extend({
   episodes: z.array(EpisodeCard),
   /** Primary file's audio streams — empty for SERIES/SEASON (no file of their own). */
   audioTracks: z.array(AudioTrackInfo),
+  /** Watch summary for the requesting profile — null when no profileId was passed. */
+  watch: MediaItemWatch.nullable().default(null),
   collections: z.array(
     z.object({
       id: z.string(),

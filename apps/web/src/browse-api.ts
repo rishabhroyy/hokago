@@ -27,28 +27,36 @@ export async function fetchLibraryItems(id: string): Promise<MediaCard[]> {
 
 // Detail prefetch cache: tiles warm it on pointer-enter so the channel-zoom
 // lands on an already-rendered page instead of a skeleton ("never block").
+// Keyed by profileId too — watch data (watched marks, resume positions) is
+// profile-scoped, so a warm no-profile entry must not shadow the real one.
 const detailCache = new Map<string, Promise<MediaItemDetail | null>>();
 
-export function prefetchMediaItemDetail(id: string): void {
-  void fetchMediaItemDetail(id);
+export function prefetchMediaItemDetail(id: string, profileId?: string | null): void {
+  void fetchMediaItemDetail(id, profileId);
 }
 
-function fetchMediaItemDetailUncached(id: string): Promise<MediaItemDetail | null> {
-  return api.GET("/media-items/{id}", { params: { path: { id } } }).then(({ data }) => {
-    if (!data) return null;
-    return {
-      ...fixCreatedAt(data),
-      children: data.children.map(fixCreatedAt),
-      episodes: data.episodes.map(fixCreatedAt),
-      collections: data.collections.map((c) => ({
-        ...c,
-        entries: c.entries.map((e) => ({ ...e, item: fixCreatedAt(e.item) })),
-      })),
-    };
-  });
+function fetchMediaItemDetailUncached(id: string, profileId?: string | null): Promise<MediaItemDetail | null> {
+  return api
+    .GET("/media-items/{id}", {
+      params: { path: { id }, query: profileId ? { profileId } : {} },
+    })
+    .then(({ data }) => {
+      if (!data) return null;
+      return {
+        ...fixCreatedAt(data),
+        children: data.children.map(fixCreatedAt),
+        episodes: data.episodes.map(fixCreatedAt),
+        watch: data.watch ? { ...data.watch, lastWatchedAt: data.watch.lastWatchedAt ? new Date(data.watch.lastWatchedAt) : null } : null,
+        collections: data.collections.map((c) => ({
+          ...c,
+          entries: c.entries.map((e) => ({ ...e, item: fixCreatedAt(e.item) })),
+        })),
+      };
+    });
 }
 
-export async function fetchMediaItemDetail(id: string): Promise<MediaItemDetail | null> {
-  if (!detailCache.has(id)) detailCache.set(id, fetchMediaItemDetailUncached(id));
-  return detailCache.get(id)!;
+export async function fetchMediaItemDetail(id: string, profileId?: string | null): Promise<MediaItemDetail | null> {
+  const key = `${id}:${profileId ?? ""}`;
+  if (!detailCache.has(key)) detailCache.set(key, fetchMediaItemDetailUncached(id, profileId));
+  return detailCache.get(key)!;
 }

@@ -10,6 +10,7 @@ import {
   MediaItemDetail,
   LibraryItemsParams,
   MediaItemDetailParams,
+  MediaItemDetailQuery,
   NotFoundError as BrowseNotFoundError,
 } from "./browse.js";
 import {
@@ -48,6 +49,8 @@ import {
   StopResponse,
   ContinueWatchingQuery,
   ContinueWatchingResponse,
+  WatchHistoryQuery,
+  WatchHistoryResponse,
   ErrorResponse as PlaybackErrorResponse,
 } from "./playback.js";
 import {
@@ -119,7 +122,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
     method: "get",
     path: "/media-items/{id}",
     summary: "Media item detail",
-    request: { params: MediaItemDetailParams },
+    request: { params: MediaItemDetailParams, query: MediaItemDetailQuery },
     responses: {
       200: { description: "OK", ...json(MediaItemDetail) },
       404: { description: "Not found", ...json(BrowseNotFoundError) },
@@ -304,6 +307,13 @@ export function buildOpenApiDocument(): OpenAPIObject {
     summary: "Continue-watching rail for a profile",
     request: { query: ContinueWatchingQuery },
     responses: { 200: { description: "OK", ...json(ContinueWatchingResponse) } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/watch-history",
+    summary: "Day-by-day watch history for a profile + media item",
+    request: { query: WatchHistoryQuery },
+    responses: { 200: { description: "OK", ...json(WatchHistoryResponse) } },
   });
 
  // Admin

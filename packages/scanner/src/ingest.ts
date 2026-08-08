@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 
 import { PrismaClient, type ContentProfile } from "@hokago/db";
@@ -127,7 +128,11 @@ async function ingestLeafItem(
 ): Promise<LeafResult> {
   const { file, dir, probe } = ctx;
   const parsed = parseFilename(path.basename(file.path), profile);
-  const title = parsed.title ?? path.basename(file.path);
+  // Episodes never take the filename as their name — parsers only ever return
+  // the series title, which every row of a season would share. "Episode N" is
+  // the honest placeholder until provider enrichment fills `extra.episodeTitle`.
+  const title =
+    kind === "EPISODE" ? `Episode ${parsed.episode ?? "?"}` : (parsed.title ?? path.basename(file.path));
 
   // Path first (common case, cheap unique lookup). If the path moved, fall
   // back to inode within this library — a rename/move must reuse the same
@@ -294,10 +299,6 @@ export async function ingestLibrary(
   const byDir = groupByDirectory(files);
   const deferArtwork = opts.onArtworkNeeded !== undefined;
 
-  // Global, deterministic order independent of filesystem readdir order —
- // required for scanCursor resume to mean anything .
-  const sortedDirs = Array.from(byDir.keys()).sort();
-
   const summary: IngestSummary = {
     directoriesScanned: byDir.size,
     filesScanned: files.length,
@@ -306,6 +307,49 @@ export async function ingestLibrary(
     episodesCreated: 0,
     artworkStored: 0,
   };
+
+  // Top-level directories with no video files anywhere beneath them get a
+  // bare SERIES row — visible as "not downloaded" until the folder is filled.
+  const dirsWithMedia = new Set<string>();
+  for (const f of files) {
+    let d = path.dirname(f.path);
+    while (d.length >= rootPath.length) {
+      dirsWithMedia.add(d);
+      if (d === rootPath) break;
+      d = path.dirname(d);
+    }
+  }
+  const rootEntries = (await readdir(rootPath, { withFileTypes: true }))
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of rootEntries) {
+    const dir = path.join(rootPath, entry.name);
+    if (dirsWithMedia.has(dir)) continue;
+    const existing = await db.mediaItem.findFirst({
+      where: { libraryId, parentId: null, kind: "SERIES", title: entry.name },
+    });
+    if (existing) continue;
+    const created = await db.mediaItem.create({
+      data: {
+        libraryId,
+        kind: "SERIES",
+        title: entry.name,
+        sortTitle: entry.name.toLowerCase(),
+      },
+    });
+    await syncEvidenceAndConfidence(
+      db,
+      created.id,
+      [{ signalType: "FOLDER_NAME", source: dir, value: { title: entry.name } }],
+      LOCAL_SIGNAL_TYPES,
+    );
+    summary.seriesCreated += 1;
+    await opts.onMetadataNeeded?.({ mediaItemId: created.id, libraryId, kind: "SERIES", title: entry.name, year: null });
+  }
+
+  // Global, deterministic order independent of filesystem readdir order —
+  // required for scanCursor resume to mean anything.
+  const sortedDirs = Array.from(byDir.keys()).sort();
 
   for (const dir of sortedDirs) {
     if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) continue;

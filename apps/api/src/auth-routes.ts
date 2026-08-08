@@ -117,6 +117,14 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
         return reply.code(401).send({ error: "refresh token invalid or revoked" });
       }
 
+      // Sliding expiry: every successful refresh rolls the session forward
+      // another REFRESH_TOKEN_TTL_MS, so an actively-used session never
+      // silently dies after its first 30 days.
+      await db.session.update({
+        where: { id: session.id },
+        data: { expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS) },
+      });
+
       const payload: AccessTokenPayload = { accountId: session.accountId, isAdmin: session.account.isAdmin };
       const accessToken = app.jwt.sign(payload);
       return { accessToken };

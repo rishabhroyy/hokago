@@ -9,9 +9,23 @@ import { useWiiSound } from "../ui/useWiiSound";
  * auth: username + password, invites are codes shared manually.
  * No email anywhere, no password reset flow — that's an admin action.
  */
+
+// Rotating login flavor text — one per visit, kept to actual anime-isms.
+const LOGIN_PHRASES = [
+  "moe moe kyun!",
+  "welcome back, senpai",
+  "it's hokago time",
+  "nyaa~ let's watch",
+  "chotto matte — that's a new season?",
+  "gambare! your episodes await",
+  "binge responsibly, senpai",
+  "let's fill that queue",
+];
+
 export function LoginView() {
   const s = useWiiSound();
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [phrase] = useState(() => LOGIN_PHRASES[Math.floor(Math.random() * LOGIN_PHRASES.length)]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
@@ -73,7 +87,7 @@ export function LoginView() {
           </span>
           <h1 className="font-display text-title font-bold">hokago</h1>
           <p className="mt-1 text-meta text-ink-2">
-            {mode === "login" ? "sign in to your channels" : "join with an invite code"}
+            {mode === "login" ? phrase : "join with an invite code"}
           </p>
         </div>
 

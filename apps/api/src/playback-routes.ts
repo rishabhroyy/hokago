@@ -18,6 +18,7 @@ import { buildM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { broadcastPresence } from "./presence.js";
 import { acquireTranscodeSlot, releaseTranscodeSlot } from "./transcode-slot.js";
+import { configDir } from "./config.js";
 import {
   StartPlaybackBody,
   StartPlaybackResponse,
@@ -29,10 +30,6 @@ import {
   ErrorResponse,
 } from "@hokago/contract/playback";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
-
-function configDir(): string {
-  return process.env.HOKAGO_CONFIG_DIR ?? "./data/config";
-}
 
 function transcodeDir(sessionId: string): string {
   return path.join(configDir(), "transcode", sessionId);

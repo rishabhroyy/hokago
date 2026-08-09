@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { PrismaClient } from "@hokago/db";
 import { MediaFileParams, MediaFileFontsResponse, MediaFileTracksResponse, ErrorResponse } from "@hokago/contract/media-files";
+import { resolveConfigFilePath } from "./config.js";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
@@ -94,23 +95,22 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
   // forever regardless of which of the four sources produced it.
   app.get<{ Params: { hash: string } }>("/fonts/:hash", async (req, reply) => {
     const font = await db.font.findUnique({ where: { hash: req.params.hash } });
-    if (!font || !existsSync(font.path)) return reply.code(404).send({ error: "font not found" });
+    const fontPath = font && resolveConfigFilePath(font.path, "fonts");
+    if (!fontPath) return reply.code(404).send({ error: "font not found" });
 
     reply.header("Cross-Origin-Resource-Policy", "cross-origin");
     reply.header("Cache-Control", "public, max-age=31536000, immutable");
     reply.type(FONT_MIME[font.format] ?? "application/octet-stream");
-    return reply.send(createReadStream(font.path));
+    return reply.send(createReadStream(fontPath));
   });
 
  // Artwork store — bytes fetched once server-side, never a URL.
   app.get<{ Params: { id: string } }>("/artwork/:id", async (req, reply) => {
     const artwork = await db.artwork.findUnique({ where: { id: req.params.id } });
-    if (!artwork) return reply.code(404).send({ error: "artwork not found" });
-    // Absolute since the store started writing absolute paths; legacy rows
-    // may carry cwd-relative paths, resolve those against the API's own cwd
-    // (the repo root in dev) rather than 404ing.
-    const bytesPath = path.isAbsolute(artwork.bytesPath) ? artwork.bytesPath : path.resolve(artwork.bytesPath);
-    if (!existsSync(bytesPath)) return reply.code(404).send({ error: "artwork not found" });
+    // resolveConfigFilePath handles every legacy path shape: host-absolute
+    // (/Users/.../data/config/...), cwd-relative, or container-relative.
+    const bytesPath = artwork && resolveConfigFilePath(artwork.bytesPath, "artwork");
+    if (!bytesPath) return reply.code(404).send({ error: "artwork not found" });
 
     reply.header("Cross-Origin-Resource-Policy", "cross-origin");
     reply.header("Cache-Control", "public, max-age=31536000, immutable");

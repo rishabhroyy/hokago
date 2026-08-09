@@ -1,0 +1,24 @@
+# hokago — build context hygiene. The image does its own codegen + build in
+# node-builder; host artifacts are never inputs (they can leak stale engines,
+# e.g. the macOS prisma query engine, into the image).
+
+.git
+.gitignore
+.env
+
+# host-side state — must never enter the build context
+data
+
+node_modules
+**/node_modules
+**/dist
+**/generated
+packages/fonts/vendor
+
+# os noise
+.DS_Store
+
+# local tooling
+*.log
+.vscode
+.idea

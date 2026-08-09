@@ -1,4 +1,4 @@
-# hokago — single image, two entrypoints (api + worker).
+# hokago — one build, three entrypoints (api + worker + web).
 #
 # The worker "owns all ffmpeg" — the binary is built once here and lives in
 # every stage of this image, not a separate Dockerfile.
@@ -108,3 +108,9 @@ COPY --from=node-builder /repo /repo
 # entrypoint chosen per service via `command:` in docker-compose.yml (same
 # image, different entrypoint — hokago runs apps/api, hokago-worker runs apps/worker)
 CMD ["node", "apps/api/dist/index.js"]
+
+# ── Stage: web — nginx serving the SPA, proxying API prefixes to `hokago` ──
+FROM nginx:alpine AS web
+
+COPY infra/docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=node-builder /repo/apps/web/dist /usr/share/nginx/html

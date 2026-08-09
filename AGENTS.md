@@ -20,9 +20,11 @@ pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via 
 ### Dev loop (api + worker run in containers; web runs on the host)
 
 - `pnpm dev:web` — the **only** host-side dev process: Vite dev server on :5173 with HMR, proxying API paths + `/ws` to `HOKAGO_API_ORIGIN` (default `http://localhost:3000`, the container API).
-- `pnpm docker:up` — full stack: postgres, valkey, API (`hokago`, publishes :3000), worker (`hokago-worker`).
-- `pnpm docker:rebuild` — after changes to `apps/api`, `apps/worker`, or `packages/*`: rebuilds images **and** force-recreates containers. This is the only thing that recreates them — `docker compose up -d` alone won't.
-- `pnpm docker:logs [svc]` · `pnpm docker:ps` · `pnpm docker:down` — logs / status / full teardown (postgres data lives in bind mounts, survives `down`).
+- `pnpm docker:dev` — dev overlay (`compose.dev.yml`): binds `apps/api/src` + `apps/worker/src` into the containers and runs them under `tsx watch` — **hot reload, no rebuild for app-source changes**. (src-only mounts: the image keeps its own `node_modules` — pnpm symlinks are absolute to the build root.)
+- `pnpm docker:dev:rebuild` — after contract/schema/`packages/*` changes: rebuilds images + re-creates the dev containers (their `dist/`/generated output is baked into the image).
+- `pnpm docker:up` — prod compose (no overlay): postgres, valkey, API (`hokago`, :3000), worker (`hokago-worker`), and `web` (nginx, :8080) serving the built SPA and proxying API paths + `/ws` like the vite proxy does.
+- `pnpm docker:rebuild` — prod rebuild + force-recreate.
+- `pnpm docker:logs [svc]` · `pnpm docker:ps` · `pnpm docker:down` — logs / status / full teardown (postgres data lives in bind mounts, survives `down`). Both compose variants share service names, so these work either way.
 
 ## Codegen is mandatory, and order matters
 
@@ -33,15 +35,17 @@ pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via 
 
 ## Dev workflow
 
-Everything runs in containers **except the web app**. `pnpm docker:up` starts postgres, valkey, the API (`hokago`, :3000) and the worker (`hokago-worker`); the web dev server runs on the host (`pnpm dev:web`, :5173, Vite HMR) and proxies to the container API. ffmpeg — playback transcodes and every worker job — runs only inside containers, never on the host.
+Everything runs in containers **except the web app in dev**. `pnpm docker:dev` starts postgres, valkey, the API (`hokago`, :3000) and the worker (`hokago-worker`) with hot-reloading source mounts; the web dev server runs on the host (`pnpm dev:web`, :5173, Vite HMR) and proxies to the container API. ffmpeg — playback transcodes and every worker job — runs only inside containers, never on the host.
 
 - **Web changes** → just edit; Vite HMR picks it up. No rebuild, no container.
-- **API/worker/packages changes** → `pnpm docker:rebuild`. Source edits are inert in a running container — a stale image looks exactly like a bug that "doesn't take effect".
-- **Contract/schema changes** → two steps: host-side codegen + build for the web dev server and host CLI scripts (`pnpm --filter @hokago/contract generate`, `pnpm --filter @hokago/db generate`, then `pnpm -r build`), **and** `pnpm docker:rebuild` for the containers. The Dockerfile's `node-builder` stage re-runs all codegen inside the image (`rm -rf` of generated dirs first — deterministic; host artifacts never leak in).
+- **API/worker source changes** → `pnpm docker:dev` (tsx watch restarts in the container, seconds). `packages/*` changes → `pnpm docker:dev:rebuild` (their `dist/` is baked into the image).
+- **Contract/schema changes** → two steps: host-side codegen + build for the web dev server and host CLI scripts (`pnpm --filter @hokago/contract generate`, `pnpm --filter @hokago/db generate`, then `pnpm -r build`), **and** `pnpm docker:dev:rebuild` for the containers. The Dockerfile's `node-builder` stage re-runs all codegen inside the image (`rm -rf` of generated dirs first — deterministic; host artifacts never leak in).
+- **Prod** (`pnpm docker:up`) adds the `web` service — nginx serving the built SPA on :8080, proxying API paths + `/ws` to the API and setting the COOP/COEP headers JASSUB needs. Both `apps/web/vite.config.ts` (dev) and `infra/docker/nginx.conf` (prod) enumerate the API prefixes — keep them in sync with any new API prefix.
 - Port `:3000` on the host must be free — a stray host-side API/worker will EADDRINUSE the container API. No host API/worker dev processes exist anymore.
-- The API container boots with `prisma migrate deploy` (idempotent — fresh postgres works). `restart: unless-stopped` survives reboots.
-- `/config` bind-mounts into `./data/config`; media roots are mounted per-service (see `docker-compose.yml`). `.env` holds compose-only vars (`HOKAGO_CONFIG_DIR`, `POSTGRES_PASSWORD`, `ANIME_LIBRARY_PATH`, `HOKAGO_JWT_SECRET`, ...); the app reads `DATABASE_URL`/`VALKEY_URL` from the environment.
-- `HOKAGO_COEP=credentialless` flips the COEP fallback (default `require-corp`). Keep the proxy path list in `apps/web/vite.config.ts` in sync with any new API prefix.
+- The API container boots with `prisma migrate deploy` (idempotent — fresh postgres works). Healthchecks gate startup ordering (`postgres`/`valkey` healthy before the API; API healthy before worker/web); `init: true` + `exec` give signals a clean path to node. `restart: unless-stopped` survives reboots.
+- `/config` bind-mounts into `./data/config`; media roots are mounted per-service (see `docker-compose.yml`). Containers get `HOKAGO_CONFIG_DIR=/config` — without it the API silently uses an overlay dir and every artwork/font 404s. Legacy rows in the DB carry host-absolute paths; `resolveConfigFilePath` in `apps/api/src/config.ts` falls back to the config dir by basename, so they keep working in containers.
+- `.env` holds compose-only vars (`HOKAGO_CONFIG_DIR`, `POSTGRES_PASSWORD`, `ANIME_LIBRARY_PATH`, `HOKAGO_JWT_SECRET`, ...); the app reads `DATABASE_URL`/`VALKEY_URL` from the environment.
+- `HOKAGO_COEP=credentialless` flips the COEP fallback (default `require-corp`) in the vite dev server.
 - Transcode concurrency is capped per-API-process by `HOKAGO_MAX_TRANSCODES` (default 2); busy slots return 503 and clients retry. Idle sessions (no heartbeat 5 min) are reaped on a 60s sweep plus a boot sweep when the API starts.
 - Scan parallelism: the scan walk probes files and ingests leaves with bounded pools (`PROBE_CONCURRENCY`/`INGEST_CONCURRENCY` in `packages/scanner/src/constants.ts`). Worker-side caps: `HOKAGO_ARTWORK_CONCURRENCY` (default 4, bounds ffmpeg) and `HOKAGO_SCAN_CONCURRENCY` (default 1, parallel libraries).
 
@@ -64,9 +68,10 @@ Work top to bottom; don't skip ahead. Ordering principle: build the thing that a
 
 ## Gotchas
 
-- API and worker run in containers. After changing `apps/api`, `apps/worker`, or `packages/*`, run `pnpm docker:rebuild` — nothing else recreates the containers, and a running container never sees source edits.
-- `:3000` is the container API. If anything host-side claims it, the API container crash-loops on EADDRINUSE (logs show it as a startup failure). Vice versa: the containers claim `:3000` and `:5173` belongs to the web dev server.
+- API/worker/web run in containers. `pnpm docker:dev` recreates the dev containers; `pnpm docker:dev:rebuild` rebuilds images first (contract/schema/`packages/*` changes — their `dist/`/generated output is baked in). A running container never sees source edits outside the mounted `src/` dirs.
+- `:3000` is the container API. If anything host-side claims it, the API container crash-loops on EADDRINUSE (logs show it as a startup failure). Vice versa: the containers claim `:3000`, `:8080` (prod web), and `:5173` belongs to the web dev server.
 - The web dev server and host CLI scripts import package `dist/` output — after a contract/schema change you must run the host codegen + build (see Dev workflow) or the web app fails typecheck/dev with stale types.
+- Never drop `HOKAGO_CONFIG_DIR=/config` from the compose env — the API/worker silently fall back to an overlay dir and every artwork/font/avatar 404s while playback still works.
 - `hokago` is always lowercase — code, UI, packages, commits.
 - Conventional commits (`feat:`/`fix:`/...), small one-concern commits (see `git log`).
 - Model changes: update `packages/db/prisma/schema.prisma` and call it out in the commit. Don't redesign the schema silently.

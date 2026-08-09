@@ -1,0 +1,27 @@
+# hokago — dev overlay (Immich-style: source mounts + hot reload in containers).
+#
+# Use: pnpm docker:dev   (or: docker compose -f docker-compose.yml -f compose.dev.yml up -d)
+#
+# What this changes vs. docker-compose.yml:
+#   - apps/api and apps/worker source is bind-mounted and run under `tsx watch`
+#     inside the containers — edit, save, and the process restarts in seconds.
+#     No image rebuild for app-source changes.
+#   - packages/* are intentionally NOT mounted: their dist/ + generated/ are
+#     baked into the image (linux prisma engine etc.). Changes there still need
+#     `pnpm docker:dev:rebuild` (codegen + deps + image) — same contract as before.
+#   - The web app is never mounted — the Vite dev server on the host
+#     (pnpm dev:web, :5173) is the fastest loop for UI work and proxies to the
+#     container API exactly like prod nginx does.
+
+services:
+  hokago:
+    # src-only mount: the image keeps its own node_modules (pnpm symlinks
+    # are absolute to the build root) and built packages/dist
+    volumes:
+      - ./apps/api/src:/repo/apps/api/src
+    command: ["sh", "-c", "exec pnpm --filter @hokago/api dev"]
+
+  hokago-worker:
+    volumes:
+      - ./apps/worker/src:/repo/apps/worker/src
+    command: ["sh", "-c", "exec pnpm --filter @hokago/worker dev"]

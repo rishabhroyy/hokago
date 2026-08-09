@@ -44,23 +44,39 @@ services:
       - "${VALKEY_PORT:-6379}:6379"
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}/cache/valkey:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   hokago:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile
+      # explicit target — the Dockerfile's final stage is `web`; without this
+      # the API image would be nginx
+      target: runtime
     # Migrations before boot — a fresh postgres has no tables and the API
     # would crash into a restart loop. prisma migrate deploy is idempotent.
-    command: ["sh", "-c", "pnpm --filter @hokago/db run migrate:deploy && node apps/api/dist/index.js"]
+    # `exec` replaces sh so SIGTERM reaches node directly (graceful shutdown
+    # kills ffmpeg children and closes WS sessions).
+    command: ["sh", "-c", "pnpm --filter @hokago/db run migrate:deploy && exec node apps/api/dist/index.js"]
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
       VALKEY_URL: redis://valkey:6379
+      # The bind mount below is the config dir. Code defaults to ./data/config
+      # (cwd-relative) — without this the API reads/writes an empty overlay
+      # dir inside the container and every artwork/avatar/font 404s.
+      HOKAGO_CONFIG_DIR: /config
       PORT: 3000
       HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-dev-only-insecure-default}
       PUID: ${PUID:-1000}
@@ -68,6 +84,14 @@ services:
       TZ: ${TZ:-UTC}
     ports:
       - "${HOKAGO_PORT:-3000}:3000"
+    healthcheck:
+      # /health answers only after migrations + listen complete; node:22 has
+      # a global fetch, so no curl dependency is needed in the runtime image.
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
       - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
@@ -77,20 +101,26 @@ services:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile
-    command: ["node", "apps/worker/dist/index.js"]
+      target: runtime
+    command: ["sh", "-c", "exec node apps/worker/dist/index.js"]
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_started
+        condition: service_healthy
       # The API runs migrations on boot — start after it so the worker's
       # boot reconciler never queries a schema that doesn't exist yet.
       hokago:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
       VALKEY_URL: redis://valkey:6379
+      # Same as the API: artwork/fonts are written here and must land in the
+      # shared bind mount, not the container overlay.
+      HOKAGO_CONFIG_DIR: /config
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
@@ -102,3 +132,21 @@ services:
       # macOS shares /Users, not /users); target = the DB-recorded path.
       - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
       - ${TC_TEST_LIBRARY_PATH:-/tmp/hokago-tc-test}:/tmp/hokago-tc-test:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+      target: web
+    restart: unless-stopped
+    depends_on:
+      hokago:
+        condition: service_healthy
+    ports:
+      - "${HOKAGO_WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s

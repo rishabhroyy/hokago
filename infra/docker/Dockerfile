@@ -92,7 +92,8 @@ RUN rm -rf packages/db/generated packages/contract/generated packages/fonts/vend
     && pnpm --filter @hokago/fonts build \
     && pnpm -r build
 
-# ── Stage: runtime ──
+# ── Stage: runtime — one container for API + SPA (web routes served by the
+# API itself via HOKAGO_WEB_ROOT; nginx removed — no proxy config to drift) ──
 FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl \
@@ -104,13 +105,8 @@ COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 WORKDIR /repo
 COPY --from=node-builder /repo /repo
+COPY --from=node-builder /repo/apps/web/dist /app/web
 
 # entrypoint chosen per service via `command:` in docker-compose.yml (same
 # image, different entrypoint — hokago runs apps/api, hokago-worker runs apps/worker)
 CMD ["node", "apps/api/dist/index.js"]
-
-# ── Stage: web — nginx serving the SPA, proxying API prefixes to `hokago` ──
-FROM nginx:alpine AS web
-
-COPY infra/docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=node-builder /repo/apps/web/dist /usr/share/nginx/html

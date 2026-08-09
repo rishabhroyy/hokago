@@ -19,7 +19,7 @@ export interface BrowserDeviceProfile {
 // is the whole point of Step 8, so burn-in is never requested here.
 export const BROWSER_DEVICE_PROFILE: BrowserDeviceProfile = {
   supportedContainers: ["mp4", "webm"],
-  supportedVideoCodecs: ["h264", "vp9"],
+  supportedVideoCodecs: ["h264", "vp9", ...(canPlayHevc() ? ["hevc"] : [])],
   supportedAudioCodecs: ["aac", "opus"],
   supportsHdr: false,
   subtitleMode: "external",
@@ -29,3 +29,19 @@ export const BROWSER_DEVICE_PROFILE: BrowserDeviceProfile = {
   maxHeight: 1080,
   maxVideoBitrateKbps: 8000,
 };
+
+/**
+ * Chrome/macOS (and Safari) decode HEVC natively via VideoToolbox — canPlayType
+ * reflects that. When true the server REMUXes HEVC-in-MKV to a fragmented MP4
+ * (copy, no re-encode) and the browser plays it with hardware decode — the
+ * direct-play experience for the dominant anime file format.
+ */
+function canPlayHevc(): boolean {
+  if (typeof document === "undefined") return false;
+  try {
+    const v = document.createElement("video");
+    return v.canPlayType('video/mp4; codecs="hvc1.1.6.L120.90"') !== "";
+  } catch {
+    return false;
+  }
+}

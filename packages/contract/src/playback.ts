@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 
-export const PlaybackMethod = z.enum(["DIRECT_PLAY", "DIRECT_STREAM", "TRANSCODE"]);
+export const PlaybackMethod = z.enum(["DIRECT_PLAY", "DIRECT_STREAM", "REMUX", "TRANSCODE"]);
 
 export const DeviceProfile = z.object({
   supportedContainers: z.array(z.string()),
@@ -33,6 +33,8 @@ export const StartPlaybackResponse = z.object({
   method: PlaybackMethod,
   reasons: z.array(z.string()),
   playlistUrl: z.string().nullable(),
+  /** REMUX only: the progressive fragmented-MP4 stream URL (native <video>, range requests). */
+  streamUrl: z.string().nullable().default(null),
   /** Where playback should resume (ms) — 0 when starting fresh. Server-side state, so callers need no stored position. */
   resumePositionMs: z.number().default(0),
 });

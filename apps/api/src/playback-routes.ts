@@ -15,6 +15,7 @@ import {
   HLS_SEGMENT_SECONDS,
 } from "@hokago/ffmpeg/device-profile";
 import { buildM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
+import { buildRemuxArgs } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { broadcastPresence } from "./presence.js";
 import { acquireTranscodeSlot, releaseTranscodeSlot } from "./transcode-slot.js";
@@ -38,8 +39,8 @@ function transcodeDir(sessionId: string): string {
 interface LiveSession {
   transcode: RunningTranscode;
   outDir: string;
-  mediaFile: { path: string; durationMs: number };
-  method: "DIRECT_STREAM" | "TRANSCODE";
+  mediaFile: { path: string; durationMs: number; bitrateKbps: number | null };
+  method: "DIRECT_STREAM" | "REMUX" | "TRANSCODE";
   deviceProfile: DeviceProfile;
   currentSegmentFrom: number;
   /** Media sequence the current playlist.m3u8 was written with — seeks below this need a playlist rewrite. */
@@ -48,6 +49,10 @@ interface LiveSession {
   toneMap: boolean;
   subtitleBurnIn?: { streamIndex: number; bitmap: boolean };
   audioStreamIndex: number;
+  /** Codec of the selected audio stream — drives REMUX copy-vs-encode. */
+  audioCodec: string | null;
+  /** REMUX only: the live fragmented-MP4 output + where its timeline starts. */
+  remux: { outFile: string; startMs: number } | null;
 }
 
 // Each audio selection gets its own segment subdirectory — switching tracks
@@ -95,6 +100,7 @@ async function buildCandidateInput(
   input: PlaybackCandidateInput;
   path: string;
   durationMs: number;
+  bitrateKbps: number | null;
   subtitleBurnIn?: { streamIndex: number; bitmap: boolean };
   relativeAudioIndex: number;
 } | null> {
@@ -149,9 +155,39 @@ async function buildCandidateInput(
     },
     path: mediaFile.path,
     durationMs: mediaFile.durationMs ?? 0,
+    bitrateKbps: mediaFile.bitrate ? Math.round(mediaFile.bitrate / 1000) : null,
     subtitleBurnIn,
     relativeAudioIndex: audioStream ? relativeAudioIndex(mediaFile.streams, audioStream.streamIndex) : 0,
   };
+}
+
+/** How far into the media timeline the live remux has already written (ms). */
+function remuxCoveredMs(live: LiveSession): number {
+  const remux = live.remux;
+  const bitrate = live.mediaFile.bitrateKbps;
+  if (!remux || !bitrate) return 0;
+  let size = 0;
+  try {
+    size = statSync(remux.outFile).size;
+  } catch {
+    // not created yet
+  }
+  return remux.startMs + (size * 8) / bitrate;
+}
+
+/**
+ * Rough wall-clock seconds until the remux child finishes writing the file,
+ * from source bitrate vs. measured copy throughput (~60MB/s). Drives the
+ * stream route's serve-after-complete wait — a movie gets a proportionally
+ * longer wait, not a fixed timeout.
+ */
+function estRemuxRemainingSec(live: LiveSession): number {
+  const remux = live.remux;
+  if (!remux) return 0;
+  const bitrateKbps = live.mediaFile.bitrateKbps ?? 8000;
+  const remainingMs = Math.max(0, live.mediaFile.durationMs - remux.startMs);
+  const bytes = (remainingMs / 1000) * bitrateKbps * 125;
+  return bytes / 60_000_000;
 }
 
 /** Segment index for a wall-clock position, clamped inside the media's range. */
@@ -211,7 +247,7 @@ async function cancelCurrentJob(sessionId: string): Promise<void> {
 async function restartTranscode(
   sessionId: string,
   live: LiveSession,
-  targetSegment: number,
+  targetMs: number,
 ): Promise<{ transcode: RunningTranscode; jobId: string } | { cancelled: true }> {
   // The ffmpeg child may have already finished on its own (e.g. it reached
   // the end of the file) before this restart arrived — `exit` only ever fires
@@ -235,30 +271,40 @@ async function restartTranscode(
     return { cancelled: true };
   }
 
-  const args = buildFfmpegArgs({
-    inputPath: live.mediaFile.path,
-    outputDir: live.outDir,
-    method: live.method,
-    startSegment: targetSegment,
-    segmentSeconds: HLS_SEGMENT_SECONDS,
-    videoCodec: pickVideoEncoder(live.deviceProfile.supportedVideoCodecs),
-    audioCodec: pickAudioEncoder(live.deviceProfile.supportedAudioCodecs),
-    audioStreamIndex: live.audioStreamIndex,
-    maxWidth: live.deviceProfile.maxWidth,
-    maxHeight: live.deviceProfile.maxHeight,
-    maxVideoBitrateKbps: live.deviceProfile.maxVideoBitrateKbps,
-    toneMap: live.toneMap,
-    subtitleBurnIn: live.subtitleBurnIn,
-  });
+  const isRemux = live.method === "REMUX" && live.remux !== null;
+  const segmentFrom = Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS);
+  const args = isRemux
+    ? buildRemuxArgs({
+        inputPath: live.mediaFile.path,
+        outputPath: live.remux!.outFile,
+        startMs: targetMs,
+        durationMs: live.mediaFile.durationMs,
+        audioStreamIndex: live.audioStreamIndex,
+        audioCodec: live.audioCodec,
+      })
+    : buildFfmpegArgs({
+        inputPath: live.mediaFile.path,
+        outputDir: live.outDir,
+        startSegment: segmentFrom,
+        segmentSeconds: HLS_SEGMENT_SECONDS,
+        videoCodec: pickVideoEncoder(live.deviceProfile.supportedVideoCodecs),
+        audioCodec: pickAudioEncoder(live.deviceProfile.supportedAudioCodecs),
+        audioStreamIndex: live.audioStreamIndex,
+        maxWidth: live.deviceProfile.maxWidth,
+        maxHeight: live.deviceProfile.maxHeight,
+        maxVideoBitrateKbps: live.deviceProfile.maxVideoBitrateKbps,
+        toneMap: live.toneMap,
+        subtitleBurnIn: live.subtitleBurnIn,
+      });
 
   const job = await db.transcodeJob.create({
     data: {
       sessionId,
       mediaFileId: (await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } })).mediaFileId,
-      method: live.method,
+      method: isRemux ? "REMUX" : "TRANSCODE",
       deviceProfile: live.deviceProfile as object,
       state: "RUNNING",
-      segmentFrom: targetSegment,
+      segmentFrom,
       startedAt: new Date(),
     },
   });
@@ -323,6 +369,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         method: decision.method,
         reasons: decision.reasons,
         playlistUrl: null,
+        streamUrl: null,
         resumePositionMs: resumeMs,
       };
     }
@@ -334,27 +381,40 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
     }
 
-    const startSegment = resumeMs > 0 ? segmentFor(resumeMs, candidate.durationMs) : 0;
     const audioIndex = candidate.relativeAudioIndex;
     const outDir = audioOutDir(session.id, audioIndex);
     await mkdir(outDir, { recursive: true });
-
     const toneMap = needsToneMap(candidate.input.isHdr, profile.supportsHdr);
-    const args = buildFfmpegArgs({
-      inputPath: candidate.path,
-      outputDir: outDir,
-      method: decision.method,
-      startSegment,
-      segmentSeconds: HLS_SEGMENT_SECONDS,
-      videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
-      audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
-      audioStreamIndex: audioIndex,
-      maxWidth: profile.maxWidth,
-      maxHeight: profile.maxHeight,
-      maxVideoBitrateKbps: profile.maxVideoBitrateKbps,
-      toneMap,
-      subtitleBurnIn: candidate.subtitleBurnIn,
-    });
+
+    const isRemux = decision.method === "REMUX";
+    // REMUX starts at the keyframe at-or-before the resume point; the client
+    // then self-seeks to the exact resume position once the file is open.
+    const startMs = resumeMs;
+    const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+    const outFile = path.join(outDir, "stream.mp4");
+    const args = isRemux
+      ? buildRemuxArgs({
+          inputPath: candidate.path,
+          outputPath: outFile,
+          startMs,
+          durationMs: candidate.durationMs,
+          audioStreamIndex: audioIndex,
+          audioCodec: candidate.input.audioCodec,
+        })
+      : buildFfmpegArgs({
+          inputPath: candidate.path,
+          outputDir: outDir,
+          startSegment: segmentFrom,
+          segmentSeconds: HLS_SEGMENT_SECONDS,
+          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
+          audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
+          audioStreamIndex: audioIndex,
+          maxWidth: profile.maxWidth,
+          maxHeight: profile.maxHeight,
+          maxVideoBitrateKbps: profile.maxVideoBitrateKbps,
+          toneMap,
+          subtitleBurnIn: candidate.subtitleBurnIn,
+        });
 
     const job = await db.transcodeJob.create({
       data: {
@@ -363,7 +423,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         method: decision.method,
         deviceProfile: profile as object,
         state: "RUNNING",
-        segmentFrom: startSegment,
+        segmentFrom,
         startedAt: new Date(),
       },
     });
@@ -385,30 +445,37 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     });
     await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
 
-    // Playlist starts at the resume segment (EXT-X-MEDIA-SEQUENCE) so the
-    // player never waits on segment-0, which a resumed session never writes.
-    const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, startSegment);
-    await writeFile(path.join(outDir, "playlist.m3u8"), playlist);
+    let playlistUrl: string | null = null;
+    if (!isRemux) {
+      // Playlist starts at the resume segment (EXT-X-MEDIA-SEQUENCE) so the
+      // player never waits on segment-0, which a resumed session never writes.
+      const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
+      await writeFile(path.join(outDir, "playlist.m3u8"), playlist);
+      playlistUrl = `/playback/${session.id}/playlist.m3u8`;
+    }
 
     liveSessions.set(session.id, {
       transcode,
       outDir,
-      mediaFile: { path: candidate.path, durationMs: candidate.durationMs },
+      mediaFile: { path: candidate.path, durationMs: candidate.durationMs, bitrateKbps: candidate.bitrateKbps },
       method: decision.method,
       deviceProfile: profile,
-      currentSegmentFrom: startSegment,
-      playlistStartSegment: startSegment,
+      currentSegmentFrom: segmentFrom,
+      playlistStartSegment: segmentFrom,
       currentTranscodeJobId: job.id,
       toneMap,
       subtitleBurnIn: candidate.subtitleBurnIn,
       audioStreamIndex: audioIndex,
+      audioCodec: candidate.input.audioCodec,
+      remux: isRemux ? { outFile, startMs } : null,
     });
 
     return {
       sessionId: session.id,
       method: decision.method,
       reasons: decision.reasons,
-      playlistUrl: `/playback/${session.id}/playlist.m3u8`,
+      playlistUrl,
+      streamUrl: isRemux ? `/playback/${session.id}/stream.mp4` : null,
       resumePositionMs: resumeMs,
     };
     },
@@ -419,6 +486,41 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     if (!live) return reply.code(404).send({ error: "no active session" });
     const body = await readFile(path.join(live.outDir, "playlist.m3u8"), "utf-8");
     reply.type("application/vnd.apple.mpegurl").send(body);
+  });
+
+  // REMUX: the live fragmented-MP4 file, still growing under ffmpeg. sendFile
+  // handles Range/206 for native <video> seeking; noCache keeps a restarted
+  // (truncated + rewritten) file from being served from a browser cache — the
+  // client also busts via `?r=` nonce on restarts, this is the backstop.
+  //
+  // Growing-file race: Chrome's first fetch is `Range: bytes=0-` — a 206
+  // against a half-written file is treated as authoritative, so it never
+  // re-fetches and the player stalls at the written frontier with the wrong
+  // duration. Instead, block until the remux child exits (the file is
+  // complete) — copy-speed makes this ~3s for an episode, seconds-to-a-minute
+  // for movies — then serve a file whose content-range can never lie.
+  app.get<{ Params: { sessionId: string } }>("/playback/:sessionId/stream.mp4", async (req, reply) => {
+    const live = liveSessions.get(req.params.sessionId);
+    if (!live?.remux) return reply.code(404).send({ error: "no active remux session" });
+
+    const child = live.transcode.child;
+    const waitMs = Math.min(60_000, Math.max(5_000, estRemuxRemainingSec(live) * 1000 + 3_000));
+    const deadline = Date.now() + waitMs;
+    // A seek-restart kills the child (SIGKILL → signalCode, not exitCode) and
+    // rewrites the file — treat that as "wait's over", the client is
+    // nonce-reloading a fresh URL anyway.
+    while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (child.exitCode !== null && child.exitCode !== 0) {
+      return reply.code(500).send({ error: "remux failed" });
+    }
+
+    return reply.sendFile(path.basename(live.remux.outFile), path.dirname(live.remux.outFile), {
+      maxAge: 0,
+      acceptRanges: true,
+      cacheControl: true,
+    });
   });
 
   app.get<{ Params: { sessionId: string; n: string } }>(
@@ -477,38 +579,86 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const live = liveSessions.get(req.params.sessionId);
       if (!live) return reply.code(404).send({ error: "no active transcode session" });
 
-      const targetSegment = segmentFor(req.body.positionMs, live.mediaFile.durationMs);
-      const targetPath = path.join(live.outDir, `segment-${targetSegment}.ts`);
+      // Seek past the media end is a no-op stop position — clamp like the
+      // HLS path clamps its segment index.
+      const targetMs = Math.min(req.body.positionMs, Math.max(0, live.mediaFile.durationMs - 1000));
 
-      // Already produced (and listed by the current playlist) — nothing to do.
-      if (existsSync(targetPath) && targetSegment >= live.playlistStartSegment) {
-        await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: req.body.positionMs } });
-        return { restarted: false, segmentFrom: live.currentSegmentFrom, pid: live.transcode.pid };
+      if (live.method !== "REMUX" || live.remux === null) {
+        // TRANSCODE: already-produced (and listed by the current playlist)
+        // segments need no ffmpeg restart — the player just moves within
+        // its buffer.
+        const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);
+        const targetPath = path.join(live.outDir, `segment-${targetSegment}.ts`);
+        if (existsSync(targetPath) && targetSegment >= live.playlistStartSegment) {
+          await db.playbackSession.update({
+            where: { id: req.params.sessionId },
+            data: { positionMs: targetMs },
+          });
+          return { restarted: false, segmentFrom: live.currentSegmentFrom, pid: live.transcode.pid };
+        }
+
+        const oldPid = live.transcode.pid;
+        await cancelCurrentJob(req.params.sessionId);
+
+        const restarted = await restartTranscode(req.params.sessionId, live, targetMs);
+        if ("cancelled" in restarted) {
+          return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
+        }
+        const { transcode, jobId } = restarted;
+        // Seeking backwards below the original media sequence — rewrite the
+        // playlist so the player knows segments before it exist again.
+        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
+        await writeFile(path.join(live.outDir, "playlist.m3u8"), playlist);
+
+        liveSessions.set(req.params.sessionId, {
+          ...live,
+          transcode,
+          currentSegmentFrom: targetSegment,
+          playlistStartSegment: targetSegment,
+          currentTranscodeJobId: jobId,
+        });
+
+        await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
+        return { restarted: true, segmentFrom: targetSegment, pid: transcode.pid, killedPid: oldPid };
+      }
+
+      // REMUX: seeks within what the live file has already written are
+      // native browser seeks (range requests) — no restart, no stall.
+      // Forward seeks beyond the written frontier need the remux to restart
+      // from the target keyframe (copy-speed, sub-second).
+      if (targetMs <= remuxCoveredMs(live) - 30_000) {
+        await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
+        return {
+          restarted: false,
+          segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
+          pid: live.transcode.pid,
+        };
       }
 
       const oldPid = live.transcode.pid;
       await cancelCurrentJob(req.params.sessionId);
 
-      const restarted = await restartTranscode(req.params.sessionId, live, targetSegment);
+      const restarted = await restartTranscode(req.params.sessionId, live, targetMs);
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
       const { transcode, jobId } = restarted;
-      // Seeking backwards below the original media sequence — rewrite the
-      // playlist so the player knows segments before it exist again.
-      const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
-      await writeFile(path.join(live.outDir, "playlist.m3u8"), playlist);
 
       liveSessions.set(req.params.sessionId, {
         ...live,
         transcode,
-        currentSegmentFrom: targetSegment,
-        playlistStartSegment: targetSegment,
+        currentSegmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
         currentTranscodeJobId: jobId,
+        remux: { outFile: live.remux.outFile, startMs: targetMs },
       });
 
-      await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: req.body.positionMs } });
-      return { restarted: true, segmentFrom: targetSegment, pid: transcode.pid, killedPid: oldPid };
+      await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
+      return {
+        restarted: true,
+        segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
+        pid: transcode.pid,
+        killedPid: oldPid,
+      };
     },
   );
 
@@ -536,22 +686,30 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         include: { streams: true },
       });
       const audioIndex = relativeAudioIndex(mediaFile.streams, req.body.audioStreamIndex);
+      const audioCodec = mediaFile.streams.find(
+        (s) => s.type === "AUDIO" && s.streamIndex === req.body.audioStreamIndex,
+      )?.codec ?? null;
 
-      const targetSegment = segmentFor(req.body.positionMs, live.mediaFile.durationMs);
+      const targetMs = Math.min(req.body.positionMs, Math.max(0, live.mediaFile.durationMs - 1000));
+      const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);
       const newOutDir = audioOutDir(req.params.sessionId, audioIndex);
       await mkdir(newOutDir, { recursive: true });
 
       const oldPid = live.transcode.pid;
       await cancelCurrentJob(req.params.sessionId);
 
-      // New outDir → the media sequence starts at the target segment.
-      const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
-      await writeFile(path.join(newOutDir, "playlist.m3u8"), playlist);
+      // New outDir → the media sequence starts at the target segment (HLS)
+      // or the stream file lives in the fresh per-track dir (REMUX).
+      const isRemux = live.method === "REMUX";
+      if (!isRemux) {
+        const m3u8 = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
+        await writeFile(path.join(newOutDir, "playlist.m3u8"), m3u8);
+      }
 
       const restarted = await restartTranscode(
         req.params.sessionId,
-        { ...live, outDir: newOutDir },
-        targetSegment,
+        { ...live, outDir: newOutDir, audioStreamIndex: audioIndex, audioCodec },
+        targetMs,
       );
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
@@ -566,9 +724,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         playlistStartSegment: targetSegment,
         currentTranscodeJobId: jobId,
         audioStreamIndex: audioIndex,
+        audioCodec,
+        remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs: targetMs } : null,
       });
 
-      await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: req.body.positionMs } });
+      await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
       return { restarted: true, segmentFrom: targetSegment, pid: transcode.pid, killedPid: oldPid };
     },
   );

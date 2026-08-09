@@ -40,9 +40,7 @@ export function buildM3u8(durationMs: number, segmentSeconds: number, startSegme
 export interface SegmentJobInput {
   inputPath: string;
   outputDir: string;
-  /** DIRECT_PLAY never reaches here — no ffmpeg process is spawned for it. */
-  method: "DIRECT_STREAM" | "TRANSCODE";
- /** Which segment index to start producing from — seek-restart target . */
+  /** DIRECT_PLAY/REMUX never reach here — no ffmpeg process is spawned for them. */
   startSegment: number;
   segmentSeconds: number;
   videoCodec?: string;
@@ -95,51 +93,45 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   if (startSeconds > 0) args.push("-ss", String(startSeconds));
   args.push("-i", input.inputPath);
 
-  if (input.method === "DIRECT_STREAM") {
-    // Remux only: streams are copied verbatim, so segment boundaries land
-    // wherever the source's existing keyframes are — -force_key_frames only
-    // works when we control encoding, which a copy remux by definition does
- // not (honest limitation). Same reason tone-map/burn-in can't
-    // apply here either — decision.ts never selects DIRECT_STREAM when either
-    // is required, so this branch never needs to carry them.
-    args.push("-map", "0:v:0", "-map", audioMap, "-c", "copy");
-  } else {
-    const videoFilters: string[] = [];
-    if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);
-    if (input.maxWidth !== undefined || input.maxHeight !== undefined) {
-      videoFilters.push(`scale='min(${input.maxWidth ?? -2},iw)':'min(${input.maxHeight ?? -2},ih)'`);
-    }
-    // Browsers can't decode high-bit-depth h264 — scale preserves the input
-    // pix_fmt, so a 10-bit source (HEVC Main 10) would come out as h264 High
-    // 10 and every MSE append would be rejected. Force 8-bit 4:2:0.
-    videoFilters.push("format=yuv420p");
-
-    if (input.subtitleBurnIn) {
-      const { streamIndex, bitmap } = input.subtitleBurnIn;
-      const preChain = videoFilters.length > 0 ? videoFilters.join(",") : "null";
-      const graph = bitmap
-        ? `[0:v]${preChain}[vpre];[vpre][0:s:${streamIndex}]overlay[vout]`
-        : `[0:v]${preChain},subtitles=${escapeFilterPath(input.inputPath)}:si=${streamIndex}[vout]`;
-      args.push("-filter_complex", graph, "-map", "[vout]", "-map", audioMap);
-    } else {
-      args.push("-map", "0:v:0", "-map", audioMap);
-      if (videoFilters.length > 0) args.push("-vf", videoFilters.join(","));
-    }
-
-    args.push("-c:v", input.videoCodec ?? "libx264");
-    // Live transcoding is a realtime-serving path, not a one-off rip —
-    // veryfast + CRF 23 keeps the first segment on screen in seconds. The
-    // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
-    // the speed/quality tradeoff instead.
-    args.push("-preset", "veryfast", "-crf", "23");
-    if (input.maxVideoBitrateKbps !== undefined) {
-      args.push("-maxrate", `${input.maxVideoBitrateKbps}k`, "-bufsize", `${input.maxVideoBitrateKbps * 2}k`);
-    }
-    args.push("-c:a", input.audioCodec ?? "aac");
-    // Deterministic segment boundaries — only meaningful when re-encoding,
- // which is exactly the branch this is in .
-    args.push("-force_key_frames", `expr:gte(t,n_forced*${input.segmentSeconds})`);
+  const videoFilters: string[] = [];
+  if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);
+  if (input.maxWidth !== undefined || input.maxHeight !== undefined) {
+    videoFilters.push(`scale='min(${input.maxWidth ?? -2},iw)':'min(${input.maxHeight ?? -2},ih)'`);
   }
+  // Browsers can't decode high-bit-depth h264 — scale preserves the input
+  // pix_fmt, so a 10-bit source (HEVC Main 10) would come out as h264 High
+  // 10 and every MSE append would be rejected. Force 8-bit 4:2:0.
+  videoFilters.push("format=yuv420p");
+
+  if (input.subtitleBurnIn) {
+    const { streamIndex, bitmap } = input.subtitleBurnIn;
+    const preChain = videoFilters.length > 0 ? videoFilters.join(",") : "null";
+    const graph = bitmap
+      ? `[0:v]${preChain}[vpre];[vpre][0:s:${streamIndex}]overlay[vout]`
+      : `[0:v]${preChain},subtitles=${escapeFilterPath(input.inputPath)}:si=${streamIndex}[vout]`;
+    args.push("-filter_complex", graph, "-map", "[vout]", "-map", audioMap);
+  } else {
+    args.push("-map", "0:v:0", "-map", audioMap);
+    if (videoFilters.length > 0) args.push("-vf", videoFilters.join(","));
+  }
+
+  args.push("-c:v", input.videoCodec ?? "libx264");
+  // Live transcoding is a realtime-serving path, not a one-off rip —
+  // veryfast + CRF 23 keeps the first segment on screen in seconds. The
+  // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
+  // the speed/quality tradeoff instead.
+  args.push("-preset", "veryfast", "-crf", "23");
+  if (input.maxVideoBitrateKbps !== undefined) {
+    args.push("-maxrate", `${input.maxVideoBitrateKbps}k`, "-bufsize", `${input.maxVideoBitrateKbps * 2}k`);
+  }
+  args.push("-c:a", input.audioCodec ?? "aac");
+  // Deterministic segment boundaries — only meaningful when re-encoding,
+  // which is exactly the branch this is in.
+  args.push("-force_key_frames", `expr:gte(t,n_forced*${input.segmentSeconds})`);
+  // Matroska sources (fansubs) can carry dozens of streams; without a big
+  // muxer queue a temporarily-full packet buffer aborts the whole job
+  // mid-episode ("Too many packets buffered") — classic mid-playback stall.
+  args.push("-max_muxing_queue_size", "4096");
 
   args.push(
     "-f",

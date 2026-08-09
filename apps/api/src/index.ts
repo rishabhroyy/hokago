@@ -18,6 +18,7 @@ import { registerProfileRoutes } from "./profile-routes.js";
 import { registerAvatarRoutes } from "./avatar-routes.js";
 import { registerBrowseRoutes } from "./browse-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
+import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
 import { reapStaleSessions, killOrphanedTranscodes } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
@@ -53,6 +54,8 @@ await registerBrowseRoutes(app);
 await registerPlaybackRoutes(app);
 await registerWatchStateRoutes(app);
 await registerStaticRoutes(app);
+// Last: the SPA catch-all — everything the API doesn't own is the web app.
+await registerWebRoutes(app);
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

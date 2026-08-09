@@ -171,6 +171,7 @@ enum FontSource {
 enum PlaybackMethod {
   DIRECT_PLAY
   DIRECT_STREAM
+  REMUX
   TRANSCODE
 }
 

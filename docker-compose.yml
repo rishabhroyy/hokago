@@ -3,10 +3,12 @@
 # Bind mounts only. No named docker volumes anywhere, including Postgres —
 # except Postgres's own internal UID (see the postgres service below).
 #
-# hwaccel is a later overlay (build order step 14) — this file is CPU-only.
-# PUID/PGID enforcement on the app/worker containers is also a later step
-# (build order step 14); the env vars are declared here so compose doesn't
-# need reshaping when that lands.
+# One server container: the API serves the built SPA itself (HOKAGO_WEB_ROOT,
+# Immich-style) — no nginx service, no proxy config to keep in sync with the
+# vite dev proxy. hwaccel is a later overlay (build order step 14) — this
+# file is CPU-only. PUID/PGID enforcement on the app/worker containers is
+# also a later step (build order step 14); the env vars are declared here so
+# compose doesn't need reshaping when that lands.
 
 services:
   postgres:
@@ -54,9 +56,6 @@ services:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile
-      # explicit target — the Dockerfile's final stage is `web`; without this
-      # the API image would be nginx
-      target: runtime
     # Migrations before boot — a fresh postgres has no tables and the API
     # would crash into a restart loop. prisma migrate deploy is idempotent.
     # `exec` replaces sh so SIGTERM reaches node directly (graceful shutdown
@@ -77,6 +76,9 @@ services:
       # (cwd-relative) — without this the API reads/writes an empty overlay
       # dir inside the container and every artwork/avatar/font 404s.
       HOKAGO_CONFIG_DIR: /config
+      # The SPA ships inside this image (infra/docker/Dockerfile runtime
+      # stage) — when set, the API serves it and COOP/COEP become same-origin.
+      HOKAGO_WEB_ROOT: /app/web
       PORT: 3000
       HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-dev-only-insecure-default}
       PUID: ${PUID:-1000}
@@ -132,21 +134,3 @@ services:
       # macOS shares /Users, not /users); target = the DB-recorded path.
       - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
       - ${TC_TEST_LIBRARY_PATH:-/tmp/hokago-tc-test}:/tmp/hokago-tc-test:ro
-
-  web:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
-      target: web
-    restart: unless-stopped
-    depends_on:
-      hokago:
-        condition: service_healthy
-    ports:
-      - "${HOKAGO_WEB_PORT:-8080}:80"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s

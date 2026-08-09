@@ -193,10 +193,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           return;
         }
         setStart(data);
-        // Resume: DIRECT_PLAY has no server-produced segments — the player
-        // seeks itself. Transcodes start at the resume segment via the
-        // playlist's media sequence, so no client seek is needed there.
-        if (data.method === "DIRECT_PLAY" && data.resumePositionMs > 0) {
+        // Resume: DIRECT_PLAY/REMUX have no server-produced segments — the
+        // player seeks itself (REMUX starts at the keyframe before the resume
+        // point; the exact position is applied once the file opens).
+        // Transcodes start at the resume segment via the playlist's media
+        // sequence, so no client seek is needed there.
+        if (data.method !== "TRANSCODE" && data.resumePositionMs > 0) {
           pendingSeekRef.current = data.resumePositionMs / 1000;
         }
       })
@@ -311,12 +313,21 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const src =
     start?.method === "DIRECT_PLAY"
       ? { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const }
-      : start?.playlistUrl
+      : start?.method === "REMUX" && start.streamUrl
         ? {
-            src: reloadNonce > 0 ? `${start.playlistUrl}?r=${reloadNonce}` : start.playlistUrl,
-            type: "application/x-mpegurl" as const,
+            // Native <video> + range requests against the live remux — no
+            // MSE, which is exactly why HEVC works here. Restarts (seek past
+            // the written frontier, audio switch) truncate and rewrite the
+            // file, so the nonce forces a fresh open.
+            src: reloadNonce > 0 ? `${start.streamUrl}?r=${reloadNonce}` : start.streamUrl,
+            type: "video/mp4" as const,
           }
-        : undefined;
+        : start?.playlistUrl
+          ? {
+              src: reloadNonce > 0 ? `${start.playlistUrl}?r=${reloadNonce}` : start.playlistUrl,
+              type: "application/x-mpegurl" as const,
+            }
+          : undefined;
 
   // Server-side audio switching only makes sense while transcoding; DIRECT_PLAY
   // already has a native audio menu, so we don't double it up.

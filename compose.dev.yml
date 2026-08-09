@@ -11,7 +11,7 @@
 #     `pnpm docker:dev:rebuild` (codegen + deps + image) — same contract as before.
 #   - The web app is never mounted — the Vite dev server on the host
 #     (pnpm dev:web, :5173) is the fastest loop for UI work and proxies to the
-#     container API exactly like prod nginx does.
+#     container API exactly like prod does (same-origin SPA served by the API).
 
 services:
   hokago:

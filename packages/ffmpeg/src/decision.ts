@@ -1,7 +1,7 @@
 import { needsToneMap, type DeviceProfile, type PlaybackCandidateInput } from "./device-profile.js";
 
 /** Mirrors the Prisma PlaybackMethod enum without a dependency on @hokago/db (pure function, no I/O). */
-export type PlaybackMethod = "DIRECT_PLAY" | "DIRECT_STREAM" | "TRANSCODE";
+export type PlaybackMethod = "DIRECT_PLAY" | "DIRECT_STREAM" | "REMUX" | "TRANSCODE";
 
 export interface PlaybackDecision {
   method: PlaybackMethod;
@@ -10,10 +10,14 @@ export interface PlaybackDecision {
 
 /**
  * Three-tier decision, evaluated in the doc's stated order (Jellyfin
- * StreamBuilder order): force flags → direct play eval → transcoding profile
- * eval. Direct Stream is remux-only (container swap, streams copied) — it
- * can't fix a codec, resolution, bitrate, HDR, or subtitle-burn mismatch, only
- * a container one. Anything else falls through to a real re-encode.
+ * StreamBuilder order): force flags → direct play eval → remux eval →
+ * transcoding profile eval.
+ *
+ * REMUX is copy-remux: the video stream is copied verbatim into a fragmented
+ * MP4 (container swap, `hvc1` tagging, audio copied or re-encoded to AAC when
+ * the source codec isn't MP4-safe). It can fix a container or audio-codec
+ * mismatch — not a video codec, HDR, or subtitle-burn mismatch. Anything
+ * else falls through to a real re-encode.
  */
 export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: DeviceProfile): PlaybackDecision {
   const reasons: string[] = [];
@@ -24,8 +28,8 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
   if (!directPlayForced) reasons.push("direct play disabled by device profile force flag");
   if (!directStreamForced) reasons.push("direct stream disabled by device profile force flag");
 
-  // Shared compatibility checks — a container mismatch alone is remux-fixable,
-  // everything else here is not.
+  // Shared compatibility checks — a container/audio mismatch alone is
+  // remux-fixable, everything else here is not.
   const containerOk = profile.supportedContainers.includes(input.container);
   const videoCodecOk = input.videoCodec !== null && profile.supportedVideoCodecs.includes(input.videoCodec);
   const audioCodecOk = input.audioCodec === null || profile.supportedAudioCodecs.includes(input.audioCodec);
@@ -36,7 +40,7 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
     input.bitrateKbps === null ||
     input.bitrateKbps <= profile.maxVideoBitrateKbps;
   const hdrOk = !needsToneMap(input.isHdr, profile.supportsHdr);
- // PGS/VOBSUB forcing burn-in always wins; a profile that itself
+  // PGS/VOBSUB forcing burn-in always wins; a profile that itself
   // wants everything burned (e.g. airplay) forces it independent of the track.
   const burnRequired = input.subtitleRequiresBurnIn || profile.subtitleMode === "burn";
 
@@ -55,10 +59,12 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
     return { method: "DIRECT_PLAY", reasons: ["container, codecs, and limits all within profile support"] };
   }
 
-  // Stage 3: transcoding profile eval — remux (Direct Stream) still counts as
- // a "transcode" tier per 's naming, but only ever touches the container.
-  if (directStreamForced && !containerOk && codecsAndLimitsOk) {
-    return { method: "DIRECT_STREAM", reasons: [...reasons, "remux only: codecs and limits already compatible"] };
+  // Stage 3: remux eval — the video is decodable by the client as-is, so a
+  // container swap (and/or audio re-encode to an MP4-safe codec) is enough.
+  // Resolution/bitrate ceilings don't apply: no re-encode happens, the client
+  // decodes natively and ignores the caps (which exist to bound encodes).
+  if (directStreamForced && videoCodecOk && hdrOk && !burnRequired) {
+    return { method: "REMUX", reasons: [...reasons, "video decodable — container swap (copy), audio as needed"] };
   }
 
   return { method: "TRANSCODE", reasons };

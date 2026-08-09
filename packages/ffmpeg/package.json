@@ -7,6 +7,7 @@
     "./device-profile": "./dist/device-profile.js",
     "./decision": "./dist/decision.js",
     "./hls": "./dist/hls.js",
+    "./remux": "./dist/remux.js",
     "./spawn": "./dist/spawn.js",
     "./child-registry": "./dist/child-registry.js"
   },

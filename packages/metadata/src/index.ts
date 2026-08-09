@@ -20,8 +20,7 @@ export type ProviderName =
   | "MAL"
   | "ANIDB"
   | "IMDB"
-  | "WIKIDATA"
-  | "TMDB";
+  | "WIKIDATA";
 
 export type SignalType =
   | "NFO_UNIQUEID"

@@ -28,9 +28,6 @@ export const adminApi = {
   revokeSession: (id: string) => unwrap(api.POST("/admin-api/sessions/{id}/revoke", { params: { path: { id } } })),
   settings: () => unwrap(api.GET("/admin-api/settings")),
   updateSettings: (body: Record<string, unknown>) => unwrap(api.PUT("/admin-api/settings", { body } as never)),
-  providers: () => unwrap(api.GET("/admin-api/providers")),
-  setProvider: (provider: string, enabled: boolean) =>
-    unwrap(api.PUT("/admin-api/providers/{provider}", { params: { path: { provider } }, body: { enabled } })),
   queues: () => unwrap(api.GET("/admin/queues")),
   queueJobs: (name: string) => unwrap(api.GET("/admin/queues/{name}/jobs", { params: { path: { name }, query: { state: "failed" } } })),
   queueAct: (name: string, act: "pause" | "resume" | "retry-failed" | "clean") => {

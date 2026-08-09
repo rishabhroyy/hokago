@@ -82,9 +82,6 @@ import {
   AdminSession,
   ServerSettings,
   ServerSettingsUpdateBody,
-  ProviderSetting,
-  ProviderSettingParams,
-  ProviderSettingUpdateBody,
   AttentionItem,
   ErrorResponse as AdminErrorResponse,
 } from "./admin.js";
@@ -538,19 +535,6 @@ export function buildOpenApiDocument(): OpenAPIObject {
     summary: "Update server settings",
     request: { body: json(ServerSettingsUpdateBody) },
     responses: { 200: { description: "OK", ...json(ServerSettings) } },
-  });
-  registry.registerPath({
-    method: "get",
-    path: "/admin-api/providers",
-    summary: "List provider toggles",
-    responses: { 200: { description: "OK", ...json(z.array(ProviderSetting)) } },
-  });
-  registry.registerPath({
-    method: "put",
-    path: "/admin-api/providers/{provider}",
-    summary: "Toggle a provider",
-    request: { params: ProviderSettingParams, body: json(ProviderSettingUpdateBody) },
-    responses: { 200: { description: "OK", ...json(ProviderSetting) } },
   });
   registry.registerPath({
     method: "get",

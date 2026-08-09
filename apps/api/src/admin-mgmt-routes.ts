@@ -18,9 +18,6 @@ import {
   AdminSession,
   ServerSettings,
   ServerSettingsUpdateBody,
-  ProviderSetting,
-  ProviderSettingParams,
-  ProviderSettingUpdateBody,
   AttentionItem,
   ErrorResponse,
 } from "@hokago/contract/admin";
@@ -332,54 +329,6 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
         update: req.body,
       });
       return settings;
-    },
-  );
-
-  // ── Provider settings (optional tier; settings-only, never a nag) ─────────
-  // Keyless providers are part of the default resolution chain — they're always
-  // on and don't appear as toggles. Only the optional tier (user-supplied key)
-  // is configurable, and it ships off.
-  const KEYLESS_PROVIDERS = ["TVMAZE", "ANILIST", "MAL", "WIKIDATA"] as const;
-  const OPTIONAL_PROVIDERS = ["TMDB"] as const;
-
-  app.get("/admin-api/providers", { ...gate, schema: { response: { 200: ProviderSetting.array() } } }, async () => {
-    const configs = await db.providerConfig.findMany({ orderBy: { provider: "asc" } });
-    const byProvider = new Map(configs.map((c) => [c.provider, c]));
-    const rows = [
-      ...KEYLESS_PROVIDERS.map((provider) => ({
-        provider,
-        tier: "KEYLESS" as const,
-        enabled: true,
-        hasSecret: false,
-        updatedAt: new Date(0),
-      })),
-      ...OPTIONAL_PROVIDERS.map((provider) => {
-        const c = byProvider.get(provider);
-        return {
-          provider,
-          tier: "OPTIONAL" as const,
-          enabled: c?.enabled ?? false,
-          hasSecret: c?.secretEnc != null,
-          updatedAt: c?.updatedAt ?? new Date(0),
-        };
-      }),
-    ];
-    return rows;
-  });
-
-  app.put(
-    "/admin-api/providers/:provider",
-    { ...gate, schema: { params: ProviderSettingParams, body: ProviderSettingUpdateBody, response: { 200: ProviderSetting, 400: ErrorResponse } } },
-    async (req, reply) => {
-      if (!OPTIONAL_PROVIDERS.includes(req.params.provider as (typeof OPTIONAL_PROVIDERS)[number])) {
-        return reply.code(400).send({ error: `${req.params.provider} is keyless — always active, not toggleable` });
-      }
-      const config = await db.providerConfig.upsert({
-        where: { provider: req.params.provider },
-        create: { provider: req.params.provider, enabled: req.body.enabled ?? false },
-        update: { enabled: req.body.enabled },
-      });
-      return { provider: config.provider, tier: "OPTIONAL" as const, enabled: config.enabled, hasSecret: config.secretEnc != null, updatedAt: config.updatedAt };
     },
   );
 

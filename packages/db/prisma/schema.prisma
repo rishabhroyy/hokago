@@ -47,7 +47,6 @@ enum Provider {
   ANIDB // mapping target only; we never call AniDB
   IMDB // datasets, packages-optional
   WIKIDATA
-  TMDB // OPTIONAL TIER ONLY — user-supplied key, off by default
 }
 
 enum TitleType {
@@ -900,15 +899,3 @@ model ServerSetting {
   @@map("server_settings")
 }
 
-/// DECISION (b): settings-only toggle. NEVER in the first-run wizard.
-/// NEVER a nag, banner, or modal. Off by default. We ship no key and depend on none.
-model ProviderConfig {
-  id        String   @id @default(uuid()) @db.Uuid
-  provider  String   @unique
-  enabled   Boolean  @default(false)
- /// User-supplied credential, encrypted at rest. Never ours, never bundled .
-  secretEnc String?
-  updatedAt DateTime @updatedAt
-
-  @@map("provider_config")
-}

@@ -7,7 +7,7 @@ export const QueueName = z.enum(["scan", "artwork", "metadata-tvmaze", "metadata
 export const JobState = z.enum(["waiting", "active", "completed", "failed", "delayed"]);
 
 export const ScanMode = z.enum(["WATCH_AND_PERIODIC", "PERIODIC_ONLY", "MANUAL"]);
-export const ProviderName = z.enum(["LOCAL", "EMBEDDED", "GENERATED", "TVMAZE", "ANILIST", "MAL", "WIKIDATA", "TMDB"]);
+export const ProviderName = z.enum(["LOCAL", "EMBEDDED", "GENERATED", "TVMAZE", "ANILIST", "MAL", "WIKIDATA"]);
 
 export const QueueSummary = z.object({
   name: z.string(),
@@ -196,26 +196,6 @@ export const ServerSettingsUpdateBody = z.object({
   fingerprintWindow: z.string().nullable().optional(),
 });
 export type ServerSettingsUpdateBody = z.infer<typeof ServerSettingsUpdateBody>;
-
-export const ProviderTier = z.enum(["KEYLESS", "OPTIONAL"]);
-
-export const ProviderSetting = z.object({
-  provider: z.string(),
-  /** KEYLESS providers are part of the default resolution chain — always on, not toggleable. */
-  tier: ProviderTier,
-  enabled: z.boolean(),
-  hasSecret: z.boolean(),
-  updatedAt: z.coerce.date(),
-});
-export type ProviderSetting = z.infer<typeof ProviderSetting>;
-
-export const ProviderSettingParams = z.object({ provider: z.string() });
-
-export const ProviderSettingUpdateBody = z.object({
-  enabled: z.boolean().optional(),
-  secret: z.string().optional(),
-});
-export type ProviderSettingUpdateBody = z.infer<typeof ProviderSettingUpdateBody>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Attention / trouble

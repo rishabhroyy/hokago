@@ -16,8 +16,7 @@ non-obvious.
 2. **No email. Anywhere.** No SMTP, no email column, no password-reset-by-mail. Auth is
    username + password; reset is admin action or CLI; invites are codes shared manually.
 3. **No API key is ever required.** We ship no key and depend on none. Keyless providers +
-   local files only. The optional TMDB tier is settings-only, off by default, and **never**
-   appears in the first-run wizard or as a nag.
+   local files only. No optional key-required tier exists.
 4. **The browser only ever loads fonts and artwork from our own origin.** Never hotlink,
    never `@import` Google Fonts, never emit a third-party `<link>`. The server may fetch
    bytes once in the background and store them forever — that's fine and expected. This

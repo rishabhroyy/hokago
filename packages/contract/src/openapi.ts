@@ -94,6 +94,7 @@ import {
   MediaFileTracksResponse,
   ErrorResponse as MediaFileErrorResponse,
 } from "./media-files.js";
+import { HomeQuery, HomeResponse } from "./home.js";
 
 const json = (schema: z.ZodTypeAny) => ({ content: { "application/json": { schema } } });
 
@@ -253,7 +254,15 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: { 200: { description: "OK", ...json(InviteResponse) } },
   });
 
- // Playback (//)
+  registry.registerPath({
+    method: "get",
+    path: "/home",
+    summary: "Front-page discovery: hero slides + rails, personalized to the instance and profile",
+    request: { query: HomeQuery },
+    responses: { 200: { description: "OK", ...json(HomeResponse) } },
+  });
+
+  // Playback (//)
   registry.registerPath({
     method: "post",
     path: "/playback/start",

@@ -9,6 +9,7 @@
     "./profiles": "./dist/profiles.js",
     "./auth": "./dist/auth.js",
     "./playback": "./dist/playback.js",
+    "./home": "./dist/home.js",
     "./admin": "./dist/admin.js",
     "./media-files": "./dist/media-files.js",
     "./openapi": "./dist/openapi.js",

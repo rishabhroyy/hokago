@@ -1,8 +1,8 @@
 import type { LibrarySummary, MediaCard, MediaItemDetail } from "@hokago/contract/browse";
+import type { HomeResponse, HomeRow, HomeSlide } from "@hokago/contract/home";
 import { api } from "./api-client";
 
-export type { LibrarySummary, MediaCard, MediaItemDetail };
-
+export type { LibrarySummary, MediaCard, MediaItemDetail, HomeResponse, HomeRow, HomeSlide };
 // Libraries change only via admin action — one in-flight promise per session
 // is fine, and it keeps TopNav/Home/Library from triple-fetching on mount.
 let librariesPromise: Promise<LibrarySummary[]> | null = null;
@@ -23,6 +23,29 @@ function fixCreatedAt<T extends { createdAt: string | null }>(item: T): Omit<T, 
 export async function fetchLibraryItems(id: string): Promise<MediaCard[]> {
   const { data } = await api.GET("/libraries/{id}/items", { params: { path: { id } } });
   return (data ?? []).map(fixCreatedAt);
+}
+
+// /home rows carry the same z.coerce.date()→string widening — coerce every
+// card so callers get the real contract shape.
+type ClientCard = Omit<MediaCard, "createdAt"> & { createdAt: string | null };
+type ClientHomeRow = Omit<HomeRow, "items"> & { items: ClientCard[] };
+
+function fixHomeCard(card: ClientCard): MediaCard {
+  return { ...card, createdAt: new Date(card.createdAt!) };
+}
+
+function fixHomeRow(row: ClientHomeRow): HomeRow {
+  return { ...row, items: row.items.map(fixHomeCard) };
+}
+
+export async function fetchHome(profileId?: string | null): Promise<HomeResponse | null> {
+  const { data } = await api.GET("/home", { params: profileId ? { query: { profileId } } : {} });
+  if (!data) return null;
+  return {
+    continueWatching: data.continueWatching,
+    slides: data.slides,
+    rows: data.rows.map(fixHomeRow),
+  };
 }
 
 // Detail prefetch cache: tiles warm it on pointer-enter so the channel-zoom

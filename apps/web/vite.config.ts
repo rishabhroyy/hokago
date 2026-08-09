@@ -23,6 +23,8 @@ const API_PATHS = [
   "/continue-watching",
   "/libraries",
   "/media-items",
+  "/home",
+  "/external-artwork",
   "/watch-state",
   "/admin/queues",
   "/admin-api",

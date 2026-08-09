@@ -86,6 +86,7 @@ export default {
         zoomin: { from: { opacity: "0", transform: "scale(.94)" }, to: { opacity: "1", transform: "scale(1)" } },
         bob: { "0%,100%": { transform: "translateY(-50%)" }, "50%": { transform: "translateY(-58%)" } },
         shine: { "0%,72%": { transform: "translateX(-130%)" }, "86%,100%": { transform: "translateX(130%)" } },
+        herofill: { from: { width: "0%" }, to: { width: "100%" } },
       },
       animation: {
         wiipulse: "wiipulse 1.3s ease-in-out infinite",
@@ -94,6 +95,7 @@ export default {
         zoomin: "zoomin .42s cubic-bezier(.4,0,.2,1)",
         bob: "bob 4.5s ease-in-out infinite",
         shine: "shine 5s ease-in-out infinite",
+        herofill: "herofill 5s linear forwards",
       },
     },
   },

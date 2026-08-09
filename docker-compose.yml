@@ -62,6 +62,7 @@ services:
       DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
       VALKEY_URL: redis://valkey:6379
       PORT: 3000
+      HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-dev-only-insecure-default}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
@@ -69,6 +70,8 @@ services:
       - "${HOKAGO_PORT:-3000}:3000"
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
+      - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
+      - ${TC_TEST_LIBRARY_PATH:-/tmp/hokago-tc-test}:/tmp/hokago-tc-test:ro
 
   hokago-worker:
     build:
@@ -93,6 +96,9 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
-      # Media roots are first-class and plural — the user adds one
-      # line per library root and points a Library at it. Example, disabled:
-      # - /mnt/media/movies:/media/movies:ro
+      # Media roots are first-class and plural — one line per Library, bound
+      # at the path the Library's rootPath records (both API and worker read
+      # media files). Source = the Docker-visible path (Docker Desktop on
+      # macOS shares /Users, not /users); target = the DB-recorded path.
+      - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
+      - ${TC_TEST_LIBRARY_PATH:-/tmp/hokago-tc-test}:/tmp/hokago-tc-test:ro

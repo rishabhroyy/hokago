@@ -71,6 +71,9 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
 # ── Stage: node-builder — pnpm workspace build ──
 FROM node:22-bookworm-slim AS node-builder
 
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable
 WORKDIR /repo
 
@@ -86,6 +89,9 @@ RUN pnpm -r build
 
 # ── Stage: runtime ──
 FROM node:22-bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
 COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg

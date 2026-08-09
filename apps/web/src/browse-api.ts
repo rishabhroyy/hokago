@@ -35,6 +35,14 @@ export function prefetchMediaItemDetail(id: string, profileId?: string | null): 
   void fetchMediaItemDetail(id, profileId);
 }
 
+/** Drop cached detail (mark-watched mutations change episode state) — next fetch hits the API again. */
+export function invalidateMediaItemDetail(id: string): void {
+  detailCache.delete(`${id}:`);
+  for (const key of [...detailCache.keys()]) {
+    if (key.startsWith(`${id}:`)) detailCache.delete(key);
+  }
+}
+
 function fetchMediaItemDetailUncached(id: string, profileId?: string | null): Promise<MediaItemDetail | null> {
   return api
     .GET("/media-items/{id}", {

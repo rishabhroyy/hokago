@@ -51,6 +51,9 @@ import {
   ContinueWatchingResponse,
   WatchHistoryQuery,
   WatchHistoryResponse,
+  SetWatchedParams,
+  SetWatchedBody,
+  SetWatchedResponse,
   ErrorResponse as PlaybackErrorResponse,
 } from "./playback.js";
 import {
@@ -314,6 +317,16 @@ export function buildOpenApiDocument(): OpenAPIObject {
     summary: "Day-by-day watch history for a profile + media item",
     request: { query: WatchHistoryQuery },
     responses: { 200: { description: "OK", ...json(WatchHistoryResponse) } },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/watch-state/{mediaItemId}",
+    summary: "Manually mark a media item watched or unwatched (right-click menu)",
+    request: { params: SetWatchedParams, body: json(SetWatchedBody) },
+    responses: {
+      200: { description: "OK", ...json(SetWatchedResponse) },
+      404: { description: "Media item not found", ...json(PlaybackErrorResponse) },
+    },
   });
 
  // Admin

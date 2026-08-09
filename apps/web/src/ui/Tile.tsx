@@ -33,7 +33,10 @@ export function iconFor(id: string): IconName {
 export interface TileItem {
   id: string;
   title: string;
+  /** Art URL — poster for most rows, backdrop for landscape episode tiles. */
   posterUrl: string | null;
+  /** Landscape (episode backdrop) art — rows render these wider with a 16:9 crop. */
+  landscape?: boolean;
   subLabel: string;
   badge?: string;
   progress?: number;
@@ -45,10 +48,12 @@ export function Tile({
   item,
   onOpen,
   onPrefetch,
+  onContextMenu,
 }: {
   item: TileItem;
   onOpen: (item: TileItem, artEl: HTMLElement) => void;
   onPrefetch?: (item: TileItem) => void;
+  onContextMenu?: (item: TileItem, x: number, y: number) => void;
 }) {
   const artRef = useRef<HTMLDivElement>(null);
   const s = useWiiSound();
@@ -76,6 +81,10 @@ export function Tile({
       }}
       onPointerMove={onMove}
       onPointerLeave={onLeave}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu?.(item, e.clientX, e.clientY);
+      }}
       onClick={(e) => {
         s.select();
         if (!reduced) spawnStar(e.clientX, e.clientY);
@@ -88,7 +97,7 @@ export function Tile({
         className={`art relative rounded-[20px] bg-card p-[5px] shadow-panel transition-shadow duration-200 [transform-style:preserve-3d] group-hover:shadow-wii-ring ${reduced ? "" : "group-hover:animate-wiipulse"}`}
       >
         <div
-          className={`relative flex aspect-[2/3] items-center justify-center overflow-hidden rounded-[15px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
+          className={`relative flex ${item.landscape ? "aspect-video" : "aspect-[2/3]"} items-center justify-center overflow-hidden rounded-[15px] ${item.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(item.id)]}`}
         >
           {item.posterUrl ? (
             <img src={item.posterUrl} alt={item.title} className="h-full w-full object-cover" loading="lazy" />

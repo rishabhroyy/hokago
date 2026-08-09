@@ -25,7 +25,10 @@ export function continueWatchingToTile(entry: ContinueWatchingEntry): TileItem {
   return {
     id: item.id,
     title: item.title,
-    posterUrl: item.posterUrl,
+    // Episodes have both posters and backdrops — a continuing episode reads
+    // as a landscape "watched so far" card (backdrop), not a vertical poster.
+    posterUrl: item.kind === "EPISODE" ? (item.backdropUrl ?? item.posterUrl) : item.posterUrl,
+    landscape: item.kind === "EPISODE",
     subLabel,
     detailId: entry.detailItemId,
     badge: entry.upNext ? "NEXT" : undefined,

@@ -38,9 +38,11 @@ const episodeSelect = {
 function toCard<
   T extends {
     kind: string;
+    title: string;
     artwork: ArtworkRef[];
     files: { id: string }[];
     _count: { children: number };
+    extra?: unknown;
   },
 >(
   item: T,
@@ -53,6 +55,10 @@ function toCard<
   const { artwork, files, _count, ...rest } = item;
   return {
     ...rest,
+    title:
+      item.kind === "EPISODE"
+        ? ((item.extra as { episodeTitle?: string } | null | undefined)?.episodeTitle ?? item.title)
+        : item.title,
     posterUrl: primaryArtworkUrl(artwork, "POSTER"),
     backdropUrl: primaryArtworkUrl(artwork, "BACKDROP"),
     mediaFileId: files[0]?.id ?? null,
@@ -180,10 +186,9 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       children: children.map(toCard),
       episodes: episodes.map((ep) => {
         const card = toCard(ep);
-        const episodeTitle = (ep.extra as { episodeTitle?: string } | null)?.episodeTitle;
         const state = stateByItemId.get(ep.id);
         return {
-          ...(episodeTitle ? { ...card, title: episodeTitle } : card),
+          ...card,
           watched: state?.watched ?? false,
           positionMs: state?.positionMs ?? 0,
         };

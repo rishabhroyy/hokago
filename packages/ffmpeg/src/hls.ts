@@ -90,6 +90,10 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   const startSeconds = input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
+  // A 100ms trim on the very first segment drops a source pre-roll (leading
+  // keyframe lands ~1.4s in while audio starts at 0) without the garbage
+  // frames reaching the player. Resume seeks below use the existing -ss.
+  if (startSeconds === 0) args.push("-ss", "0.1");
   if (startSeconds > 0) args.push("-ss", String(startSeconds));
   args.push("-i", input.inputPath);
 
@@ -121,6 +125,10 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
   // the speed/quality tradeoff instead.
   args.push("-preset", "veryfast", "-crf", "23");
+  // No B-frames: the B-frame reorder puts a pts/dts skew on every keyframe,
+  // which the mpegts muxer propagates as a small lead on every segment. With
+  // dts == pts the segments stay exactly flush (6.006s spacing, no lead).
+  args.push("-bf", "0");
   if (input.maxVideoBitrateKbps !== undefined) {
     args.push("-maxrate", `${input.maxVideoBitrateKbps}k`, "-bufsize", `${input.maxVideoBitrateKbps * 2}k`);
   }
@@ -140,8 +148,21 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     String(input.segmentSeconds),
     "-segment_start_number",
     String(input.startSegment),
-    "-reset_timestamps",
-    "1",
+    // The mpegts muxer adds a ~1.5s lead on the first packet (PAT/PMT/PCR
+    // interleaving at the default muxdelay) — every segment would carry that
+    // offset, hls.js's remuxer flags fragments as overlapping the previous
+    // timeline, appends land in gapped ranges, and the playhead stalls at
+    // each gap. Zero muxdelay writes packets as they encode.
+    //
+    // Deliberately NO -reset_timestamps: resetting makes every segment start
+    // at 0, and hls.js normalizes a sub-1s first sample against the playlist
+    // offset by adding 2^33 (33-bit PTS rollover guard) — the whole timeline
+    // then sits ~95443.7s off, the per-fragment overlap compensation
+    // compresses it (a 24-min episode ends up ~7 min long) and playback ends
+    // at the compressed end. Continuous absolute PTS across segments keeps
+    // every fragment flush with the running timeline instead.
+    "-muxdelay",
+    "0",
     path.join(input.outputDir, "segment-%d.ts"),
   );
 

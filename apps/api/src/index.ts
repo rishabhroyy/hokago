@@ -20,7 +20,7 @@ import { registerBrowseRoutes } from "./browse-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
 import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
-import { reapStaleSessions, killOrphanedTranscodes } from "./playback-routes.js";
+import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
@@ -80,6 +80,16 @@ killOrphanedTranscodes()
     if (killed > 0) app.log.info(`boot sweep: killed ${killed} orphaned ffmpeg process(es)`);
   })
   .catch((err) => app.log.error({ err }, "orphan ffmpeg sweep failed"));
+
+// Transcode directories are session-lifetime scratch (GBs of segments per
+// title) and sessions are tracked in memory — every dir left behind by a
+// previous API process is garbage. Wipe them at boot, same reasoning as the
+// orphan ffmpeg sweep above.
+cleanOrphanedTranscodeDirs()
+  .then((removed) => {
+    if (removed > 0) app.log.info(`boot sweep: removed ${removed} orphaned transcode directorie(s)`);
+  })
+  .catch((err) => app.log.error({ err }, "transcode dir sweep failed"));
 
 // Reaps any live transcode children on shutdown — apps/api owns them directly
 // (separate PID namespace from apps/worker), so nothing else can reap them.

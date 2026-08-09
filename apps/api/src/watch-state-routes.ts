@@ -9,6 +9,9 @@ import {
   ContinueWatchingResponse,
   WatchHistoryQuery,
   WatchHistoryResponse,
+  SetWatchedParams,
+  SetWatchedBody,
+  SetWatchedResponse,
   type ContinueWatchingEntry,
   ErrorResponse,
 } from "@hokago/contract/playback";
@@ -47,12 +50,18 @@ function toRef<
     artwork: ArtworkRef[];
     files: { id: string }[];
     parent: { parentId: string | null } | null;
+    extra?: unknown;
   },
 >(item: T) {
   return {
     id: item.id,
     kind: item.kind as "MOVIE" | "SERIES" | "SEASON" | "EPISODE",
-    title: item.title,
+    // Episodes keep their filename-derived title as identity; the provider's
+    // real title rides in extra.episodeTitle and is what gets displayed.
+    title:
+      item.kind === "EPISODE"
+        ? ((item.extra as { episodeTitle?: string } | null | undefined)?.episodeTitle ?? item.title)
+        : item.title,
     sortTitle: item.sortTitle,
     parentId: item.parentId,
     seasonNumber: item.seasonNumber,
@@ -66,7 +75,10 @@ function toRef<
 
 // Anything past this fraction of the runtime counts as "finished" — matches
 // the industry-standard "credits are rolling" heuristic, not literal 100%.
-const WATCHED_THRESHOLD = 0.9;
+// 0.95 = watching through the credits; a few extra seconds past 90% is the
+// difference between "the episode actually ended" and "stopped with scenes
+// left", and the watched mark drives rollover + grayed-out episodes.
+const WATCHED_THRESHOLD = 0.95;
 
 // Watch time credited per heartbeat is position delta — a forward seek between
 // heartbeats would otherwise count as watch time. 10s heartbeats mean any
@@ -171,6 +183,68 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       await stopSession(session.id);
       await broadcastPresence();
       return { ok: true };
+    },
+  );
+
+  // Manual watched-marking from the right-click menu — idempotent upsert on
+  // the same PlaybackState row heartbeats write. Marking watched bumps the
+  // play count (once); unwatching clears position + count so the item reads
+  // as never started. No watchDay credit either way — that's real watch time.
+  app.post(
+    "/watch-state/:mediaItemId",
+    {
+      schema: {
+        params: SetWatchedParams,
+        body: SetWatchedBody,
+        response: { 200: SetWatchedResponse, 404: ErrorResponse },
+      },
+    },
+    async (req, reply) => {
+      const { profileId, watched } = req.body;
+      const item = await db.mediaItem.findUnique({
+        where: { id: req.params.mediaItemId },
+        select: { id: true },
+      });
+      if (!item) return reply.code(404).send({ error: "media item not found" });
+
+      const prev = await db.playbackState.findUnique({
+        where: { profileId_mediaItemId: { profileId, mediaItemId: item.id } },
+      });
+
+      if (watched) {
+        const completed = !(prev?.watched ?? false);
+        await db.playbackState.upsert({
+          where: { profileId_mediaItemId: { profileId, mediaItemId: item.id } },
+          create: {
+            profileId,
+            mediaItemId: item.id,
+            positionMs: 0,
+            durationMs: prev?.durationMs ?? null,
+            watched: true,
+            playCount: 1,
+            lastWatchedAt: new Date(),
+          },
+          update: {
+            watched: true,
+            ...(completed ? { playCount: { increment: 1 }, lastWatchedAt: new Date() } : {}),
+          },
+        });
+      } else {
+        await db.playbackState.upsert({
+          where: { profileId_mediaItemId: { profileId, mediaItemId: item.id } },
+          create: {
+            profileId,
+            mediaItemId: item.id,
+            positionMs: 0,
+            watched: false,
+            playCount: 0,
+            lastWatchedAt: null,
+          },
+          update: { watched: false, positionMs: 0, playCount: 0, lastWatchedAt: null },
+        });
+      }
+
+      return { ok: true, watched };
     },
   );
 

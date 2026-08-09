@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { PrismaClient } from "@hokago/db";
@@ -222,9 +222,10 @@ async function killSessionTranscode(sessionId: string): Promise<void> {
 
 /**
  * Ends a playback session: kills its ffmpeg child (if any), frees its
- * transcode slot, and marks the PlaybackSession ended. Called by the /stop
- * route, the idle reaper, and shutdown — without this, ffmpeg keeps burning
- * CPU forever for every tab that stops playing.
+ * transcode slot, marks the PlaybackSession ended — and deletes the session's
+ * transcode files (a 24-minute 8 Mbps episode is ~1.4 GB of segments). Called
+ * by the /stop route, the idle reaper, and shutdown — without this, every
+ * watched title leaves its full transcode on disk forever.
  */
 export async function stopSession(sessionId: string): Promise<void> {
   await killSessionTranscode(sessionId);
@@ -232,6 +233,7 @@ export async function stopSession(sessionId: string): Promise<void> {
     where: { id: sessionId, endedAt: null },
     data: { endedAt: new Date() },
   });
+  await rm(transcodeDir(sessionId), { recursive: true, force: true });
 }
 
 /** Marks a session dead *without* killing anything the caller is about to replace. */
@@ -542,11 +544,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const deadline = Date.now() + 120_000;
       let lastSize = -1;
       while (Date.now() < deadline) {
-        if (
-          live.transcode.child.exitCode !== null &&
-          live.transcode.child.signalCode !== null &&
-          !existsSync(segPath)
-        ) {
+        // exitCode and signalCode are mutually exclusive — a SIGKILLed child
+        // (seek/audio-switch restart) sets signalCode, never exitCode. `||`
+        // is the "is the child dead at all" check; `&&` here would poll a
+        // killed child's missing segments for the full 120s.
+        if ((live.transcode.child.exitCode ?? live.transcode.child.signalCode) !== null && !existsSync(segPath)) {
           break;
         }
         let size = 0;
@@ -762,6 +764,28 @@ export async function reapStaleSessions(): Promise<number> {
     data: { state: "CANCELLED", endedAt: new Date() },
   });
   return stale.length;
+}
+
+/**
+ * Deletes transcode directories orphaned by a previous API process. Sessions
+ * are tracked in the in-memory liveSessions map — after a restart every dir
+ * under config/transcode is garbage, whatever its PlaybackSession row says
+ * (stopSession only runs while live). Runs once at boot, where the sweep cost
+ * is invisible; the per-session rm in stopSession covers the steady state.
+ */
+export async function cleanOrphanedTranscodeDirs(): Promise<number> {
+  const root = path.join(configDir(), "transcode");
+  let removed = 0;
+  try {
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      await rm(path.join(root, entry.name), { recursive: true, force: true });
+      removed += 1;
+    }
+  } catch {
+    // no transcode root yet — nothing to clean
+  }
+  return removed;
 }
 
 /** Cmdline of `pid`, or null if it's already gone (or not ours to inspect). */

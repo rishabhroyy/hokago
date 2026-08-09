@@ -119,4 +119,17 @@ export type WatchHistoryEntry = z.infer<typeof WatchHistoryEntry>;
 
 export const WatchHistoryResponse = z.array(WatchHistoryEntry);
 
+/** Manual watched-marking (right-click menu): per-profile, idempotent. */
+export const SetWatchedParams = z.object({ mediaItemId: z.string() });
+export type SetWatchedParams = z.infer<typeof SetWatchedParams>;
+
+export const SetWatchedBody = z.object({
+  profileId: z.string(),
+  /** true = mark watched, false = reset to unwatched (position and count cleared). */
+  watched: z.boolean().default(true),
+});
+export type SetWatchedBody = z.infer<typeof SetWatchedBody>;
+
+export const SetWatchedResponse = z.object({ ok: z.boolean(), watched: z.boolean() });
+
 export const ErrorResponse = z.object({ error: z.string() });

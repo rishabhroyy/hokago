@@ -13,6 +13,7 @@ import { Icon } from "../ui/icons";
 import { LogoMark } from "../ui/Logo";
 import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
+import { ContextMenu } from "../ui/ContextMenu";
 import { continueWatchingToTile, cardToTile } from "../ui/tile-mapping";
 
 export function HomeView() {
@@ -21,6 +22,7 @@ export function HomeView() {
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingEntry[]>([]);
   const [recentlyAdded, setRecentlyAdded] = useState<MediaCard[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [tileMenu, setTileMenu] = useState<{ x: number; y: number; item: TileItem } | null>(null);
 
   useEffect(() => {
     if (!profileId) return;
@@ -71,6 +73,26 @@ export function HomeView() {
 
   const openDetail = (item: TileItem) => navigate(paths.detail(item.detailId ?? item.id));
   const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.detailId ?? item.id, profileId);
+
+  // Right-click mark-watched on a tile. Continue-watching entries reshuffle
+  // (a finished episode rolls onto the next one), so the row is refetched —
+  // the same endpoint the detail page's episode menu uses.
+  const markTileWatched = (item: TileItem, watched: boolean) => {
+    if (!profileId) return;
+    api
+      .POST("/watch-state/{mediaItemId}", {
+        params: { path: { mediaItemId: item.id } },
+        body: { profileId, watched },
+      })
+      .then(({ error }) => {
+        if (error) throw new Error(error.error ?? "mark watched failed");
+        return api.GET("/continue-watching", { params: { query: { profileId } } });
+      })
+      .then(({ data }) => {
+        if (data) setContinueWatching(data);
+      })
+      .catch((err: Error) => console.warn("mark watched failed", err.message));
+  };
 
   const heroEntry = continueWatching.find((e) => !e.upNext) ?? null;
   const heroCard = !heroEntry ? (recentlyAdded[0] ?? null) : null;
@@ -232,11 +254,26 @@ export function HomeView() {
         items={continueWatching.map(continueWatchingToTile)}
         onOpen={openDetail}
         onPrefetch={prefetch}
+        onContextMenu={(item, x, y) => setTileMenu({ x, y, item })}
       />
       <Row title="Recently added" items={recentlyAdded.map(cardToTile)} onOpen={openDetail} onPrefetch={prefetch} />
       {genreRails.map(([genre, items]) => (
         <Row key={genre} title={genre} items={items.map(cardToTile)} onOpen={openDetail} onPrefetch={prefetch} />
       ))}
+      {tileMenu && (
+        <ContextMenu
+          x={tileMenu.x}
+          y={tileMenu.y}
+          onClose={() => setTileMenu(null)}
+          items={[
+            {
+              label: "Mark as watched",
+              icon: "check",
+              onClick: () => markTileWatched(tileMenu.item, true),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }

@@ -414,44 +414,48 @@ async function enrichEpisodeTitles(
       const series = await db.mediaItem.findUnique({ where: { id: seriesId }, select: { title: true } });
       if (series?.title) {
         const results = (await tvMaze.search({ title: series.title, kind: "SERIES" })).matches;
-        const hit =
-          results.find(
-            (r) => normalizeTitle(r.title) === normalizeTitle(series.title) || normalizeTitle(r.title).includes(normalizeTitle(series.title)),
-          ) ?? results[0];
-        if (hit) {
-          const backfill = await tvMaze.episodes(hit.providerId);
-          if (backfill.length > 0) {
-            const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(
-              (await db.mediaItem.findUnique({ where: { id: seriesId }, select: { lifecycleState: true } }))?.lifecycleState ?? "UNKNOWN",
-            );
-            await db.metadataCache.upsert({
-              where: { provider_externalId: { provider: "TVMAZE", externalId: hit.providerId } },
-              create: {
-                provider: "TVMAZE",
-                externalId: hit.providerId,
-                payload: { episodes: backfill } as unknown as Prisma.InputJsonValue,
-                ttlPolicy,
-                expiresAt,
-              },
-              update: {
-                payload: { episodes: backfill } as unknown as Prisma.InputJsonValue,
-                ttlPolicy,
-                expiresAt,
-              },
-            });
-            const backfillBySeason = new Map<number, { n: number; title: string }[]>();
-            for (const ep of backfill) {
-              if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
-              byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
-              const arr = backfillBySeason.get(ep.seasonNumber) ?? [];
-              arr.push({ n: ep.episodeNumber, title: ep.title });
-              backfillBySeason.set(ep.seasonNumber, arr);
-            }
-            for (const [season, pairs] of backfillBySeason) {
-              const arr = titlesBySeason.get(season) ?? [];
-              arr.push(...pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
-              titlesBySeason.set(season, arr);
-            }
+        // Exact-normalized equality, or containment in the provider title
+        // (short local name vs fuller provider title). Never fall back to a
+        // blind first hit — a *wrong* show's episode list is worse than no
+        // titles at all, and it would poison every episode's display.
+        const hit = results.find(
+          (r) =>
+            normalizeTitle(r.title) === normalizeTitle(series.title) ||
+            normalizeTitle(r.title).includes(normalizeTitle(series.title)),
+        );
+        if (!hit) return;
+        const backfill = await tvMaze.episodes(hit.providerId);
+        if (backfill.length > 0) {
+          const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(
+            (await db.mediaItem.findUnique({ where: { id: seriesId }, select: { lifecycleState: true } }))?.lifecycleState ?? "UNKNOWN",
+          );
+          await db.metadataCache.upsert({
+            where: { provider_externalId: { provider: "TVMAZE", externalId: hit.providerId } },
+            create: {
+              provider: "TVMAZE",
+              externalId: hit.providerId,
+              payload: { episodes: backfill } as unknown as Prisma.InputJsonValue,
+              ttlPolicy,
+              expiresAt,
+            },
+            update: {
+              payload: { episodes: backfill } as unknown as Prisma.InputJsonValue,
+              ttlPolicy,
+              expiresAt,
+            },
+          });
+          const backfillBySeason = new Map<number, { n: number; title: string }[]>();
+          for (const ep of backfill) {
+            if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
+            byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
+            const arr = backfillBySeason.get(ep.seasonNumber) ?? [];
+            arr.push({ n: ep.episodeNumber, title: ep.title });
+            backfillBySeason.set(ep.seasonNumber, arr);
+          }
+          for (const [season, pairs] of backfillBySeason) {
+            const arr = titlesBySeason.get(season) ?? [];
+            arr.push(...pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
+            titlesBySeason.set(season, arr);
           }
         }
       }

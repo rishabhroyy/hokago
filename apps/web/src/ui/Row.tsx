@@ -10,12 +10,14 @@ export function Row({
   onSeeAll,
   onOpen,
   onPrefetch,
+  onContextMenu,
 }: {
   title: string;
   items: TileItem[];
   onSeeAll?: () => void;
   onOpen: (item: TileItem, artEl: HTMLElement) => void;
   onPrefetch?: (item: TileItem) => void;
+  onContextMenu?: (item: TileItem, x: number, y: number) => void;
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const s = useWiiSound();
@@ -57,8 +59,8 @@ export function Row({
           style={{ scrollBehavior: "smooth" }}
         >
           {items.map((item) => (
-            <div key={item.id} className="w-[172px] shrink-0">
-              <Tile item={item} onOpen={onOpen} onPrefetch={onPrefetch} />
+            <div key={item.id} className={item.landscape ? "w-[240px] shrink-0" : "w-[172px] shrink-0"}>
+              <Tile item={item} onOpen={onOpen} onPrefetch={onPrefetch} onContextMenu={onContextMenu} />
             </div>
           ))}
         </div>

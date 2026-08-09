@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodeCard } from "@hokago/contract/browse";
-import { fetchMediaItemDetail, prefetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
+import { fetchMediaItemDetail, invalidateMediaItemDetail, prefetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
+import { api } from "../api-client";
 import { useProfileId } from "../profile";
 import { paths, useRouter } from "../router";
 import { Icon } from "../ui/icons";
 import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
 import { cardToTile } from "../ui/tile-mapping";
+import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu";
 import { useWiiSound } from "../ui/useWiiSound";
 import { popAndPing, useReducedMotion, useStaggerEntrance } from "../ui/effects";
 import { sanitizeOverview } from "../ui/sanitize";
@@ -30,7 +32,17 @@ function Overview({ text }: { text: string }) {
   );
 }
 
-function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: EpisodeCard[]; onOpen: (ep: EpisodeCard, el: HTMLElement) => void }) {
+function SeasonGrid({
+  season,
+  eps,
+  onOpen,
+  onContextMenu,
+}: {
+  season: number | null;
+  eps: EpisodeCard[];
+  onOpen: (ep: EpisodeCard, el: HTMLElement) => void;
+  onContextMenu?: (ep: EpisodeCard, x: number, y: number) => void;
+}) {
   const s = useWiiSound();
   const gridRef = useRef<HTMLDivElement>(null);
   useStaggerEntrance(gridRef, [eps]);
@@ -49,11 +61,15 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
             key={ep.id}
             className="group cursor-pointer text-left transition-transform duration-200 ease-snap hover:-translate-y-1.5 active:scale-[.98]"
             onPointerEnter={() => s.hover()}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onContextMenu?.(ep, e.clientX, e.clientY);
+            }}
             onClick={(e) => onOpen(ep, e.currentTarget)}
           >
             <div className="relative rounded-[18px] bg-card p-[5px] shadow-panel transition-shadow duration-200 group-hover:shadow-wii-ring">
               <div
-                className={`relative aspect-video overflow-hidden rounded-[13px] ${ep.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(ep.id)]}`}
+                className={`relative aspect-video overflow-hidden rounded-[13px] ${ep.posterUrl ? "bg-paper-2" : HUE_CLASS[hueFor(ep.id)]} ${ep.watched ? "grayscale-[0.4] opacity-55 transition-[opacity,filter] duration-200 group-hover:grayscale-0 group-hover:opacity-95" : ""}`}
               >
                 {ep.posterUrl ? (
                   <img src={ep.posterUrl} alt={ep.title} loading="lazy" className="h-full w-full object-cover" />
@@ -95,7 +111,7 @@ function SeasonGrid({ season, eps, onOpen }: { season: number | null; eps: Episo
                 </span>
               </div>
             </div>
-            <div className="mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-card-title font-bold text-ink transition-colors group-hover:text-wii-deep" title={ep.title}>
+            <div className={`mt-2.5 overflow-hidden text-ellipsis whitespace-nowrap px-1 text-card-title font-bold transition-colors group-hover:text-wii-deep ${ep.watched ? "text-ink-3" : "text-ink"}`} title={ep.title}>
               {ep.title}
             </div>
           </button>
@@ -171,6 +187,7 @@ export function DetailView({ itemId }: { itemId: string }) {
   const reduced = useReducedMotion();
   const [item, setItem] = useState<MediaItemDetail | null>(null);
   const [selectedAudio, setSelectedAudio] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; ep: EpisodeCard } | null>(null);
 
   useEffect(() => {
     if (!profileId) return;
@@ -213,6 +230,36 @@ export function DetailView({ itemId }: { itemId: string }) {
 
   const openTile = (tile: TileItem) => navigate(paths.detail(tile.id));
   const prefetchTile = (tile: TileItem) => prefetchMediaItemDetail(tile.id);
+
+  // Right-click mark-watched: flip the episode's PlaybackState, then refetch
+  // the (invalidated) detail so gray-out, the watched counter, and rollover
+  // all reflect it immediately.
+  const markWatched = (ep: EpisodeCard, watched: boolean) => {
+    if (!profileId) return;
+    api
+      .POST("/watch-state/{mediaItemId}", {
+        params: { path: { mediaItemId: ep.id } },
+        body: { profileId, watched },
+      })
+      .then(({ error }) => {
+        if (error) throw new Error(error.error ?? "mark watched failed");
+        invalidateMediaItemDetail(itemId);
+        return fetchMediaItemDetail(itemId, profileId);
+      })
+      .then((detail) => {
+        if (detail) setItem(detail);
+      })
+      .catch((err: Error) => console.warn("mark watched failed", err.message));
+  };
+
+  const episodeMenuItems = (ep: EpisodeCard): ContextMenuItem[] => [
+    ...(ep.mediaFileId
+      ? [{ label: "Play", icon: "play" as const, onClick: () => navigate(paths.player(ep.mediaFileId!, ep.id, profileId ?? "dev")) }]
+      : []),
+    ...(ep.watched
+      ? [{ label: "Mark as unwatched", icon: "check" as const, onClick: () => markWatched(ep, false) }]
+      : [{ label: "Mark as watched", icon: "check" as const, onClick: () => markWatched(ep, true) }]),
+  ];
 
   const hasEpisodes = item.episodes.length > 0;
 
@@ -355,7 +402,13 @@ export function DetailView({ itemId }: { itemId: string }) {
           )}
 
           {episodesBySeason.map(([season, eps]) => (
-            <SeasonGrid key={season ?? "none"} season={season} eps={eps} onOpen={openEpisode} />
+            <SeasonGrid
+              key={season ?? "none"}
+              season={season}
+              eps={eps}
+              onOpen={openEpisode}
+              onContextMenu={(ep, x, y) => setMenu({ x, y, ep })}
+            />
           ))}
         </div>
       </div>
@@ -381,6 +434,9 @@ export function DetailView({ itemId }: { itemId: string }) {
         />
       ))}
       <div className="pb-16" />
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={episodeMenuItems(menu.ep)} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }

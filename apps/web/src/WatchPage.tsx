@@ -96,7 +96,25 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       // COEP: require-corp the transferred ArrayBuffer arrives detached and
       // the probe sees empty data ("Failed to find demuxer"), stalling every
       // segment past the first. Transmux on the main thread instead.
-      provider.config = { enableWorker: false };
+      //
+      // Transcodes serve the playlist with every segment listed (VOD), but
+      // ffmpeg writes them on demand — the segment route holds the request
+      // until the file is stable. hls.js's default first-byte timeout (10s)
+      // aborts those held fetches and retries them in a storm; with no first
+      // byte it treats the pending fetch as live and streams it the moment
+      // the segment lands. maxLoadTimeMs still bounds a dead session (the
+      // route 404s quickly once its ffmpeg child dies).
+      provider.config = {
+        enableWorker: false,
+        fragLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: Infinity,
+            maxLoadTimeMs: 120_000,
+            timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 },
+            errorRetry: { maxNumRetry: 6, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+          },
+        },
+      };
     }
     setVideoEl(isVideoProvider(provider) ? provider.video : null);
   }, []);

@@ -43,6 +43,16 @@ export function invalidateMediaItemDetail(id: string): void {
   }
 }
 
+/**
+ * Drop every cached detail. Playback heartbeats mutate watched flags and
+ * positions server-side, so any cached detail — the series page most of all —
+ * is stale the moment a session ends; the player calls this on unmount so
+ * back-navigation refetches instead of rendering the pre-watch snapshot.
+ */
+export function clearDetailCache(): void {
+  detailCache.clear();
+}
+
 function fetchMediaItemDetailUncached(id: string, profileId?: string | null): Promise<MediaItemDetail | null> {
   return api
     .GET("/media-items/{id}", {

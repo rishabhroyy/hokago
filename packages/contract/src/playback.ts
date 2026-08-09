@@ -50,6 +50,10 @@ export const SeekResponse = z.object({
   segmentFrom: z.number(),
   pid: z.number(),
   killedPid: z.number().optional(),
+  /** REMUX restarts land on the keyframe at-or-before the target — the position
+   *  the restarted stream actually starts at. The client's timeline offset uses
+   *  this so subs/positions stay exact after a restart. */
+  actualStartMs: z.number().optional(),
 });
 
 export const AudioTrackSwitchBody = z.object({ audioStreamIndex: z.number(), positionMs: z.number() });
@@ -60,6 +64,9 @@ export const AudioTrackSwitchResponse = z.object({
   segmentFrom: z.number(),
   pid: z.number(),
   killedPid: z.number(),
+  /** REMUX restarts land on the keyframe at-or-before the target — the position
+   *  the restarted stream actually starts at. */
+  actualStartMs: z.number().optional(),
 });
 
 export const HeartbeatBody = z.object({

@@ -3,11 +3,15 @@ import {
   MediaPlayer,
   MediaProvider,
   Track,
+  hasTriggerEvent,
   isHLSProvider,
-  isVideoProvider,
   useMediaState,
+  type AudioTrack,
+  type MediaAudioTrackChangeEvent,
   type MediaPlayerInstance,
   type MediaProviderAdapter,
+  type MediaTextTrackChangeEvent,
+  type TextTrack,
 } from "@vidstack/react";
 import {
   defaultLayoutIcons,
@@ -30,9 +34,11 @@ import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo } fr
 import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
 import { getPrimaryProfile } from "./profile";
-import { fetchMediaItemDetail } from "./browse-api";
+import { clearDetailCache, fetchMediaItemDetail } from "./browse-api";
 import { paths, useRouter } from "./router";
 import { Icon } from "./ui/icons";
+import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveSubtitlePref } from "./track-prefs";
+import { audioTrackLabel } from "./language-names";
 
 // An empty WebVTT that vidstack loads (so the track is a real, selectable entry
 // in the stock captions menu) but which draws nothing — JASSUB does the actual
@@ -43,6 +49,31 @@ const EMPTY_VTT = "data:text/vtt," + encodeURIComponent("WEBVTT\n\n");
 // Heartbeat cadence — server-side resume + continue-watching depend on it,
 // and the API's idle reaper uses it to tell "paused in a tab" from "dead".
 const HEARTBEAT_MS = 10_000;
+
+// Mirrors HLS_SEGMENT_SECONDS in packages/ffmpeg (Node-only, not importable
+// here): transcode playlists restart at a segment boundary, so the timeline
+// offset at a restart is always an exact multiple of this.
+const HLS_SEGMENT_SECONDS = 6;
+
+const eq = (a: string | null | undefined, b: string | null | undefined) =>
+  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+// Shape of the non-standard HTMLMediaElement.audioTracks list (Chrome/Safari).
+interface NativeAudioTrack {
+  id: string;
+  label: string;
+  language: string;
+  enabled: boolean;
+}
+interface NativeAudioTrackList {
+  readonly length: number;
+  [index: number]: NativeAudioTrack;
+}
+
+/** True when a media event was triggered by a real user gesture (menu radio
+ *  click/keypress) rather than auto-selection or a programmatic change. */
+const isUserGesture = (event: Event) =>
+  hasTriggerEvent(event, "click") || hasTriggerEvent(event, "keydown") || hasTriggerEvent(event, "pointerup");
 
 export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const { navigate } = useRouter();
@@ -67,11 +98,37 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const skipNextSeekRef = useRef(false);
   const scrubTimerRef = useRef<number | null>(null);
   const lastScrubPosRef = useRef(0);
+  // Media-absolute time at the video timeline's zero point. The server speaks
+  // media time end-to-end (playlist MEDIA-SEQUENCE, remux -ss target, stored
+  // watch positions); the <video>/hls.js timeline restarts at the resume or
+  // restart point, so every client↔server position exchange converts through
+  // this offset (currentTime + offset = media time).
+  const timelineOffsetRef = useRef(0);
+  // State mirror of the ref above — JASSUB needs to react to offset changes
+  // (its cue times are media-absolute, the video clock is timeline-relative),
+  // and refs alone don't re-render.
+  const [timelineOffsetMs, setTimelineOffsetMs] = useState(0);
+  const prefs = useMemo(() => loadTrackPrefs(), []);
+  const userInteractedRef = useRef(false);
   const [title, setTitle] = useState<string | null>(null);
+
+  const applyTimelineOffset = useCallback((ms: number) => {
+    timelineOffsetRef.current = ms;
+    setTimelineOffsetMs(ms);
+  }, []);
 
   // Bitmap subs (PGS/VOBSUB) are burned in server-side, so only text subs
   // become selectable menu entries here; the first one is the default.
   const renderable = useMemo(() => subtitles.filter((t) => !t.requiresBurnIn), [subtitles]);
+
+  // Remembered subtitle preference drives the caption-menu default: null pref
+  // means subs off (no default track), a matching track gets selected, and
+  // without any preference the first renderable track stays the default.
+  const defaultSubtitleId = useMemo(() => {
+    if (prefs.subtitle === null) return null;
+    if (prefs.subtitle) return (matchSubtitlePref(renderable, prefs.subtitle) ?? renderable[0])?.id ?? null;
+    return renderable[0]?.id ?? null;
+  }, [prefs.subtitle, renderable]);
 
   // The stock captions menu is the source of truth for which sub is active;
   // JASSUB just follows it. `id` on each <Track> is our subtitle id.
@@ -116,7 +173,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         },
       };
     }
-    setVideoEl(isVideoProvider(provider) ? provider.video : null);
+    // JASSUB needs the underlying <video> element whatever the provider type —
+    // the HLS provider (MSE, TRANSCODE) is a different provider type but still
+    // manages a native <video>, and without it libass never attaches.
+    setVideoEl((provider as { video?: HTMLVideoElement } | null)?.video ?? null);
   }, []);
 
  // Track list ('s audio/subtitle switcher, Step 8) — text formats only;
@@ -132,7 +192,8 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         setSubtitles(data.subtitles);
         setAudioTracks(data.audio);
         const def = data.audio.find((a) => a.isDefault) ?? data.audio[0];
-        setSelectedAudioIndex(def?.streamIndex ?? null);
+        const chosen = matchAudioPref(data.audio, prefs.audio) ?? def;
+        setSelectedAudioIndex(chosen?.streamIndex ?? null);
       })
       .catch(() => {});
     api
@@ -144,7 +205,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [mediaFileId]);
+  }, [mediaFileId, prefs.audio]);
 
  // JASSUB renders ASS client-side — attached directly to the
   // underlying <video>, independent of DIRECT_PLAY/DIRECT_STREAM/TRANSCODE,
@@ -162,6 +223,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       wasmUrl: jassubWasmUrl,
       modernWasmUrl: jassubModernWasmUrl,
       availableFonts,
+      // ASS cue times are media-absolute; the video clock is timeline-relative
+      // (resume/restart rebase). Without this offset every resumed session's
+      // subs would lag by the whole resume position.
+      timeOffset: timelineOffsetRef.current / 1000,
     });
     jassubRef.current = instance;
 
@@ -170,6 +235,34 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       jassubRef.current = null;
     };
   }, [videoEl, selectedSubtitleId, mediaFileId, renderable, fonts]);
+
+  // Keep JASSUB's offset in lockstep with restarts (seek / audio switch) —
+  // the field is read every rendered frame, so mutating it is live.
+  useEffect(() => {
+    if (jassubRef.current) jassubRef.current.timeOffset = timelineOffsetMs / 1000;
+  }, [timelineOffsetMs]);
+
+  // JASSUB renders from requestVideoFrameCallback, which only fires on
+  // PRESENTED frames. A big seek (especially past the buffered frontier) leaves
+  // currentTime at the target while hls.js buffers — no frames present, so
+  // JASSUB keeps rendering the stale pre-seek frame time for many seconds
+  // ("subs show a scene from minutes ago"). Force a render at the seek target
+  // the moment `seeking` fires so cues track where we actually are.
+  useEffect(() => {
+    const jassub = jassubRef.current;
+    if (!videoEl || !jassub) return;
+    const forceSeekRender = () => {
+      const last = jassub._lastDemandTime;
+      void jassub.manualRender({
+        mediaTime: videoEl.currentTime,
+        width: videoEl.videoWidth || last?.width || 0,
+        height: videoEl.videoHeight || last?.height || 0,
+        expectedDisplayTime: performance.now(),
+      });
+    };
+    videoEl.addEventListener("seeking", forceSeekRender);
+    return () => videoEl.removeEventListener("seeking", forceSeekRender);
+  }, [videoEl, selectedSubtitleId]);
 
   // Deep links / reloads sometimes carry no real profileId — resolve the
   // primary profile, then start playback once we actually have one.
@@ -186,7 +279,16 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     const startPlayback = async () => {
       for (let attempt = 0; ; attempt++) {
         const { data, response } = await api.POST("/playback/start", {
-          body: { profileId, mediaItemId, mediaFileId, deviceProfile: BROWSER_DEVICE_PROFILE },
+          body: {
+            profileId,
+            mediaItemId,
+            mediaFileId,
+            deviceProfile: BROWSER_DEVICE_PROFILE,
+            // Honor the remembered audio track from the very first frame —
+            // the server uses it for both the codec decision and the muxed
+            // track. undefined leaves the file's default in charge.
+            audioStreamIndex: prefs.audio?.streamIndex ?? undefined,
+          },
         });
         if (data) return data as PlaybackStart;
         // Transcoder busy (concurrency cap) — back off and retry.
@@ -211,12 +313,21 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           return;
         }
         setStart(data);
-        // Resume: DIRECT_PLAY/REMUX have no server-produced segments — the
-        // player seeks itself (REMUX starts at the keyframe before the resume
-        // point; the exact position is applied once the file opens).
-        // Transcodes start at the resume segment via the playlist's media
-        // sequence, so no client seek is needed there.
-        if (data.method !== "TRANSCODE" && data.resumePositionMs > 0) {
+        // The video timeline is relative to where playback resumed, but the
+        // server speaks media-absolute time. Track the offset so every
+        // position the client sends (seek, audio switch, heartbeat) can be
+        // converted back to media time.
+        // - TRANSCODE: playlist starts at the resume segment — offset is the
+        //   segment start; no client seek needed (media sequence handles it).
+        // - REMUX: the file starts at the keyframe at-or-before the resume
+        //   point — offset is that point, so no client seek either.
+        // - DIRECT_PLAY: the file is the media itself — offset 0, seek to
+        //   the exact resume once the file opens.
+        if (data.method === "TRANSCODE") {
+          applyTimelineOffset(Math.floor(data.resumePositionMs / (HLS_SEGMENT_SECONDS * 1000)) * HLS_SEGMENT_SECONDS * 1000);
+        } else if (data.method === "REMUX") {
+          applyTimelineOffset(data.resumePositionMs);
+        } else if (data.resumePositionMs > 0) {
           pendingSeekRef.current = data.resumePositionMs / 1000;
         }
       })
@@ -241,7 +352,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       api
         .POST("/playback/{sessionId}/heartbeat", {
           params: { path: { sessionId: start.sessionId } },
-          body: { positionMs: Math.round(player.currentTime * 1000), durationMs },
+          body: { positionMs: Math.round(player.currentTime * 1000 + timelineOffsetRef.current), durationMs },
         })
         .catch(() => {});
     };
@@ -264,6 +375,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       window.clearInterval(interval);
       window.removeEventListener("pagehide", stop);
       stop();
+      // Heartbeats mutated watched flags + positions on the server; any
+      // cached detail (the series page most of all) is now stale. Drop it so
+      // back-navigation refetches and gray-out / durations render fresh.
+      clearDetailCache();
     };
   }, [start?.sessionId]);
 
@@ -276,19 +391,40 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const handleAudioChange = useCallback(
     (absoluteIndex: number) => {
       setSelectedAudioIndex(absoluteIndex);
+      const track = audioTracks.find((t) => t.streamIndex === absoluteIndex);
+      saveAudioPref(
+        track
+          ? { streamIndex: track.streamIndex, id: null, lang: track.lang, title: track.title }
+          : { streamIndex: absoluteIndex, id: null, lang: null, title: null },
+      );
       if (!start || start.method === "DIRECT_PLAY") return;
-      const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000);
+      // The video timeline starts at the resume point (media-absolute), not
+      // zero — convert before telling the server where to restart.
+      const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000 + timelineOffsetRef.current);
       const body: AudioTrackSwitchBody = { audioStreamIndex: absoluteIndex, positionMs };
       api
         .POST("/playback/{sessionId}/audio-track", { params: { path: { sessionId: start.sessionId } }, body })
-        .then(({ error }) => {
+        .then(({ data, error }) => {
           if (error) throw new Error("audio-track switch failed");
-          pendingSeekRef.current = positionMs / 1000;
+          if (data && start.method === "TRANSCODE" && data.segmentFrom != null) {
+            // New playlist starts at the target segment (continuous PTS, so
+            // segment N begins at N*6s) — rebase the offset and reseek to the
+            // exact pre-switch position on the fresh timeline.
+            applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
+            pendingSeekRef.current = (positionMs - timelineOffsetRef.current) / 1000;
+          } else {
+            // REMUX: the restarted file starts at the keyframe at-or-before the
+            // target (actualStartMs). Rebase the offset to it and self-seek to
+            // the exact pre-switch position so the video doesn't jump back.
+            const newOffset = data?.actualStartMs ?? positionMs;
+            applyTimelineOffset(newOffset);
+            pendingSeekRef.current = (positionMs - newOffset) / 1000;
+          }
           setReloadNonce((n) => n + 1);
         })
         .catch((err: Error) => setError(err.message));
     },
-    [start],
+    [start, audioTracks, applyTimelineOffset],
   );
 
   const handleCanPlay = useCallback(() => {
@@ -298,6 +434,44 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     // The seek we just applied fires a `seeked` event — don't let it
     // round-trip into a redundant /seek restart.
     skipNextSeekRef.current = true;
+  }, []);
+
+  // DIRECT_PLAY switches audio client-side via native <video> tracks; honor the
+  // remembered audio preference by enabling the matching native track once
+  // metadata is available. TRANSCODE/REMUX apply it through the tracks effect
+  // instead (server-driven restarts).
+  // `audioTracks` is non-standard (Chrome/Safari) and missing from lib.dom.
+  useEffect(() => {
+    if (start?.method !== "DIRECT_PLAY" || !videoEl || !prefs.audio) return;
+    const list = (videoEl as HTMLVideoElement & { audioTracks?: NativeAudioTrackList }).audioTracks;
+    if (!list || list.length === 0) return;
+    const { audio } = prefs;
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      const match =
+        (audio.id != null && t.id === audio.id) ||
+        (audio.title != null && eq(t.label, audio.title)) ||
+        (audio.lang != null && eq(t.language, audio.lang));
+      if (match) {
+        if (!t.enabled) t.enabled = true;
+        break;
+      }
+    }
+  }, [start?.method, videoEl, prefs.audio]);
+
+  // Persist genuine user track choices. Auto-selection (default track on load)
+  // and programmatic changes don't fire a user gesture, so hasTriggerEvent
+  // keeps them out; the user must have clicked Play by the time they reach the
+  // menus anyway, which is the second guard.
+  const handleTextTrackChange = useCallback((detail: TextTrack | null, nativeEvent: MediaTextTrackChangeEvent) => {
+    if (!userInteractedRef.current && !isUserGesture(nativeEvent)) return;
+    saveSubtitlePref(detail ? { id: detail.id, lang: detail.language || null, title: detail.label || null } : null);
+  }, []);
+
+  const handleNativeAudioTrackChange = useCallback((detail: AudioTrack | null, nativeEvent: MediaAudioTrackChangeEvent) => {
+    if (!detail) return;
+    if (!userInteractedRef.current && !isUserGesture(nativeEvent)) return;
+    saveAudioPref({ streamIndex: null, id: detail.id, lang: detail.language || null, title: detail.label || null });
   }, []);
 
   // Scrubbing in TRANSCODE/DIRECT_STREAM: the server must restart ffmpeg at
@@ -313,7 +487,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       return;
     }
     if (player.currentTime < 1) return;
-    lastScrubPosRef.current = Math.round(player.currentTime * 1000);
+    lastScrubPosRef.current = Math.round(player.currentTime * 1000 + timelineOffsetRef.current);
     if (scrubTimerRef.current !== null) window.clearTimeout(scrubTimerRef.current);
     scrubTimerRef.current = window.setTimeout(() => {
       api
@@ -322,11 +496,21 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           body: { positionMs: lastScrubPosRef.current },
         })
         .then(({ data }) => {
-          if (data?.restarted) setReloadNonce((n) => n + 1);
+          if (!data?.restarted) return;
+          if (start.method === "TRANSCODE" && data.segmentFrom != null) {
+            applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
+          } else {
+            // REMUX: rebase to the restarted file's actual keyframe start and
+            // self-seek to the exact scrub target so playback lands precisely.
+            const newOffset = data.actualStartMs ?? lastScrubPosRef.current;
+            applyTimelineOffset(newOffset);
+            pendingSeekRef.current = (lastScrubPosRef.current - newOffset) / 1000;
+          }
+          setReloadNonce((n) => n + 1);
         })
         .catch(() => {});
     }, 2500);
-  }, [start]);
+  }, [start, applyTimelineOffset]);
 
   const src =
     start?.method === "DIRECT_PLAY"
@@ -355,7 +539,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         <DefaultMenuRadioGroup
           value={String(selectedAudioIndex ?? "")}
           options={audioTracks.map((t) => ({
-            label: t.title ?? t.lang ?? `Track ${t.streamIndex}`,
+            label: audioTrackLabel(t),
             value: String(t.streamIndex),
           }))}
           onChange={(v) => handleAudioChange(Number(v))}
@@ -392,6 +576,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           onProviderChange={handleProviderChange}
           onCanPlay={handleCanPlay}
           onSeeked={handleSeeked}
+          onPlay={() => {
+            userInteractedRef.current = true;
+          }}
+          onTextTrackChange={handleTextTrackChange}
+          onAudioTrackChange={handleNativeAudioTrackChange}
           onPause={() => {
             // Persist position promptly on pause — don't wait for the next
             // 10s tick, in case the tab is throttled or closed soon after.
@@ -400,7 +589,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             api
               .POST("/playback/{sessionId}/heartbeat", {
                 params: { path: { sessionId: start.sessionId } },
-                body: { positionMs: Math.round(player.currentTime * 1000) },
+                body: { positionMs: Math.round(player.currentTime * 1000 + timelineOffsetRef.current) },
               })
               .catch(() => {});
           }}
@@ -413,7 +602,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
               .POST("/playback/{sessionId}/heartbeat", {
                 params: { path: { sessionId: start.sessionId } },
                 body: {
-                  positionMs: Math.round(player.currentTime * 1000),
+                  positionMs: Math.round(player.currentTime * 1000 + timelineOffsetRef.current),
                   durationMs: player.duration ? Math.round(player.duration * 1000) : undefined,
                 },
               })
@@ -423,7 +612,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           <MediaProvider>
             {/* DIRECT_PLAY audio tracks come from the native element and show up
                 in the stock audio menu automatically; these are the subtitles. */}
-            {renderable.map((t, i) => (
+            {renderable.map((t) => (
               <Track
                 key={t.id}
                 id={t.id}
@@ -431,7 +620,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                 kind="subtitles"
                 label={t.title ?? t.lang ?? t.id}
                 language={t.lang ?? undefined}
-                default={i === 0}
+                default={t.id === defaultSubtitleId}
               />
             ))}
           </MediaProvider>

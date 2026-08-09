@@ -100,7 +100,7 @@ function SeasonGrid({
                   <span className="absolute inset-x-0 bottom-0 z-[2] h-[5px] bg-black/45">
                     <span
                       className="block h-full bg-wii"
-                      style={{ width: `${Math.min(100, Math.round((ep.positionMs / (ep.runtimeMs * 1000)) * 100))}%` }}
+                      style={{ width: `${Math.min(100, Math.round((ep.positionMs / ep.runtimeMs) * 100))}%` }}
                     />
                   </span>
                 )}

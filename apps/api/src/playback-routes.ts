@@ -206,6 +206,48 @@ async function resumePositionMs(profileId: string, mediaItemId: string, duration
   return Math.min(state.positionMs, Math.max(0, durationMs - 30_000));
 }
 
+/**
+ * The keyframe ffmpeg's fast input seek (`-ss`) actually lands on for a target:
+ * the last keyframe at-or-before it. REMUX resumes with that exact packet, so
+ * the client's timeline↔media offset (and the stored session position) must
+ * use K, not the requested resume point — otherwise subs/positions drift by
+ * the whole keyframe gap (seconds on sparsely-keyed sources). Bounded read
+ * keeps the scan to the resume position.
+ */
+function keyframeAtOrBeforeMs(path: string, positionMs: number): number {
+  if (positionMs <= 0) return 0;
+  try {
+    const out = execFileSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-skip_frame",
+        "nokey",
+        "-show_entries",
+        "frame=pts_time",
+        "-of",
+        "csv=p=0",
+        "-read_intervals",
+        `%${positionMs / 1000}`,
+        path,
+      ],
+      { maxBuffer: 16 * 1024 * 1024 },
+    );
+    let last = 0;
+    for (const line of out.toString().trim().split("\n")) {
+      const t = Number(line.trim());
+      if (!Number.isNaN(t) && t > last) last = t;
+    }
+    return Math.round(last * 1000);
+  } catch {
+    // Probe failure — fall back to the requested position (current behavior).
+    return positionMs;
+  }
+}
+
 async function killSessionTranscode(sessionId: string): Promise<void> {
   const live = liveSessions.get(sessionId);
   if (!live) return;
@@ -250,7 +292,7 @@ async function restartTranscode(
   sessionId: string,
   live: LiveSession,
   targetMs: number,
-): Promise<{ transcode: RunningTranscode; jobId: string } | { cancelled: true }> {
+): Promise<{ transcode: RunningTranscode; jobId: string; startMs: number } | { cancelled: true }> {
   // The ffmpeg child may have already finished on its own (e.g. it reached
   // the end of the file) before this restart arrived — `exit` only ever fires
   // once, so attaching a listener after the fact would hang forever.
@@ -274,12 +316,22 @@ async function restartTranscode(
   }
 
   const isRemux = live.method === "REMUX" && live.remux !== null;
-  const segmentFrom = Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS);
+  // REMUX restarts fast-seek to the keyframe at-or-before the target — that
+  // actual keyframe is what the restarted stream starts at (and what the
+  // client's offset must use), so probe it here and report it in the response.
+  const startMs = isRemux ? keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
+  const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
   const args = isRemux
     ? buildRemuxArgs({
         inputPath: live.mediaFile.path,
-        outputPath: live.remux!.outFile,
-        startMs: targetMs,
+        // Derive from outDir, not live.remux.outFile: the audio-track route
+        // restarts into a fresh per-track outDir (spread sets live.outDir,
+        // leaving remux.outFile pointing at the previous track's dir), and
+        // writing the new stream there means it lands on the disk the stream
+        // route then serves. Seek-restarts keep outDir unchanged, so this is
+        // the same file either way.
+        outputPath: path.join(live.outDir, "stream.mp4"),
+        startMs,
         durationMs: live.mediaFile.durationMs,
         audioStreamIndex: live.audioStreamIndex,
         audioCodec: live.audioCodec,
@@ -324,7 +376,7 @@ async function restartTranscode(
   });
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
 
-  return { transcode, jobId: job.id };
+  return { transcode, jobId: job.id, startMs };
 }
 
 /**
@@ -352,6 +404,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     const decision = decidePlaybackMethod(candidate.input, profile);
     const resumeMs = await resumePositionMs(profileId, mediaItemId, candidate.durationMs);
 
+    // REMUX fast-seeks to the keyframe at-or-before the resume point — the
+    // file (and therefore the client's timeline offset + stored position) must
+    // use that actual keyframe, or subs/positions drift by the keyframe gap.
+    const isRemux = decision.method === "REMUX";
+    const startMs = isRemux ? keyframeAtOrBeforeMs(candidate.path, resumeMs) : resumeMs;
+
     const session = await db.playbackSession.create({
       data: {
         profileId,
@@ -359,7 +417,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         mediaFileId,
         method: decision.method,
         deviceProfile: profile as object,
-        positionMs: resumeMs,
+        positionMs: startMs,
       },
     });
     await broadcastPresence();
@@ -388,10 +446,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     await mkdir(outDir, { recursive: true });
     const toneMap = needsToneMap(candidate.input.isHdr, profile.supportsHdr);
 
-    const isRemux = decision.method === "REMUX";
-    // REMUX starts at the keyframe at-or-before the resume point; the client
-    // then self-seeks to the exact resume position once the file is open.
-    const startMs = resumeMs;
     const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
     const outFile = path.join(outDir, "stream.mp4");
     const args = isRemux
@@ -478,7 +532,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       reasons: decision.reasons,
       playlistUrl,
       streamUrl: isRemux ? `/playback/${session.id}/stream.mp4` : null,
-      resumePositionMs: resumeMs,
+      // For REMUX this is the actual keyframe the file starts at (== startMs),
+      // which the client uses as its timeline offset — exactly synced subs.
+      resumePositionMs: isRemux ? startMs : resumeMs,
     };
     },
   );
@@ -644,14 +700,14 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId } = restarted;
+      const { transcode, jobId, startMs } = restarted;
 
       liveSessions.set(req.params.sessionId, {
         ...live,
         transcode,
         currentSegmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
         currentTranscodeJobId: jobId,
-        remux: { outFile: live.remux.outFile, startMs: targetMs },
+        remux: { outFile: live.remux.outFile, startMs },
       });
 
       await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
@@ -660,6 +716,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
         pid: transcode.pid,
         killedPid: oldPid,
+        actualStartMs: startMs,
       };
     },
   );
@@ -716,7 +773,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId } = restarted;
+      const { transcode, jobId, startMs } = restarted;
 
       liveSessions.set(req.params.sessionId, {
         ...live,
@@ -727,11 +784,17 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         currentTranscodeJobId: jobId,
         audioStreamIndex: audioIndex,
         audioCodec,
-        remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs: targetMs } : null,
+        remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs } : null,
       });
 
       await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
-      return { restarted: true, segmentFrom: targetSegment, pid: transcode.pid, killedPid: oldPid };
+      return {
+        restarted: true,
+        segmentFrom: targetSegment,
+        pid: transcode.pid,
+        killedPid: oldPid,
+        actualStartMs: isRemux ? startMs : undefined,
+      };
     },
   );
 }

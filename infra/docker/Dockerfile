@@ -82,10 +82,15 @@ COPY packages ./packages
 COPY apps ./apps
 
 RUN pnpm install --frozen-lockfile=false
-RUN pnpm --filter @hokago/contract generate
-RUN pnpm --filter @hokago/db generate
-RUN pnpm --filter @hokago/fonts build
-RUN pnpm -r build
+
+# Codegen is deterministic: generated dirs are gitignored and come along in the
+# COPY above (host artifacts, e.g. the macOS query engine). prisma generate does
+# not clean its output, so stale engines would be shipped. Wipe before regenerating.
+RUN rm -rf packages/db/generated packages/contract/generated packages/fonts/vendor \
+    && pnpm --filter @hokago/contract generate \
+    && pnpm --filter @hokago/db generate \
+    && pnpm --filter @hokago/fonts build \
+    && pnpm -r build
 
 # ── Stage: runtime ──
 FROM node:22-bookworm-slim AS runtime

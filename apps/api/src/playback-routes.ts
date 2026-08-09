@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -604,4 +605,48 @@ export async function reapStaleSessions(): Promise<number> {
     data: { state: "CANCELLED", endedAt: new Date() },
   });
   return stale.length;
+}
+
+/** Cmdline of `pid`, or null if it's already gone (or not ours to inspect). */
+function processCmdline(pid: number): string | null {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], { stdio: ["ignore", "ignore", "pipe"] }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Kills ffmpeg children orphaned by a previous API process (crash, dev
+ * restart, `kill -9`). Their pids are recorded in transcode_jobs, but no
+ * exit callback survives to release them — they'd burn CPU until the input
+ * file ends. The cmdline guard (contains "ffmpeg" and this session's
+ * transcode dir) makes PID-reuse after a long-dead process safe.
+ */
+export async function killOrphanedTranscodes(): Promise<number> {
+  const running = await db.transcodeJob.findMany({
+    where: { state: "RUNNING", pid: { not: null } },
+    select: { id: true, pid: true, sessionId: true },
+  });
+  let killed = 0;
+  for (const job of running) {
+    const pid = job.pid as number | null;
+    if (pid != null) {
+      const cmdline = processCmdline(pid);
+      const ours = cmdline?.includes("ffmpeg") && cmdline.includes(`transcode/${job.sessionId}`);
+      if (ours) {
+        try {
+          process.kill(pid, "SIGKILL");
+          killed += 1;
+        } catch {
+          // already gone
+        }
+      }
+    }
+    await db.transcodeJob.update({
+      where: { id: job.id },
+      data: { state: "CANCELLED", endedAt: new Date() },
+    });
+  }
+  return killed;
 }

@@ -19,7 +19,7 @@ import { registerAvatarRoutes } from "./avatar-routes.js";
 import { registerBrowseRoutes } from "./browse-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
 import { registerPresence } from "./presence.js";
-import { reapStaleSessions } from "./playback-routes.js";
+import { reapStaleSessions, killOrphanedTranscodes } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
@@ -68,6 +68,15 @@ reapStaleSessions()
     if (reaped > 0) app.log.info(`boot sweep: reaped ${reaped} stale playback session(s)`);
   })
   .catch((err) => app.log.error({ err }, "boot sweep failed"));
+
+// Kills ffmpeg children orphaned by a previous API process — a dev restart or
+// crash leaves the recorded pids alive and transcoding until EOF. Without
+// this, every API restart leaks up to HOKAGO_MAX_TRANSCODES processes.
+killOrphanedTranscodes()
+  .then((killed) => {
+    if (killed > 0) app.log.info(`boot sweep: killed ${killed} orphaned ffmpeg process(es)`);
+  })
+  .catch((err) => app.log.error({ err }, "orphan ffmpeg sweep failed"));
 
 // Reaps any live transcode children on shutdown — apps/api owns them directly
 // (separate PID namespace from apps/worker), so nothing else can reap them.

@@ -369,11 +369,17 @@ async function enrichEpisodeTitles(
     // nth local episode maps to the nth provider episode.
     const titlesBySeason = new Map<number, string[]>();
     for (const list of lists) {
+      const bySeasonPairs = new Map<number, { n: number; title: string }[]>();
       for (const ep of list.episodes) {
         if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
-        const arr = titlesBySeason.get(ep.seasonNumber) ?? [];
-        arr.push(ep.title);
-        titlesBySeason.set(ep.seasonNumber, arr);
+        const arr = bySeasonPairs.get(ep.seasonNumber) ?? [];
+        arr.push({ n: ep.episodeNumber, title: ep.title });
+        bySeasonPairs.set(ep.seasonNumber, arr);
+      }
+      for (const [season, pairs] of bySeasonPairs) {
+        const arr = titlesBySeason.get(season) ?? [];
+        arr.push(...pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
+        titlesBySeason.set(season, arr);
       }
     }
     const locals = await db.mediaItem.findMany({
@@ -383,8 +389,13 @@ async function enrichEpisodeTitles(
       },
       select: { id: true, seasonNumber: true, episodeNumber: true, extra: true },
     });
+    // Deterministic order — rank-based matching would silently shift titles if
+    // the heap order of the rows above was ever anything but ascending.
+    const sortedLocals = locals.sort(
+      (a, b) => (a.seasonNumber ?? 0) - (b.seasonNumber ?? 0) || (a.episodeNumber ?? 0) - (b.episodeNumber ?? 0),
+    );
     const localsBySeason = new Map<number, number[]>();
-    for (const ep of locals) {
+    for (const ep of sortedLocals) {
       if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
       const arr = localsBySeason.get(ep.seasonNumber) ?? [];
       arr.push(ep.episodeNumber);
@@ -428,12 +439,18 @@ async function enrichEpisodeTitles(
                 expiresAt,
               },
             });
+            const backfillBySeason = new Map<number, { n: number; title: string }[]>();
             for (const ep of backfill) {
               if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
               byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
-              const arr = titlesBySeason.get(ep.seasonNumber) ?? [];
-              arr.push(ep.title);
-              titlesBySeason.set(ep.seasonNumber, arr);
+              const arr = backfillBySeason.get(ep.seasonNumber) ?? [];
+              arr.push({ n: ep.episodeNumber, title: ep.title });
+              backfillBySeason.set(ep.seasonNumber, arr);
+            }
+            for (const [season, pairs] of backfillBySeason) {
+              const arr = titlesBySeason.get(season) ?? [];
+              arr.push(...pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
+              titlesBySeason.set(season, arr);
             }
           }
         }

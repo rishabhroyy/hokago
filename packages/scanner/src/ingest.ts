@@ -128,11 +128,25 @@ async function ingestLeafItem(
 ): Promise<LeafResult> {
   const { file, dir, probe } = ctx;
   const parsed = parseFilename(path.basename(file.path), profile);
+  // Season folders keep anime's absolute numbering ("Season 2" holding files
+  // 13..24) — normalize to season-relative (1..12) so ordering, titles, and
+  // provider episode lists agree. The base is the prior seasons' episode
+  // count; files already relative (episode <= base) are left untouched.
+  let episodeNumber: number | null = kind === "EPISODE" ? (parsed.episode ?? null) : null;
+  if (kind === "EPISODE" && episodeNumber !== null && seasonNumber !== null && seasonNumber > 1) {
+    const seasonRow = await db.mediaItem.findUnique({ where: { id: parentId as string }, select: { parentId: true } });
+    if (seasonRow?.parentId) {
+      const prior = await db.mediaItem.count({
+        where: { kind: "EPISODE", parent: { parentId: seasonRow.parentId }, seasonNumber: { lt: seasonNumber } },
+      });
+      if (prior > 0 && episodeNumber > prior) episodeNumber -= prior;
+    }
+  }
   // Episodes never take the filename as their name — parsers only ever return
   // the series title, which every row of a season would share. "Episode N" is
   // the honest placeholder until provider enrichment fills `extra.episodeTitle`.
   const title =
-    kind === "EPISODE" ? `Episode ${parsed.episode ?? "?"}` : (parsed.title ?? path.basename(file.path));
+    kind === "EPISODE" ? `Episode ${episodeNumber ?? "?"}` : (parsed.title ?? path.basename(file.path));
 
   // Path first (common case, cheap unique lookup). If the path moved, fall
   // back to inode within this library — a rename/move must reuse the same
@@ -157,7 +171,7 @@ async function ingestLeafItem(
         sortTitle: title.toLowerCase(),
         year: parsed.year,
         seasonNumber,
-        episodeNumber: kind === "EPISODE" ? parsed.episode : null,
+        episodeNumber,
         runtimeMs: probe?.durationMs ?? null,
       },
     });

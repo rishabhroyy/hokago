@@ -31,12 +31,12 @@ export interface TrackPrefs {
   quality: QualityPref | null | undefined;
 }
 
-/** Encode caps for a quality selection — merged into the device profile on /start and sent to /quality on change. */
+/** Encode caps for a quality selection — merged into the device profile on /start and sent to /quality on change. Null caps = "Original" (no forced caps, the decider picks the easiest tier). */
 export interface QualityPref {
   label: string;
-  maxWidth: number;
-  maxHeight: number;
-  maxVideoBitrateKbps: number;
+  maxWidth: number | null;
+  maxHeight: number | null;
+  maxVideoBitrateKbps: number | null;
 }
 
 export function loadTrackPrefs(): TrackPrefs {

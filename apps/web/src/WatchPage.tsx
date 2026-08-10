@@ -59,13 +59,23 @@ const eq = (a: string | null | undefined, b: string | null | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
 // Quality menu options — encode caps sent to /playback/start (merged into the
-// device profile) and /playback/:id/quality. The first option matches the
-// device profile's own ceiling, so it's the "no cap" default.
-const QUALITY_OPTIONS = [
+// device profile) and /playback/:id/quality. "Original" carries no caps: the
+// decider gets the device profile's own ceiling and lands on the easiest tier
+// that works — DIRECT_PLAY when the file direct-plays, otherwise the encode
+// best effort. It's also the reset: a capped transcode returns to DIRECT_PLAY.
+interface QualityOption {
+  label: string;
+  reset?: boolean;
+  maxWidth?: number;
+  maxHeight?: number;
+  maxVideoBitrateKbps?: number;
+}
+const QUALITY_OPTIONS: QualityOption[] = [
+  { label: "Original", reset: true },
   { label: "1080p", maxWidth: 1920, maxHeight: 1080, maxVideoBitrateKbps: 8000 },
   { label: "720p", maxWidth: 1280, maxHeight: 720, maxVideoBitrateKbps: 3500 },
   { label: "480p", maxWidth: 854, maxHeight: 480, maxVideoBitrateKbps: 1500 },
-] as const;
+];
 
 // Shape of the non-standard HTMLMediaElement.audioTracks list (Chrome/Safari).
 interface NativeAudioTrack {
@@ -122,11 +132,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const userPausedRef = useRef(false);
   const [title, setTitle] = useState<string | null>(null);
 
-  // Caps for the current quality selection — undefined for fresh users means
-  // the device profile's own ceiling applies (the "1080p" default).
+  // Caps for the current quality selection — null for a fresh user or an
+  // "Original" pick means the device profile's own ceiling applies.
   const qualityCaps = useMemo(() => {
     const q = prefs.quality;
-    if (!q) return null;
+    if (!q || q.maxWidth == null || q.maxHeight == null || q.maxVideoBitrateKbps == null) return null;
     return { maxWidth: q.maxWidth, maxHeight: q.maxHeight, maxVideoBitrateKbps: q.maxVideoBitrateKbps };
   }, [prefs.quality]);
 
@@ -134,7 +144,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // option, else the remembered caps matched against the option set.
   const selectedQuality = useMemo(() => {
     const q = prefs.quality;
-    if (!q) return QUALITY_OPTIONS[0].label;
+    if (!q || q.maxWidth == null) return QUALITY_OPTIONS[0].label;
     const byCaps = QUALITY_OPTIONS.find((o) => o.maxWidth === q.maxWidth && o.maxHeight === q.maxHeight);
     return byCaps?.label ?? q.label;
   }, [prefs.quality]);
@@ -488,28 +498,35 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       if (!opt) return;
       saveQualityPref({
         label: opt.label,
-        maxWidth: opt.maxWidth,
-        maxHeight: opt.maxHeight,
-        maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
+        maxWidth: opt.maxWidth ?? null,
+        maxHeight: opt.maxHeight ?? null,
+        maxVideoBitrateKbps: opt.maxVideoBitrateKbps ?? null,
       });
-      if (!start || start.method === "DIRECT_PLAY") return;
+      if (!start) return;
       // The video timeline starts at the resume point (media-absolute), not
       // zero — convert before telling the server where to restart.
       const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000 + timelineOffsetRef.current);
       api
         .POST("/playback/{sessionId}/quality", {
           params: { path: { sessionId: start.sessionId } },
-          body: {
-            positionMs,
-            maxWidth: opt.maxWidth,
-            maxHeight: opt.maxHeight,
-            maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
-          },
+          body: opt.reset
+            ? { positionMs, reset: true }
+            : {
+                positionMs,
+                maxWidth: opt.maxWidth,
+                maxHeight: opt.maxHeight,
+                maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
+              },
         })
         .then(({ data, error }) => {
           if (error) throw new Error("quality switch failed");
           if (!data?.restarted) return;
-          if (data.method === "TRANSCODE" && data.segmentFrom != null) {
+          if (data.method === "DIRECT_PLAY") {
+            // Reset walked back up the ladder: the file itself is the media —
+            // offset 0, self-seek to the exact pre-switch position.
+            applyTimelineOffset(0);
+            pendingSeekRef.current = positionMs / 1000;
+          } else if (data.method === "TRANSCODE" && data.segmentFrom != null) {
             applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
             pendingSeekRef.current = (positionMs - timelineOffsetRef.current) / 1000;
           } else {
@@ -520,7 +537,8 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             pendingSeekRef.current = (positionMs - newOffset) / 1000;
           }
           // The method can change (REMUX -> TRANSCODE when the new caps are
-          // below the source resolution) — swap the src accordingly.
+          // below the source resolution, TRANSCODE -> DIRECT_PLAY on reset) —
+          // swap the src accordingly.
           setStart((prev) =>
             prev
               ? { ...prev, method: data.method, playlistUrl: data.playlistUrl, streamUrl: data.streamUrl }
@@ -648,16 +666,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       </DefaultMenuSection>
     ) : null;
 
-  const qualityMenu =
-    start && start.method !== "DIRECT_PLAY" ? (
-      <DefaultMenuSection label="Quality">
-        <DefaultMenuRadioGroup
-          value={selectedQuality}
-          options={QUALITY_OPTIONS.map((o) => ({ label: o.label, value: o.label }))}
-          onChange={handleQualityChange}
-        />
-      </DefaultMenuSection>
-    ) : null;
+  const qualityMenu = start ? (
+    <DefaultMenuSection label="Quality">
+      <DefaultMenuRadioGroup
+        value={selectedQuality}
+        options={QUALITY_OPTIONS.map((o) => ({ label: o.label, value: o.label }))}
+        onChange={handleQualityChange}
+      />
+    </DefaultMenuSection>
+  ) : null;
 
   return (
     <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-black text-white">

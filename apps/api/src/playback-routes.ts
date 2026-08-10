@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { PrismaClient } from "@hokago/db";
-import { decidePlaybackMethod } from "@hokago/ffmpeg/decision";
+import { decidePlaybackMethod, type PlaybackMethod } from "@hokago/ffmpeg/decision";
 import {
   type DeviceProfile,
   type PlaybackCandidateInput,
@@ -297,6 +297,53 @@ async function cancelCurrentJob(sessionId: string): Promise<void> {
   });
 }
 
+/**
+ * Spawns a session's first ffmpeg child and records its TranscodeJob. The
+ * caller already holds the transcode slot (released here when the child
+ * exits) and is responsible for the outDir, HLS playlist, and liveSessions
+ * entry. Shared by /start and the quality route's DIRECT_PLAY→TRANSCODE
+ * fallback, so both legs record jobs the same way.
+ */
+async function spawnTranscodeJob(
+  sessionId: string,
+  mediaFileId: string,
+  method: "REMUX" | "TRANSCODE",
+  profile: DeviceProfile,
+  args: string[],
+  segmentFrom: number,
+): Promise<{ transcode: RunningTranscode; jobId: string }> {
+  const job = await db.transcodeJob.create({
+    data: {
+      sessionId,
+      mediaFileId,
+      method,
+      deviceProfile: profile as object,
+      state: "RUNNING",
+      segmentFrom,
+      startedAt: new Date(),
+    },
+  });
+
+  const transcode = spawnFfmpeg(args, (result) => {
+    // The slot guards live ffmpeg *processes* — release it the moment the
+    // child exits (finished a whole file, died, or was killed). Without
+    // this, every finished transcode pins a slot forever and later
+    // sessions queue behind ghosts until /stop or the 5-minute reaper.
+    releaseTranscodeSlot();
+    void db.transcodeJob.update({
+      where: { id: job.id },
+      data: {
+        state: result.code === 0 ? "DONE" : "FAILED",
+        endedAt: new Date(),
+        lastError: result.code === 0 ? null : result.stderr.slice(0, 2000),
+      },
+    });
+  });
+  await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
+
+  return { transcode, jobId: job.id };
+}
+
 async function restartTranscode(
   sessionId: string,
   live: LiveSession,
@@ -487,34 +534,17 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           subtitleBurnIn: candidate.subtitleBurnIn,
         });
 
-    const job = await db.transcodeJob.create({
-      data: {
-        sessionId: session.id,
-        mediaFileId,
-        method: decision.method,
-        deviceProfile: profile as object,
-        state: "RUNNING",
-        segmentFrom,
-        startedAt: new Date(),
-      },
-    });
-
-    const transcode = spawnFfmpeg(args, (result) => {
-      // The slot guards live ffmpeg *processes* — release it the moment the
-      // child exits (finished a whole file, died, or was killed). Without
-      // this, every finished transcode pins a slot forever and later
-      // sessions queue behind ghosts until /stop or the 5-minute reaper.
-      releaseTranscodeSlot();
-      void db.transcodeJob.update({
-        where: { id: job.id },
-        data: {
-          state: result.code === 0 ? "DONE" : "FAILED",
-          endedAt: new Date(),
-          lastError: result.code === 0 ? null : result.stderr.slice(0, 2000),
-        },
-      });
-    });
-    await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
+    // DIRECT_PLAY returned early above; the decider never emits DIRECT_STREAM,
+    // so this is always a real encode or copy.
+    const encodeMethod: "REMUX" | "TRANSCODE" = decision.method === "REMUX" ? "REMUX" : "TRANSCODE";
+    const { transcode, jobId } = await spawnTranscodeJob(
+      session.id,
+      mediaFileId,
+      encodeMethod,
+      profile,
+      args,
+      segmentFrom,
+    );
 
     let playlistUrl: string | null = null;
     if (!isRemux) {
@@ -533,7 +563,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       deviceProfile: profile,
       currentSegmentFrom: segmentFrom,
       playlistStartSegment: segmentFrom,
-      currentTranscodeJobId: job.id,
+      currentTranscodeJobId: jobId,
       toneMap,
       subtitleBurnIn: candidate.subtitleBurnIn,
       audioStreamIndex: audioIndex,
@@ -841,52 +871,165 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     },
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
-      if (!live) return reply.code(404).send({ error: "no active transcode session" });
+      const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
+      // The DB row keeps the session's *start* profile — reset restores it.
+      const startProfile = session.deviceProfile as unknown as DeviceProfile;
 
-      const newProfile = normalizeDeviceProfile({
-        ...live.deviceProfile,
-        ...(req.body.maxWidth !== undefined ? { maxWidth: req.body.maxWidth } : {}),
-        ...(req.body.maxHeight !== undefined ? { maxHeight: req.body.maxHeight } : {}),
-        ...(req.body.maxVideoBitrateKbps !== undefined ? { maxVideoBitrateKbps: req.body.maxVideoBitrateKbps } : {}),
-      });
+      // reset drops the forced caps and re-decides with the start profile;
+      // otherwise merge the new caps over whatever the session runs now.
+      const newProfile = req.body.reset
+        ? normalizeDeviceProfile(startProfile)
+        : normalizeDeviceProfile({
+            ...(live?.deviceProfile ?? startProfile),
+            ...(req.body.maxWidth !== undefined ? { maxWidth: req.body.maxWidth } : {}),
+            ...(req.body.maxHeight !== undefined ? { maxHeight: req.body.maxHeight } : {}),
+            ...(req.body.maxVideoBitrateKbps !== undefined ? { maxVideoBitrateKbps: req.body.maxVideoBitrateKbps } : {}),
+          });
 
       // Same caps as the running encode — nothing to do; report current state
       // so the client can just sync its menu.
-      const capsSame =
-        newProfile.maxWidth === live.deviceProfile.maxWidth &&
-        newProfile.maxHeight === live.deviceProfile.maxHeight &&
-        newProfile.maxVideoBitrateKbps === live.deviceProfile.maxVideoBitrateKbps;
-      if (capsSame) {
-        return {
-          restarted: false,
-          method: live.method,
-          segmentFrom: live.currentSegmentFrom,
-          pid: live.transcode.pid,
-          playlistUrl: live.method === "REMUX" ? null : `/playback/${req.params.sessionId}/playlist.m3u8`,
-          streamUrl: live.method === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
-        };
+      if (live) {
+        const capsSame =
+          newProfile.maxWidth === live.deviceProfile.maxWidth &&
+          newProfile.maxHeight === live.deviceProfile.maxHeight &&
+          newProfile.maxVideoBitrateKbps === live.deviceProfile.maxVideoBitrateKbps;
+        if (capsSame) {
+          return {
+            restarted: false,
+            // Live sessions only ever run REMUX/TRANSCODE (DIRECT_STREAM is
+            // vestigial in the type) — widen to the response's method set.
+            method: live.method as PlaybackMethod,
+            segmentFrom: live.currentSegmentFrom,
+            pid: live.transcode.pid,
+            playlistUrl: live.method === "REMUX" ? null : `/playback/${req.params.sessionId}/playlist.m3u8`,
+            streamUrl: live.method === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
+          };
+        }
       }
 
-      const targetMs = Math.min(req.body.positionMs, Math.max(0, live.mediaFile.durationMs - 1000));
-
-      // Decide the new method with the new caps. The live entry stores the
-      // audio track as a *relative* index; recover the absolute stream index
-      // so the decision sees the same audio codec the session actually uses.
-      const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
       const mediaFile = await db.mediaFile.findUniqueOrThrow({
         where: { id: session.mediaFileId },
         include: { streams: true },
       });
       const audioStreams = mediaFile.streams.filter((s) => s.type === "AUDIO");
-      const absoluteAudio = audioStreams[live.audioStreamIndex]?.streamIndex;
+      const absoluteAudio = live ? audioStreams[live.audioStreamIndex]?.streamIndex : undefined;
       const candidate = await buildCandidateInput(session.mediaFileId, undefined, absoluteAudio);
       if (!candidate) return reply.code(404).send({ error: "media file not found" });
 
+      const targetMs = Math.min(req.body.positionMs, Math.max(0, candidate.durationMs - 1000));
       const decision = decidePlaybackMethod(candidate.input, newProfile);
-      // Live sessions are REMUX/TRANSCODE — a REMUX source (container
-      // unsupported) can never flip to DIRECT_PLAY, so anything that isn't
-      // REMUX here is a real re-encode.
+
+      // Easiest tier first: the decider only lands on DIRECT_PLAY when the
+      // source actually direct-plays at these caps. A reset drops the forced
+      // caps, so a capped TRANSCODE walks back up the ladder to the file
+      // itself — kill the transcode and let the client serve the file.
+      if (decision.method === "DIRECT_PLAY") {
+        if (live) await killSessionTranscode(req.params.sessionId);
+        await db.playbackSession.update({
+          where: { id: session.id },
+          data: { method: "DIRECT_PLAY", positionMs: targetMs },
+        });
+        return {
+          restarted: true,
+          method: "DIRECT_PLAY" as const,
+          segmentFrom: null,
+          pid: null,
+          playlistUrl: null,
+          streamUrl: null,
+        };
+      }
+
       const newMethod: "REMUX" | "TRANSCODE" = decision.method === "REMUX" ? "REMUX" : "TRANSCODE";
+
+      // A DIRECT_PLAY session has no live entry yet — this caps request is
+      // the first time the source can't meet the ask, so spawn the session's
+      // first ffmpeg (mirror of /start's spawn block; the shared helper keeps
+      // the job recording identical).
+      if (!live) {
+        if (!(await acquireTranscodeSlot())) {
+          return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
+        }
+        const targetSegment = segmentFor(targetMs, candidate.durationMs);
+        const newOutDir = qualityOutDir(
+          req.params.sessionId,
+          newProfile.maxWidth ?? 1920,
+          newProfile.maxHeight ?? 1080,
+        );
+        await mkdir(newOutDir, { recursive: true });
+
+        const startMs = newMethod === "REMUX" ? keyframeAtOrBeforeMs(candidate.path, targetMs) : targetMs;
+        const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+        const toneMap = needsToneMap(candidate.input.isHdr, newProfile.supportsHdr);
+        const args =
+          newMethod === "REMUX"
+            ? buildRemuxArgs({
+                inputPath: candidate.path,
+                outputPath: path.join(newOutDir, "stream.mp4"),
+                startMs,
+                durationMs: candidate.durationMs,
+                audioStreamIndex: candidate.relativeAudioIndex,
+                audioCodec: candidate.input.audioCodec,
+              })
+            : buildFfmpegArgs({
+                inputPath: candidate.path,
+                outputDir: newOutDir,
+                startSegment: segmentFrom,
+                segmentSeconds: HLS_SEGMENT_SECONDS,
+                videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs),
+                audioCodec: pickAudioEncoder(newProfile.supportedAudioCodecs),
+                audioStreamIndex: candidate.relativeAudioIndex,
+                maxWidth: newProfile.maxWidth,
+                maxHeight: newProfile.maxHeight,
+                maxVideoBitrateKbps: newProfile.maxVideoBitrateKbps,
+                toneMap,
+                subtitleBurnIn: candidate.subtitleBurnIn,
+              });
+
+        if (newMethod === "TRANSCODE") {
+          const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
+          await writeFile(path.join(newOutDir, "playlist.m3u8"), playlist);
+        }
+
+        const { transcode, jobId } = await spawnTranscodeJob(
+          req.params.sessionId,
+          session.mediaFileId,
+          newMethod,
+          newProfile,
+          args,
+          segmentFrom,
+        );
+
+        liveSessions.set(req.params.sessionId, {
+          transcode,
+          outDir: newOutDir,
+          mediaFile: { path: candidate.path, durationMs: candidate.durationMs, bitrateKbps: candidate.bitrateKbps },
+          method: newMethod,
+          deviceProfile: newProfile,
+          currentSegmentFrom: targetSegment,
+          playlistStartSegment: targetSegment,
+          currentTranscodeJobId: jobId,
+          toneMap,
+          subtitleBurnIn: candidate.subtitleBurnIn,
+          audioStreamIndex: candidate.relativeAudioIndex,
+          audioCodec: candidate.input.audioCodec,
+          remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
+        });
+
+        await db.playbackSession.update({
+          where: { id: session.id },
+          data: { method: newMethod, positionMs: targetMs },
+        });
+        return {
+          restarted: true,
+          method: newMethod,
+          segmentFrom: targetSegment,
+          pid: transcode.pid,
+          actualStartMs: newMethod === "REMUX" ? startMs : undefined,
+          playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
+          streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
+        };
+      }
+
       const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);
       const newOutDir = qualityOutDir(
         req.params.sessionId,

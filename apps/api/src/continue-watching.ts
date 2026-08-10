@@ -5,7 +5,7 @@ import { primaryArtworkUrl, type ArtworkRef } from "./artwork.js";
 const itemInclude = {
   artwork: { select: { id: true, kind: true, priority: true } },
   files: { select: { id: true }, take: 1 },
-  parent: { select: { parentId: true } },
+  parent: { select: { parentId: true, parent: { select: { title: true } } } },
 } as const;
 
 /**
@@ -16,6 +16,11 @@ const itemInclude = {
 function detailItemId(item: { kind: string; id: string; parentId: string | null; parent: { parentId: string | null } | null }): string {
   if (item.kind === "EPISODE") return item.parent?.parentId ?? item.parentId ?? item.id;
   return item.id;
+}
+
+/** The show a continue-watching entry belongs to — series title for episodes, null otherwise. */
+function seriesTitleOf(item: { kind: string; parent: { parent: { title: string | null } | null } | null }): string | null {
+  return item.kind === "EPISODE" ? (item.parent?.parent?.title ?? null) : null;
 }
 
 function toRef<
@@ -30,7 +35,7 @@ function toRef<
     year: number | null;
     artwork: ArtworkRef[];
     files: { id: string }[];
-    parent: { parentId: string | null } | null;
+    parent: { parentId: string | null; parent: { title: string | null } | null } | null;
     extra?: unknown;
   },
 >(item: T) {
@@ -118,6 +123,7 @@ export async function loadContinueWatching(db: PrismaClient, profileId: string):
           updatedAt: state.updatedAt,
           entry: {
             mediaItem: toRef(item),
+            seriesTitle: seriesTitleOf(item),
             detailItemId: detailItemId(item),
             positionMs: state.positionMs,
             durationMs: state.durationMs,
@@ -140,7 +146,7 @@ export async function loadContinueWatching(db: PrismaClient, profileId: string):
     if (!bySeries.has(seriesKey) || bySeries.get(seriesKey)!.updatedAt < state.updatedAt) {
       bySeries.set(seriesKey, {
         updatedAt: state.updatedAt,
-        entry: { mediaItem: toRef(next), detailItemId: detailItemId(next), positionMs: 0, durationMs: null, upNext: true },
+        entry: { mediaItem: toRef(next), seriesTitle: seriesTitleOf(next), detailItemId: detailItemId(next), positionMs: 0, durationMs: null, upNext: true },
       });
     }
   }

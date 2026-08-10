@@ -20,7 +20,7 @@ export function continueWatchingToTile(entry: ContinueWatchingEntry): TileItem {
   const item = entry.mediaItem;
   const subLabel =
     item.kind === "EPISODE" && item.seasonNumber != null && item.episodeNumber != null
-      ? `S${item.seasonNumber}·E${item.episodeNumber}`
+      ? [entry.seriesTitle, `S${item.seasonNumber}·E${item.episodeNumber}`].filter(Boolean).join(" · ")
       : kindLabel(item.kind);
   return {
     id: item.id,

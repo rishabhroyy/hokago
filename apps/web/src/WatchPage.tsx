@@ -460,9 +460,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   );
 
   const handleCanPlay = useCallback(() => {
-    if (pendingSeekRef.current === null || !playerRef.current) return;
-    playerRef.current.currentTime = pendingSeekRef.current;
-    pendingSeekRef.current = null;
+    if (!playerRef.current) return;
+    if (pendingSeekRef.current !== null) {
+      playerRef.current.currentTime = pendingSeekRef.current;
+      pendingSeekRef.current = null;
+    }
     // The seek we just applied fires a `seeked` event — don't let it
     // round-trip into a redundant /seek restart.
     skipNextSeekRef.current = true;

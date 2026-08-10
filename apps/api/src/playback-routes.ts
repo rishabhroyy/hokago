@@ -15,7 +15,7 @@ import {
   HLS_SEGMENT_SECONDS,
 } from "@hokago/ffmpeg/device-profile";
 import { buildM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
-import { buildRemuxArgs } from "@hokago/ffmpeg/remux";
+import { buildRemuxArgs, patchRemuxMehd } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { broadcastPresence } from "./presence.js";
 import { acquireTranscodeSlot, releaseTranscodeSlot } from "./transcode-slot.js";
@@ -28,6 +28,8 @@ import {
   SeekResponse,
   AudioTrackSwitchBody,
   AudioTrackSwitchResponse,
+  QualitySwitchBody,
+  QualitySwitchResponse,
   ErrorResponse,
 } from "@hokago/contract/playback";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
@@ -52,7 +54,7 @@ interface LiveSession {
   /** Codec of the selected audio stream — drives REMUX copy-vs-encode. */
   audioCodec: string | null;
   /** REMUX only: the live fragmented-MP4 output + where its timeline starts. */
-  remux: { outFile: string; startMs: number } | null;
+  remux: { outFile: string; startMs: number; patched: boolean } | null;
 }
 
 // Each audio selection gets its own segment subdirectory — switching tracks
@@ -60,6 +62,13 @@ interface LiveSession {
 // content) segment files a player may still rewind into.
 function audioOutDir(sessionId: string, audioStreamIndex: number): string {
   return path.join(transcodeDir(sessionId), `a${audioStreamIndex}`);
+}
+
+// Quality switches get their own subdirectory for the same reason as audio
+// tracks: a player rewinding into the old resolution's segments must not
+// get the new encode's content under the old segment numbers.
+function qualityOutDir(sessionId: string, maxWidth: number, maxHeight: number): string {
+  return path.join(transcodeDir(sessionId), `q${maxWidth}x${maxHeight}`);
 }
 
 // PGS/VOBSUB/DVBSUB are bitmap subtitle formats — burned in via ffmpeg's
@@ -292,6 +301,7 @@ async function restartTranscode(
   sessionId: string,
   live: LiveSession,
   targetMs: number,
+  overrides?: { profile?: DeviceProfile; method?: "REMUX" | "TRANSCODE" },
 ): Promise<{ transcode: RunningTranscode; jobId: string; startMs: number } | { cancelled: true }> {
   // The ffmpeg child may have already finished on its own (e.g. it reached
   // the end of the file) before this restart arrived — `exit` only ever fires
@@ -315,7 +325,12 @@ async function restartTranscode(
     return { cancelled: true };
   }
 
-  const isRemux = live.method === "REMUX" && live.remux !== null;
+  const profile = overrides?.profile ?? live.deviceProfile;
+  // The live entry's *method* is the source of truth; the quality route
+  // forces method via overrides (REMUX→TRANSCODE→REMUX round trips leave
+  // live.remux null from the TRANSCODE leg — consulting it here would
+  // silently start a transcode and report REMUX).
+  const isRemux = (overrides?.method ?? live.method) === "REMUX";
   // REMUX restarts fast-seek to the keyframe at-or-before the target — that
   // actual keyframe is what the restarted stream starts at (and what the
   // client's offset must use), so probe it here and report it in the response.
@@ -341,12 +356,12 @@ async function restartTranscode(
         outputDir: live.outDir,
         startSegment: segmentFrom,
         segmentSeconds: HLS_SEGMENT_SECONDS,
-        videoCodec: pickVideoEncoder(live.deviceProfile.supportedVideoCodecs),
-        audioCodec: pickAudioEncoder(live.deviceProfile.supportedAudioCodecs),
+        videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
+        audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
         audioStreamIndex: live.audioStreamIndex,
-        maxWidth: live.deviceProfile.maxWidth,
-        maxHeight: live.deviceProfile.maxHeight,
-        maxVideoBitrateKbps: live.deviceProfile.maxVideoBitrateKbps,
+        maxWidth: profile.maxWidth,
+        maxHeight: profile.maxHeight,
+        maxVideoBitrateKbps: profile.maxVideoBitrateKbps,
         toneMap: live.toneMap,
         subtitleBurnIn: live.subtitleBurnIn,
       });
@@ -356,7 +371,7 @@ async function restartTranscode(
       sessionId,
       mediaFileId: (await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } })).mediaFileId,
       method: isRemux ? "REMUX" : "TRANSCODE",
-      deviceProfile: live.deviceProfile as object,
+      deviceProfile: profile as object,
       state: "RUNNING",
       segmentFrom,
       startedAt: new Date(),
@@ -523,7 +538,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       subtitleBurnIn: candidate.subtitleBurnIn,
       audioStreamIndex: audioIndex,
       audioCodec: candidate.input.audioCodec,
-      remux: isRemux ? { outFile, startMs } : null,
+      remux: isRemux ? { outFile, startMs, patched: false } : null,
     });
 
     return {
@@ -572,6 +587,18 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     }
     if (child.exitCode !== null && child.exitCode !== 0) {
       return reply.code(500).send({ error: "remux failed" });
+    }
+
+    // The file is complete — inject the mehd duration into moov so the player
+    // knows the real length up-front instead of deriving it from downloaded
+    // fragments (a slow connection shows a fraction of the episode). One
+    // 20-byte in-place insert per remux (seek/audio-switch restarts rewrite
+    // the file, so patched resets to false there); a failed patch must never
+    // take the stream down.
+    if (!live.remux.patched) {
+      if (patchRemuxMehd(live.remux.outFile, live.mediaFile.durationMs, live.remux.startMs)) {
+        live.remux.patched = true;
+      }
     }
 
     return reply.sendFile(path.basename(live.remux.outFile), path.dirname(live.remux.outFile), {
@@ -707,7 +734,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         transcode,
         currentSegmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
         currentTranscodeJobId: jobId,
-        remux: { outFile: live.remux.outFile, startMs },
+        remux: { outFile: live.remux.outFile, startMs, patched: false },
       });
 
       await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
@@ -784,7 +811,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         currentTranscodeJobId: jobId,
         audioStreamIndex: audioIndex,
         audioCodec,
-        remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs } : null,
+        remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
       });
 
       await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
@@ -794,6 +821,124 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         pid: transcode.pid,
         killedPid: oldPid,
         actualStartMs: isRemux ? startMs : undefined,
+      };
+    },
+  );
+
+  // Quality switch — restarts ffmpeg with new encode caps, in a fresh per-quality
+  // outDir (see qualityOutDir). Unlike /seek this may also change the METHOD:
+  // requesting 720p of a 1080p REMUX source falls through to a real TRANSCODE
+  // (a copy-remux can't deliver below source resolution — decision engine
+  // enforces this), so the response carries the new stream/playlist URLs.
+  app.post(
+    "/playback/:sessionId/quality",
+    {
+      schema: {
+        params: PlaybackSessionParams,
+        body: QualitySwitchBody,
+        response: { 200: QualitySwitchResponse, 404: ErrorResponse, 503: ErrorResponse },
+      },
+    },
+    async (req, reply) => {
+      const live = liveSessions.get(req.params.sessionId);
+      if (!live) return reply.code(404).send({ error: "no active transcode session" });
+
+      const newProfile = normalizeDeviceProfile({
+        ...live.deviceProfile,
+        ...(req.body.maxWidth !== undefined ? { maxWidth: req.body.maxWidth } : {}),
+        ...(req.body.maxHeight !== undefined ? { maxHeight: req.body.maxHeight } : {}),
+        ...(req.body.maxVideoBitrateKbps !== undefined ? { maxVideoBitrateKbps: req.body.maxVideoBitrateKbps } : {}),
+      });
+
+      // Same caps as the running encode — nothing to do; report current state
+      // so the client can just sync its menu.
+      const capsSame =
+        newProfile.maxWidth === live.deviceProfile.maxWidth &&
+        newProfile.maxHeight === live.deviceProfile.maxHeight &&
+        newProfile.maxVideoBitrateKbps === live.deviceProfile.maxVideoBitrateKbps;
+      if (capsSame) {
+        return {
+          restarted: false,
+          method: live.method,
+          segmentFrom: live.currentSegmentFrom,
+          pid: live.transcode.pid,
+          playlistUrl: live.method === "REMUX" ? null : `/playback/${req.params.sessionId}/playlist.m3u8`,
+          streamUrl: live.method === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
+        };
+      }
+
+      const targetMs = Math.min(req.body.positionMs, Math.max(0, live.mediaFile.durationMs - 1000));
+
+      // Decide the new method with the new caps. The live entry stores the
+      // audio track as a *relative* index; recover the absolute stream index
+      // so the decision sees the same audio codec the session actually uses.
+      const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
+      const mediaFile = await db.mediaFile.findUniqueOrThrow({
+        where: { id: session.mediaFileId },
+        include: { streams: true },
+      });
+      const audioStreams = mediaFile.streams.filter((s) => s.type === "AUDIO");
+      const absoluteAudio = audioStreams[live.audioStreamIndex]?.streamIndex;
+      const candidate = await buildCandidateInput(session.mediaFileId, undefined, absoluteAudio);
+      if (!candidate) return reply.code(404).send({ error: "media file not found" });
+
+      const decision = decidePlaybackMethod(candidate.input, newProfile);
+      // Live sessions are REMUX/TRANSCODE — a REMUX source (container
+      // unsupported) can never flip to DIRECT_PLAY, so anything that isn't
+      // REMUX here is a real re-encode.
+      const newMethod: "REMUX" | "TRANSCODE" = decision.method === "REMUX" ? "REMUX" : "TRANSCODE";
+      const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);
+      const newOutDir = qualityOutDir(
+        req.params.sessionId,
+        newProfile.maxWidth ?? 1920,
+        newProfile.maxHeight ?? 1080,
+      );
+      await mkdir(newOutDir, { recursive: true });
+
+      if (newMethod === "TRANSCODE") {
+        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
+        await writeFile(path.join(newOutDir, "playlist.m3u8"), playlist);
+      }
+
+      const oldPid = live.transcode.pid;
+      await cancelCurrentJob(req.params.sessionId);
+
+      const restarted = await restartTranscode(
+        req.params.sessionId,
+        { ...live, outDir: newOutDir, deviceProfile: newProfile },
+        targetMs,
+        { method: newMethod },
+      );
+      if ("cancelled" in restarted) {
+        return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
+      }
+      const { transcode, jobId, startMs } = restarted;
+
+      liveSessions.set(req.params.sessionId, {
+        ...live,
+        transcode,
+        outDir: newOutDir,
+        currentSegmentFrom: targetSegment,
+        playlistStartSegment: targetSegment,
+        currentTranscodeJobId: jobId,
+        deviceProfile: newProfile,
+        method: newMethod,
+        remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
+      });
+
+      await db.playbackSession.update({
+        where: { id: req.params.sessionId },
+        data: { method: newMethod, positionMs: targetMs },
+      });
+      return {
+        restarted: true,
+        method: newMethod,
+        segmentFrom: targetSegment,
+        pid: transcode.pid,
+        killedPid: oldPid,
+        actualStartMs: newMethod === "REMUX" ? startMs : undefined,
+        playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
+        streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
       };
     },
   );

@@ -27,21 +27,32 @@ export interface TrackPrefs {
   audio: AudioPref | null;
   /** undefined = unset (default), null = off, otherwise a remembered track. */
   subtitle: SubtitlePref | null | undefined;
+  /** undefined = unset (the device profile's default caps apply). */
+  quality: QualityPref | null | undefined;
+}
+
+/** Encode caps for a quality selection — merged into the device profile on /start and sent to /quality on change. */
+export interface QualityPref {
+  label: string;
+  maxWidth: number;
+  maxHeight: number;
+  maxVideoBitrateKbps: number;
 }
 
 export function loadTrackPrefs(): TrackPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { audio: null, subtitle: undefined };
+    if (!raw) return { audio: null, subtitle: undefined, quality: undefined };
     const parsed = JSON.parse(raw) as Partial<TrackPrefs>;
     return {
       audio: parsed.audio ?? null,
       // Distinguish "never set" (missing key → undefined) from "turned off"
       // (stored null) so a fresh user still gets the file's default subtitle.
       subtitle: parsed.subtitle === undefined ? undefined : parsed.subtitle,
+      quality: parsed.quality === undefined ? undefined : parsed.quality,
     };
   } catch {
-    return { audio: null, subtitle: undefined };
+    return { audio: null, subtitle: undefined, quality: undefined };
   }
 }
 
@@ -62,6 +73,12 @@ export function saveAudioPref(pref: AudioPref | null): void {
 export function saveSubtitlePref(pref: SubtitlePref | null): void {
   const prefs = loadTrackPrefs();
   prefs.subtitle = pref;
+  persist(prefs);
+}
+
+export function saveQualityPref(pref: QualityPref): void {
+  const prefs = loadTrackPrefs();
+  prefs.quality = pref;
   persist(prefs);
 }
 

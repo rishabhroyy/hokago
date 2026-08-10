@@ -37,7 +37,7 @@ import { getPrimaryProfile } from "./profile";
 import { clearDetailCache, fetchMediaItemDetail } from "./browse-api";
 import { paths, useRouter } from "./router";
 import { Icon } from "./ui/icons";
-import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveSubtitlePref } from "./track-prefs";
+import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveQualityPref, saveSubtitlePref } from "./track-prefs";
 import { audioTrackLabel } from "./language-names";
 
 // An empty WebVTT that vidstack loads (so the track is a real, selectable entry
@@ -57,6 +57,15 @@ const HLS_SEGMENT_SECONDS = 6;
 
 const eq = (a: string | null | undefined, b: string | null | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+// Quality menu options — encode caps sent to /playback/start (merged into the
+// device profile) and /playback/:id/quality. The first option matches the
+// device profile's own ceiling, so it's the "no cap" default.
+const QUALITY_OPTIONS = [
+  { label: "1080p", maxWidth: 1920, maxHeight: 1080, maxVideoBitrateKbps: 8000 },
+  { label: "720p", maxWidth: 1280, maxHeight: 720, maxVideoBitrateKbps: 3500 },
+  { label: "480p", maxWidth: 854, maxHeight: 480, maxVideoBitrateKbps: 1500 },
+] as const;
 
 // Shape of the non-standard HTMLMediaElement.audioTracks list (Chrome/Safari).
 interface NativeAudioTrack {
@@ -110,7 +119,25 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const [timelineOffsetMs, setTimelineOffsetMs] = useState(0);
   const prefs = useMemo(() => loadTrackPrefs(), []);
   const userInteractedRef = useRef(false);
+  const userPausedRef = useRef(false);
   const [title, setTitle] = useState<string | null>(null);
+
+  // Caps for the current quality selection — undefined for fresh users means
+  // the device profile's own ceiling applies (the "1080p" default).
+  const qualityCaps = useMemo(() => {
+    const q = prefs.quality;
+    if (!q) return null;
+    return { maxWidth: q.maxWidth, maxHeight: q.maxHeight, maxVideoBitrateKbps: q.maxVideoBitrateKbps };
+  }, [prefs.quality]);
+
+  // Which menu entry is active: the remembered label when it's still a valid
+  // option, else the remembered caps matched against the option set.
+  const selectedQuality = useMemo(() => {
+    const q = prefs.quality;
+    if (!q) return QUALITY_OPTIONS[0].label;
+    const byCaps = QUALITY_OPTIONS.find((o) => o.maxWidth === q.maxWidth && o.maxHeight === q.maxHeight);
+    return byCaps?.label ?? q.label;
+  }, [prefs.quality]);
 
   const applyTimelineOffset = useCallback((ms: number) => {
     timelineOffsetRef.current = ms;
@@ -283,7 +310,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             profileId,
             mediaItemId,
             mediaFileId,
-            deviceProfile: BROWSER_DEVICE_PROFILE,
+            deviceProfile: qualityCaps ? { ...BROWSER_DEVICE_PROFILE, ...qualityCaps } : BROWSER_DEVICE_PROFILE,
             // Honor the remembered audio track from the very first frame —
             // the server uses it for both the codec decision and the muxed
             // track. undefined leaves the file's default in charge.
@@ -420,6 +447,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             applyTimelineOffset(newOffset);
             pendingSeekRef.current = (positionMs - newOffset) / 1000;
           }
+          // A restart is explicit intent to keep watching: the menu/slider click
+          // that triggered it bubbles into vidstack's click-to-toggle and lands
+          // as a *trusted* pause during the teardown, which would otherwise
+          // silence the autoplay resume below.
+          userPausedRef.current = false;
           setReloadNonce((n) => n + 1);
         })
         .catch((err: Error) => setError(err.message));
@@ -434,7 +466,73 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     // The seek we just applied fires a `seeked` event — don't let it
     // round-trip into a redundant /seek restart.
     skipNextSeekRef.current = true;
+    // Autoplay: navigating into /watch carries the user activation from the
+    // detail-page click (same-document navigation), so play() normally
+    // succeeds; when the browser blocks it (NotAllowedError) the big play
+    // button is the fallback. A deliberate user pause silences this for
+    // later restarts — src reloads (seek/quality switches) fire canPlay
+    // again and must not fight the paused state.
+    if (!userPausedRef.current) {
+      playerRef.current.play().catch(() => {});
+    }
   }, []);
+
+  // Quality switch — restarts the server-side encode at new caps (the server
+  // decides REMUX vs TRANSCODE for the new resolution) and swaps src on the
+  // fresh timeline, mirroring the audio-track switch flow.
+  const handleQualityChange = useCallback(
+    (label: string) => {
+      const opt = QUALITY_OPTIONS.find((o) => o.label === label);
+      if (!opt) return;
+      saveQualityPref({
+        label: opt.label,
+        maxWidth: opt.maxWidth,
+        maxHeight: opt.maxHeight,
+        maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
+      });
+      if (!start || start.method === "DIRECT_PLAY") return;
+      // The video timeline starts at the resume point (media-absolute), not
+      // zero — convert before telling the server where to restart.
+      const positionMs = Math.round((playerRef.current?.currentTime ?? 0) * 1000 + timelineOffsetRef.current);
+      api
+        .POST("/playback/{sessionId}/quality", {
+          params: { path: { sessionId: start.sessionId } },
+          body: {
+            positionMs,
+            maxWidth: opt.maxWidth,
+            maxHeight: opt.maxHeight,
+            maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
+          },
+        })
+        .then(({ data, error }) => {
+          if (error) throw new Error("quality switch failed");
+          if (!data?.restarted) return;
+          if (data.method === "TRANSCODE" && data.segmentFrom != null) {
+            applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
+            pendingSeekRef.current = (positionMs - timelineOffsetRef.current) / 1000;
+          } else {
+            // REMUX: the restarted file starts at the keyframe at-or-before
+            // the target (actualStartMs). Rebase the offset to it.
+            const newOffset = data.actualStartMs ?? positionMs;
+            applyTimelineOffset(newOffset);
+            pendingSeekRef.current = (positionMs - newOffset) / 1000;
+          }
+          // The method can change (REMUX -> TRANSCODE when the new caps are
+          // below the source resolution) — swap the src accordingly.
+          setStart((prev) =>
+            prev
+              ? { ...prev, method: data.method, playlistUrl: data.playlistUrl, streamUrl: data.streamUrl }
+              : prev,
+          );
+          // See audio switch: restart = explicit intent to keep watching; the
+          // triggering click's trusted pause must not silence the resume.
+          userPausedRef.current = false;
+          setReloadNonce((n) => n + 1);
+        })
+        .catch((err: Error) => setError(err.message));
+    },
+    [start, applyTimelineOffset],
+  );
 
   // DIRECT_PLAY switches audio client-side via native <video> tracks; honor the
   // remembered audio preference by enabling the matching native track once
@@ -506,6 +604,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             applyTimelineOffset(newOffset);
             pendingSeekRef.current = (lastScrubPosRef.current - newOffset) / 1000;
           }
+          userPausedRef.current = false;
           setReloadNonce((n) => n + 1);
         })
         .catch(() => {});
@@ -547,6 +646,17 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       </DefaultMenuSection>
     ) : null;
 
+  const qualityMenu =
+    start && start.method !== "DIRECT_PLAY" ? (
+      <DefaultMenuSection label="Quality">
+        <DefaultMenuRadioGroup
+          value={selectedQuality}
+          options={QUALITY_OPTIONS.map((o) => ({ label: o.label, value: o.label }))}
+          onChange={handleQualityChange}
+        />
+      </DefaultMenuSection>
+    ) : null;
+
   return (
     <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-black text-white">
       <button
@@ -568,6 +678,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         </div>
       ) : src ? (
         <MediaPlayer
+          key={reloadNonce}
           ref={playerRef}
           className="h-full w-full"
           src={src}
@@ -578,10 +689,17 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           onSeeked={handleSeeked}
           onPlay={() => {
             userInteractedRef.current = true;
+            userPausedRef.current = false;
           }}
           onTextTrackChange={handleTextTrackChange}
           onAudioTrackChange={handleNativeAudioTrackChange}
-          onPause={() => {
+          onPause={(event) => {
+            // A real user pressing pause must silence autoplay for later
+            // restarts (seek/quality reloads fire canPlay again) — programmatic
+            // pauses (src reloads, tab throttling) must not.
+            if (event.isOriginTrusted) {
+              userPausedRef.current = true;
+            }
             // Persist position promptly on pause — don't wait for the next
             // 10s tick, in case the tab is throttled or closed soon after.
             const player = playerRef.current;
@@ -624,7 +742,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
               />
             ))}
           </MediaProvider>
-          <DefaultVideoLayout icons={defaultLayoutIcons} slots={{ settingsMenuItemsEnd: serverAudioMenu }} />
+          <DefaultVideoLayout
+            icons={defaultLayoutIcons}
+            slots={{ settingsMenuItemsEnd: (
+              <>
+                {qualityMenu}
+                {serverAudioMenu}
+              </>
+            ) }}
+          />
         </MediaPlayer>
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-white/70">

@@ -61,9 +61,11 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
 
   // Stage 3: remux eval — the video is decodable by the client as-is, so a
   // container swap (and/or audio re-encode to an MP4-safe codec) is enough.
-  // Resolution/bitrate ceilings don't apply: no re-encode happens, the client
-  // decodes natively and ignores the caps (which exist to bound encodes).
-  if (directStreamForced && videoCodecOk && hdrOk && !burnRequired) {
+  // Resolution caps DO apply: remux is a verbatim copy, so it can never
+  // deliver a quality below the source — a profile/user requesting 720p of a
+  // 1080p source must fall through to a real re-encode. Bitrate caps don't:
+  // a copy can't be re-bitrated, and the client decodes natively anyway.
+  if (directStreamForced && videoCodecOk && widthOk && heightOk && hdrOk && !burnRequired) {
     return { method: "REMUX", reasons: [...reasons, "video decodable — container swap (copy), audio as needed"] };
   }
 

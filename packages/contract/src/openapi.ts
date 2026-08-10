@@ -44,6 +44,8 @@ import {
   SeekResponse,
   AudioTrackSwitchBody,
   AudioTrackSwitchResponse,
+  QualitySwitchBody,
+  QualitySwitchResponse,
   HeartbeatBody,
   HeartbeatResponse,
   StopResponse,
@@ -287,6 +289,16 @@ export function buildOpenApiDocument(): OpenAPIObject {
     request: { params: PlaybackSessionParams, body: json(AudioTrackSwitchBody) },
     responses: {
       200: { description: "OK", ...json(AudioTrackSwitchResponse) },
+      404: { description: "No active session", ...json(PlaybackErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/playback/{sessionId}/quality",
+    summary: "Switch the encode quality of a transcoding session (may change REMUX to TRANSCODE)",
+    request: { params: PlaybackSessionParams, body: json(QualitySwitchBody) },
+    responses: {
+      200: { description: "OK", ...json(QualitySwitchResponse) },
       404: { description: "No active session", ...json(PlaybackErrorResponse) },
     },
   });

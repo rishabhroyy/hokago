@@ -59,6 +59,34 @@ export const SeekResponse = z.object({
 export const AudioTrackSwitchBody = z.object({ audioStreamIndex: z.number(), positionMs: z.number() });
 export type AudioTrackSwitchBody = z.infer<typeof AudioTrackSwitchBody>;
 
+/** Quality switch — new encode caps. Omitted fields keep the session's current caps. */
+export const QualitySwitchBody = z.object({
+  /** Media-absolute position to restart from — the client converts its timeline time like /seek. */
+  positionMs: z.number(),
+  maxWidth: z.number().optional(),
+  maxHeight: z.number().optional(),
+  maxVideoBitrateKbps: z.number().optional(),
+});
+export type QualitySwitchBody = z.infer<typeof QualitySwitchBody>;
+
+/**
+ * Quality-switch response — mirrors SeekResponse but carries the stream URLs
+ * because the method itself can change (e.g. REMUX at 1080p -> TRANSCODE at
+ * 480p), and the client must swap its src (streamUrl <-> playlistUrl).
+ */
+export const QualitySwitchResponse = z.object({
+  restarted: z.boolean(),
+  method: PlaybackMethod,
+  segmentFrom: z.number(),
+  pid: z.number(),
+  killedPid: z.number().optional(),
+  /** REMUX restarts land on the keyframe at-or-before the target — the position
+   *  the restarted stream actually starts at. */
+  actualStartMs: z.number().optional(),
+  playlistUrl: z.string().nullable(),
+  streamUrl: z.string().nullable(),
+});
+
 export const AudioTrackSwitchResponse = z.object({
   restarted: z.boolean(),
   segmentFrom: z.number(),

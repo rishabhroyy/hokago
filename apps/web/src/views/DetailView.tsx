@@ -217,8 +217,17 @@ export function DetailView({ itemId }: { itemId: string }) {
 
   const firstEpisode = item.episodes[0];
   const watchedCount = item.episodes.filter((e) => e.watched).length;
-  const playMediaFileId = item.kind === "SERIES" ? (firstEpisode?.mediaFileId ?? null) : item.mediaFileId;
-  const playMediaItemId = item.kind === "SERIES" ? (firstEpisode?.id ?? null) : item.id;
+  // The hero button targets the next thing to watch: an episode in progress
+  // (Continue), else the first unwatched one, else (everything watched) the
+  // first episode again for a rewatch.
+  const nextEpisode =
+    item.episodes.find((e) => !e.watched && e.positionMs > 0) ??
+    item.episodes.find((e) => !e.watched) ??
+    firstEpisode ??
+    null;
+  const isContinue = nextEpisode !== null && !nextEpisode.watched && nextEpisode.positionMs > 0;
+  const playMediaFileId = item.kind === "SERIES" ? (nextEpisode?.mediaFileId ?? null) : item.mediaFileId;
+  const playMediaItemId = item.kind === "SERIES" ? (nextEpisode?.id ?? null) : item.id;
 
   const openEpisode = (ep: EpisodeCard, el: HTMLElement) => {
     if (!ep.mediaFileId) return;
@@ -355,7 +364,9 @@ export function DetailView({ itemId }: { itemId: string }) {
                     }}
                   >
                     <Icon name="play" className="h-4 w-4" />
-                    {item.kind === "SERIES" ? "Play S1 · E1" : "Play"}
+                    {item.kind === "SERIES"
+                      ? `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} · E${nextEpisode?.episodeNumber ?? 1}`
+                      : "Play"}
                   </button>
                 )}
               </div>

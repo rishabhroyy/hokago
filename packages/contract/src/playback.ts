@@ -37,6 +37,20 @@ export const StartPlaybackResponse = z.object({
   streamUrl: z.string().nullable().default(null),
   /** Where playback should resume (ms) — 0 when starting fresh. Server-side state, so callers need no stored position. */
   resumePositionMs: z.number().default(0),
+  /**
+   * Media-absolute duration of the file (ms) — the player's playbar total.
+   * Streams started mid-file (REMUX/TRANSCODE resume) report a shorter
+   * element duration, so clients use this for the displayed end time while
+   * seeking in stream-relative coordinates.
+   */
+  absoluteDurationMs: z.number().default(0),
+  /**
+   * Exact media time the stream starts at (the keyframe the server's fast
+   * seek lands on, or that keyframe's segment boundary for TRANSCODE) — the
+   * client's timeline offset. The client self-seeks from here to
+   * resumePositionMs so continue-watching lands on the exact stored position.
+   */
+  actualStartMs: z.number().optional(),
 });
 export type StartPlaybackResponse = z.infer<typeof StartPlaybackResponse>;
 

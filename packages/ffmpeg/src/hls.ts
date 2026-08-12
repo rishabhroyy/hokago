@@ -37,6 +37,42 @@ export function buildM3u8(durationMs: number, segmentSeconds: number, startSegme
   return lines.join("\n");
 }
 
+/**
+ * Rewrites a playlist to only the segments that actually exist on disk after
+ * a transcode dies (crash, kill on quality switch, session end). The full
+ * VOD playlist advertises the whole future up front; if the encoder stops,
+ * the unwritten tail would have clients retry segment-N forever and stall at
+ * the last surviving segment's boundary. Truncating to `lastSegment` (the
+ * highest written segment file) plus ENDLIST makes players surface the real
+ * end instead of hanging. When nothing was written yet, emit an empty
+ * playlist so the player errors out loudly rather than wedging.
+ */
+export function buildTruncatedM3u8(
+  durationMs: number,
+  segmentSeconds: number,
+  startSegment: number,
+  lastSegment: number,
+): string {
+  const totalSeconds = durationMs / 1000;
+  const lines = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:3",
+    `#EXT-X-TARGETDURATION:${segmentSeconds}`,
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    `#EXT-X-MEDIA-SEQUENCE:${startSegment}`,
+  ];
+  if (lastSegment >= startSegment) {
+    for (let i = startSegment; i <= lastSegment; i++) {
+      const remaining = totalSeconds - i * segmentSeconds;
+      const dur = Math.min(segmentSeconds, Math.max(0.5, remaining));
+      lines.push(`#EXTINF:${dur.toFixed(3)},`);
+      lines.push(`segment-${i}.ts`);
+    }
+  }
+  lines.push("#EXT-X-ENDLIST", "");
+  return lines.join("\n");
+}
+
 export interface SegmentJobInput {
   inputPath: string;
   outputDir: string;

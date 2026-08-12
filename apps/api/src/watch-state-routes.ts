@@ -43,6 +43,7 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
   app.post(
     "/playback/:sessionId/heartbeat",
     {
+      preHandler: app.authenticate,
       schema: {
         params: PlaybackSessionParams,
         body: HeartbeatBody,
@@ -55,7 +56,25 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
 
       const { positionMs, durationMs } = req.body;
       const now = new Date();
-      const watched = durationMs ? positionMs / durationMs >= WATCHED_THRESHOLD : false;
+
+      // Heartbeats carry the player's stream-relative duration; old clients
+      // reported the *remaining* time, and remux/transcode streams can
+      // legitimately report a different span than the file. The probed file
+      // duration is ground truth: when the report disagrees with it by more
+      // than a minute, store the file's duration instead — a polluted
+      // duration would otherwise poison the watched ratio (marking an
+      // episode watched mid-file or never watched at all) and every
+      // subsequent resume decision.
+      const mediaFile = await db.mediaFile.findUnique({
+        where: { id: session.mediaFileId },
+        select: { durationMs: true },
+      });
+      const fileDurationMs = mediaFile?.durationMs && mediaFile.durationMs > 0 ? mediaFile.durationMs : null;
+      const trustedDurationMs =
+        fileDurationMs != null && (durationMs == null || Math.abs(durationMs - fileDurationMs) > 60_000)
+          ? fileDurationMs
+          : durationMs;
+      const watched = trustedDurationMs ? positionMs / trustedDurationMs >= WATCHED_THRESHOLD : false;
 
       // Watch-time credit: delta since the last persisted position, capped so
       // a forward seek between heartbeats doesn't count as watched time.
@@ -78,14 +97,14 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
             profileId: session.profileId,
             mediaItemId: session.mediaItemId,
             positionMs,
-            durationMs,
+            durationMs: trustedDurationMs,
             watched,
             playCount: completed ? 1 : 0,
             lastWatchedAt: completed ? now : null,
           },
           update: {
             positionMs,
-            durationMs,
+            durationMs: trustedDurationMs,
             watched,
             ...(completed
               ? { playCount: { increment: 1 }, lastWatchedAt: now }
@@ -120,7 +139,10 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
 
   app.post(
     "/playback/:sessionId/stop",
-    { schema: { params: PlaybackSessionParams, response: { 200: StopResponse, 404: ErrorResponse } } },
+    {
+      preHandler: app.authenticate,
+      schema: { params: PlaybackSessionParams, response: { 200: StopResponse, 404: ErrorResponse } },
+    },
     async (req, reply) => {
       const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
       if (!session) return reply.code(404).send({ error: "session not found" });
@@ -140,6 +162,7 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
   app.post(
     "/watch-state/:mediaItemId",
     {
+      preHandler: app.authenticate,
       schema: {
         params: SetWatchedParams,
         body: SetWatchedBody,
@@ -229,7 +252,10 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
 
   app.get(
     "/continue-watching",
-    { schema: { querystring: ContinueWatchingQuery, response: { 200: ContinueWatchingResponse } } },
+    {
+      preHandler: app.authenticate,
+      schema: { querystring: ContinueWatchingQuery, response: { 200: ContinueWatchingResponse } },
+    },
     async (req) => {
       return loadContinueWatching(db, req.query.profileId);
     },

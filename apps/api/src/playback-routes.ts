@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, execFile } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { PrismaClient } from "@hokago/db";
 import { decidePlaybackMethod, type PlaybackMethod } from "@hokago/ffmpeg/decision";
@@ -14,7 +15,7 @@ import {
   needsToneMap,
   HLS_SEGMENT_SECONDS,
 } from "@hokago/ffmpeg/device-profile";
-import { buildM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
+import { buildM3u8, buildTruncatedM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
 import { buildRemuxArgs, patchRemuxMehd } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { broadcastPresence } from "./presence.js";
@@ -41,13 +42,19 @@ function transcodeDir(sessionId: string): string {
 interface LiveSession {
   transcode: RunningTranscode;
   outDir: string;
-  mediaFile: { path: string; durationMs: number; bitrateKbps: number | null };
+  mediaFile: { path: string; durationMs: number; bitrateKbps: number | null; videoCodec: string | null };
   method: "DIRECT_STREAM" | "REMUX" | "TRANSCODE";
   deviceProfile: DeviceProfile;
   currentSegmentFrom: number;
   /** Media sequence the current playlist.m3u8 was written with — seeks below this need a playlist rewrite. */
   playlistStartSegment: number;
   currentTranscodeJobId: string;
+  /** Set while a restart is replacing this session's child — the old child's
+   *  exit callback must not truncate the playlist the restart is about to
+   *  write (the pid guard alone can't tell a killed-for-restart child apart
+   *  from a legitimately terminated one: the map entry is stale until the
+   *  restart completes). */
+  restarting?: boolean;
   toneMap: boolean;
   subtitleBurnIn?: { streamIndex: number; bitmap: boolean };
   audioStreamIndex: number;
@@ -90,11 +97,17 @@ function relativeAudioIndex(streams: { type: string; streamIndex: number }[], ab
  * ceiling (ffmpeg's scale filter and -maxrate only ever cap, never upscale).
  */
 function normalizeDeviceProfile(p: DeviceProfile): DeviceProfile {
+  // Clamp, not just default: negative caps flow straight into ffmpeg's
+  // scale/-maxrate args and kill the encode (or, with -1 auto-resolution,
+  // silently blow past the ceiling). Bounds are generous — the caps only
+  // ever *cap* output, and every real client sits well inside them.
+  const clamp = (v: number | undefined, lo: number, hi: number, dflt: number): number =>
+    Math.min(hi, Math.max(lo, v ?? dflt));
   return {
     ...p,
-    maxWidth: p.maxWidth ?? 1920,
-    maxHeight: p.maxHeight ?? 1080,
-    maxVideoBitrateKbps: p.maxVideoBitrateKbps ?? 8000,
+    maxWidth: clamp(p.maxWidth, 64, 7680, 1920),
+    maxHeight: clamp(p.maxHeight, 64, 4320, 1080),
+    maxVideoBitrateKbps: clamp(p.maxVideoBitrateKbps, 200, 100_000, 8000),
   };
 }
 
@@ -211,6 +224,17 @@ async function resumePositionMs(profileId: string, mediaItemId: string, duration
     where: { profileId_mediaItemId: { profileId, mediaItemId } },
   });
   if (!state || state.watched || durationMs <= 0) return 0;
+  // A stored duration that disagrees with the actual file is garbage from a
+  // stream-relative report (older heartbeats sent the *remaining* time, so
+  // resumed sessions persisted hours-in positions). Treat the row as fresh
+  // and heal it — resume must never land mid-file on a phantom position.
+  if (state.durationMs != null && Math.abs(state.durationMs - durationMs) > 60_000) {
+    await db.playbackState.update({
+      where: { profileId_mediaItemId: { profileId, mediaItemId } },
+      data: { positionMs: 0, durationMs },
+    });
+    return 0;
+  }
   if (state.positionMs < 30_000) return 0;
   return Math.min(state.positionMs, Math.max(0, durationMs - 30_000));
 }
@@ -221,33 +245,37 @@ async function resumePositionMs(profileId: string, mediaItemId: string, duration
  * the client's timeline↔media offset (and the stored session position) must
  * use K, not the requested resume point — otherwise subs/positions drift by
  * the whole keyframe gap (seconds on sparsely-keyed sources). Bounded read
- * keeps the scan to the resume position.
+ * keeps the scan to the resume position. Async: an ffprobe of a long file can
+ * take seconds, and a synchronous spawn would freeze the whole API.
  */
-function keyframeAtOrBeforeMs(path: string, positionMs: number): number {
+async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<number> {
   if (positionMs <= 0) return 0;
   try {
-    const out = execFileSync(
-      "ffprobe",
-      [
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-skip_frame",
-        "nokey",
-        "-show_entries",
-        "frame=pts_time",
-        "-of",
-        "csv=p=0",
-        "-read_intervals",
-        `%${positionMs / 1000}`,
-        path,
-      ],
-      { maxBuffer: 16 * 1024 * 1024 },
-    );
+    const out = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-select_streams",
+          "v:0",
+          "-skip_frame",
+          "nokey",
+          "-show_entries",
+          "frame=pts_time",
+          "-of",
+          "csv=p=0",
+          "-read_intervals",
+          `%${positionMs / 1000}`,
+          path,
+        ],
+        { maxBuffer: 16 * 1024 * 1024 },
+        (err, stdout) => (err ? reject(err) : resolve(stdout)),
+      );
+    });
     let last = 0;
-    for (const line of out.toString().trim().split("\n")) {
-      const t = Number(line.trim());
+    for (const line of out.trim().split("\n")) {
+      const t = Number(line);
       if (!Number.isNaN(t) && t > last) last = t;
     }
     return Math.round(last * 1000);
@@ -257,6 +285,36 @@ function keyframeAtOrBeforeMs(path: string, positionMs: number): number {
   }
 }
 
+/**
+ * The exact media time a restarted stream's output starts at, from the probed
+ * keyframe. TRANSCODE re-encodes: buildFfmpegArgs fast-seeks with
+ * `-ss segmentFrom*segmentSeconds` (it derives the seek from startSegment,
+ * never from the raw keyframe) and the encoder forces a keyframe at output
+ * t=0 — so the output always begins at the segment-aligned `-ss` point, not
+ * at the probed keyframe K ∈ [B, B+6s). Reporting K as the offset would
+ * drift the clock/sub-sync by up to a segment per restart; the true start is
+ * B. REMUX copies: output starts at the probed keyframe K verbatim.
+ */
+function anchoredStreamStartMs(probeMs: number, isRemux: boolean): number {
+  return isRemux ? probeMs : Math.floor(probeMs / (HLS_SEGMENT_SECONDS * 1000)) * HLS_SEGMENT_SECONDS * 1000;
+}
+
+/**
+ * Playlist replacement must be atomic — the playlist route reads the file
+ * concurrently, and a torn in-place write would break hls.js parsing.
+ * rename() within the same directory is atomic on POSIX.
+ */
+async function writePlaylistAtomically(outDir: string, body: string): Promise<void> {
+  const file = path.join(outDir, "playlist.m3u8");
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, body);
+  await rename(tmp, file).catch(async (err) => {
+    // Keep the tmp file from masking future writes on rename failure.
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  });
+}
+
 async function killSessionTranscode(sessionId: string): Promise<void> {
   const live = liveSessions.get(sessionId);
   if (!live) return;
@@ -264,7 +322,10 @@ async function killSessionTranscode(sessionId: string): Promise<void> {
   if (live.transcode.child.exitCode === null && live.transcode.child.signalCode === null) {
     live.transcode.child.kill("SIGKILL");
   }
-  releaseTranscodeSlot();
+  // NB: the transcode slot is released by the child's exit callback
+  // (spawnFfmpeg), never here — SIGKILLing a live child fires it, and an
+  // already-dead child's callback already ran. An explicit release here
+  // would double-release when waiters are queued, bypassing the cap.
   await db.transcodeJob.update({
     where: { id: live.currentTranscodeJobId },
     data: { state: "CANCELLED", endedAt: new Date() },
@@ -298,6 +359,55 @@ async function cancelCurrentJob(sessionId: string): Promise<void> {
 }
 
 /**
+ * Records a job's terminal state — unless a cancel path already marked it
+ * CANCELLED. The exit callback races the cancel (the SIGKILL fires the
+ * callback after cancelCurrentJob wrote CANCELLED) and would otherwise
+ * clobber the deliberate CANCELLED with a spurious FAILED.
+ */
+async function setTranscodeJobTerminal(
+  jobId: string,
+  state: "DONE" | "FAILED",
+  lastError: string | null,
+): Promise<void> {
+  await db.transcodeJob.updateMany({
+    where: { id: jobId, state: { not: "CANCELLED" } },
+    data: { state, endedAt: new Date(), lastError },
+  });
+}
+
+/**
+ * Rewrites a session's HLS playlist to only the segments that actually exist
+ * on disk, once its ffmpeg child has exited. The up-front VOD playlist
+ * advertises the whole future; if the encoder died mid-file, the unwritten
+ * tail would have clients retry segment-N forever and stall at the last
+ * surviving segment's boundary. (A natural full-file completion writes every
+ * segment, so this is a no-op shape-wise then.) Guarded: only when the
+ * exited pid is still this session's live child — a restart's old child
+ * exiting after its successor started must not clobber the new playlist.
+ */
+async function truncatePlaylistOnExit(
+  sessionId: string,
+  pid: number,
+  outDir: string,
+  durationMs: number,
+  startSegment: number,
+): Promise<void> {
+  const live = liveSessions.get(sessionId);
+  if (!live || live.method === "REMUX" || live.restarting || live.transcode.pid !== pid) return;
+  let lastSegment = -1;
+  try {
+    for (const entry of await readdir(outDir)) {
+      const m = /^segment-(\d+)\.ts$/.exec(entry);
+      if (m) lastSegment = Math.max(lastSegment, Number(m[1]));
+    }
+  } catch {
+    return; // dir already cleaned (stopSession) — nothing to rewrite
+  }
+  const body = buildTruncatedM3u8(durationMs, HLS_SEGMENT_SECONDS, startSegment, lastSegment);
+  await writePlaylistAtomically(outDir, body).catch(() => {});
+}
+
+/**
  * Spawns a session's first ffmpeg child and records its TranscodeJob. The
  * caller already holds the transcode slot (released here when the child
  * exits) and is responsible for the outDir, HLS playlist, and liveSessions
@@ -311,6 +421,8 @@ async function spawnTranscodeJob(
   profile: DeviceProfile,
   args: string[],
   segmentFrom: number,
+  outDir: string,
+  durationMs: number,
 ): Promise<{ transcode: RunningTranscode; jobId: string }> {
   const job = await db.transcodeJob.create({
     data: {
@@ -330,17 +442,11 @@ async function spawnTranscodeJob(
     // this, every finished transcode pins a slot forever and later
     // sessions queue behind ghosts until /stop or the 5-minute reaper.
     releaseTranscodeSlot();
-    void db.transcodeJob.update({
-      where: { id: job.id },
-      data: {
-        state: result.code === 0 ? "DONE" : "FAILED",
-        endedAt: new Date(),
-        lastError: result.code === 0 ? null : result.stderr.slice(0, 2000),
-      },
-    });
+    void setTranscodeJobTerminal(job.id, result.code === 0 ? "DONE" : "FAILED", result.code === 0 ? null : result.stderr.slice(0, 2000))
+      .catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
+    void truncatePlaylistOnExit(sessionId, transcode.pid, outDir, durationMs, segmentFrom);
   });
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
-
   return { transcode, jobId: job.id };
 }
 
@@ -349,7 +455,16 @@ async function restartTranscode(
   live: LiveSession,
   targetMs: number,
   overrides?: { profile?: DeviceProfile; method?: "REMUX" | "TRANSCODE" },
-): Promise<{ transcode: RunningTranscode; jobId: string; startMs: number } | { cancelled: true }> {
+): Promise<
+    { transcode: RunningTranscode; jobId: string; startMs: number; segmentFrom: number } | { cancelled: true }
+  > {
+  // Mark the session as restarting *before* the kill: the old child's exit
+  // callback runs during the kill-await below, while the map still holds the
+  // old entry — without the flag its truncatePlaylistOnExit would rewrite the
+  // playlist the caller is about to replace (pid guard can't tell it apart).
+  const current = liveSessions.get(sessionId);
+  if (current) liveSessions.set(sessionId, { ...current, restarting: true });
+
   // The ffmpeg child may have already finished on its own (e.g. it reached
   // the end of the file) before this restart arrived — `exit` only ever fires
   // once, so attaching a listener after the fact would hang forever.
@@ -363,6 +478,8 @@ async function restartTranscode(
   // route) — take a fresh one for the replacement process. The kill above
   // resolves on 'exit', so the release has deterministically run by now.
   if (!(await acquireTranscodeSlot())) {
+    // Restore the entry without the flag so future natural exits truncate.
+    if (liveSessions.has(sessionId)) liveSessions.set(sessionId, live);
     return { cancelled: true };
   }
   // Torn down (stop/reap) while the old child was being killed — don't
@@ -378,10 +495,13 @@ async function restartTranscode(
   // live.remux null from the TRANSCODE leg — consulting it here would
   // silently start a transcode and report REMUX).
   const isRemux = (overrides?.method ?? live.method) === "REMUX";
-  // REMUX restarts fast-seek to the keyframe at-or-before the target — that
-  // actual keyframe is what the restarted stream starts at (and what the
-  // client's offset must use), so probe it here and report it in the response.
-  const startMs = isRemux ? keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
+  // Both methods fast-seek with `-ss`; the exact stream start differs per
+  // method (TRANSCODE re-encodes from the segment-aligned -ss point, REMUX
+  // copies from the probed keyframe) — anchoredStreamStartMs reports the
+  // true one so the client's timeline offset, the playlist MEDIA-SEQUENCE,
+  // and what ffmpeg writes stay mutually consistent.
+  const probeMs = await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs);
+  const startMs = anchoredStreamStartMs(probeMs, isRemux);
   const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
   const args = isRemux
     ? buildRemuxArgs({
@@ -397,6 +517,7 @@ async function restartTranscode(
         durationMs: live.mediaFile.durationMs,
         audioStreamIndex: live.audioStreamIndex,
         audioCodec: live.audioCodec,
+        videoCodec: live.mediaFile.videoCodec,
       })
     : buildFfmpegArgs({
         inputPath: live.mediaFile.path,
@@ -427,18 +548,24 @@ async function restartTranscode(
 
   const transcode = spawnFfmpeg(args, (result) => {
     releaseTranscodeSlot();
-    void db.transcodeJob.update({
-      where: { id: job.id },
-      data: {
-        state: result.code === 0 ? "DONE" : "FAILED",
-        endedAt: new Date(),
-        lastError: result.code === 0 ? null : result.stderr.slice(0, 2000),
-      },
-    });
+    // Never overwrite a deliberate CANCELLED (stop/restart already marked
+    // it) — the exit callback races the cancel path and would otherwise
+    // clobber the real reason with a spurious FAILED. A freshly killed
+    // child's SIGKILL (signalCode, exitCode null) stays DONE-eligible via
+    // the code===0 check below; that's intentional — killed-for-restart is
+    // not a failure.
+    void setTranscodeJobTerminal(
+      job.id,
+      result.code === 0 ? "DONE" : "FAILED",
+      result.code === 0 ? null : result.stderr.slice(0, 2000),
+    ).catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
+    // Truthful playlist for the *session's current* outDir — the caller's
+    // spread object (fresh per-track/per-quality dir) is what's live.
+    void truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
   });
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
 
-  return { transcode, jobId: job.id, startMs };
+  return { transcode, jobId: job.id, startMs, segmentFrom };
 }
 
 /**
@@ -452,6 +579,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
   app.post(
     "/playback/start",
     {
+      preHandler: app.authenticate,
       schema: {
         body: StartPlaybackBody,
         response: { 200: StartPlaybackResponse, 404: ErrorResponse, 503: ErrorResponse },
@@ -459,18 +587,30 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     },
     async (req, reply) => {
     const { profileId, mediaItemId, mediaFileId, deviceProfile, subtitleTrackId, audioStreamIndex } = req.body;
-    const profile = normalizeDeviceProfile(deviceProfile);
     const candidate = await buildCandidateInput(mediaFileId, subtitleTrackId, audioStreamIndex);
     if (!candidate) return reply.code(404).send({ error: "media file not found" });
 
-    const decision = decidePlaybackMethod(candidate.input, profile);
+    // Decide on the *raw* profile: what matters for can-it-play is the client's
+    // codec/container support, not encode caps. normalizeDeviceProfile fills a
+    // 1080p ceiling for encode args — deciding on that would block 4K files
+    // from DIRECT_PLAY/REMUX even though browsers decode 4K h264/hevc
+    // natively. The raw profile is also what the DB row stores, so quality
+    // "reset" re-decides without any leftover ceiling.
+    const decision = decidePlaybackMethod(candidate.input, deviceProfile);
+    const profile = normalizeDeviceProfile(deviceProfile);
     const resumeMs = await resumePositionMs(profileId, mediaItemId, candidate.durationMs);
 
-    // REMUX fast-seeks to the keyframe at-or-before the resume point — the
-    // file (and therefore the client's timeline offset + stored position) must
-    // use that actual keyframe, or subs/positions drift by the keyframe gap.
+    // REMUX and TRANSCODE both fast-seek with `-ss`; the exact stream start
+    // differs per method (TRANSCODE re-encodes from the segment-aligned -ss
+    // point, REMUX copies from the probed keyframe) — report the true one so
+    // the client's timeline offset, the playlist MEDIA-SEQUENCE, and what
+    // ffmpeg writes stay mutually consistent. Otherwise the clock drifts by
+    // the keyframe gap and the first listed segment mismatches the first
+    // written one (seek/quality switches stall up to a segment).
     const isRemux = decision.method === "REMUX";
-    const startMs = isRemux ? keyframeAtOrBeforeMs(candidate.path, resumeMs) : resumeMs;
+    const probeMs =
+      isRemux || decision.method === "TRANSCODE" ? await keyframeAtOrBeforeMs(candidate.path, resumeMs) : resumeMs;
+    const startMs = anchoredStreamStartMs(probeMs, isRemux);
 
     const session = await db.playbackSession.create({
       data: {
@@ -478,7 +618,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         mediaItemId,
         mediaFileId,
         method: decision.method,
-        deviceProfile: profile as object,
+        deviceProfile: deviceProfile as object,
         positionMs: startMs,
       },
     });
@@ -493,6 +633,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         playlistUrl: null,
         streamUrl: null,
         resumePositionMs: resumeMs,
+        absoluteDurationMs: candidate.durationMs,
       };
     }
 
@@ -518,6 +659,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           durationMs: candidate.durationMs,
           audioStreamIndex: audioIndex,
           audioCodec: candidate.input.audioCodec,
+          videoCodec: candidate.input.videoCodec,
         })
       : buildFfmpegArgs({
           inputPath: candidate.path,
@@ -544,6 +686,8 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       profile,
       args,
       segmentFrom,
+      outDir,
+      candidate.durationMs,
     );
 
     let playlistUrl: string | null = null;
@@ -551,14 +695,19 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // Playlist starts at the resume segment (EXT-X-MEDIA-SEQUENCE) so the
       // player never waits on segment-0, which a resumed session never writes.
       const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
-      await writeFile(path.join(outDir, "playlist.m3u8"), playlist);
+      await writePlaylistAtomically(outDir, playlist);
       playlistUrl = `/playback/${session.id}/playlist.m3u8`;
     }
 
     liveSessions.set(session.id, {
       transcode,
       outDir,
-      mediaFile: { path: candidate.path, durationMs: candidate.durationMs, bitrateKbps: candidate.bitrateKbps },
+      mediaFile: {
+        path: candidate.path,
+        durationMs: candidate.durationMs,
+        bitrateKbps: candidate.bitrateKbps,
+        videoCodec: candidate.input.videoCodec,
+      },
       method: decision.method,
       deviceProfile: profile,
       currentSegmentFrom: segmentFrom,
@@ -577,19 +726,28 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       reasons: decision.reasons,
       playlistUrl,
       streamUrl: isRemux ? `/playback/${session.id}/stream.mp4` : null,
-      // For REMUX this is the actual keyframe the file starts at (== startMs),
-      // which the client uses as its timeline offset — exactly synced subs.
-      resumePositionMs: isRemux ? startMs : resumeMs,
+      // The exact stored resume position (ms) — the client self-seeks to it
+      // once the stream is open; actualStartMs carries the anchored origin.
+      resumePositionMs: resumeMs,
+      absoluteDurationMs: candidate.durationMs,
+      // Exact media time the stream starts at (the keyframe the server's fast
+      // seek lands on, or the segment boundary of that keyframe) — the
+      // client's timeline offset.
+      actualStartMs: startMs,
     };
     },
   );
 
-  app.get<{ Params: { sessionId: string } }>("/playback/:sessionId/playlist.m3u8", async (req, reply) => {
-    const live = liveSessions.get(req.params.sessionId);
-    if (!live) return reply.code(404).send({ error: "no active session" });
-    const body = await readFile(path.join(live.outDir, "playlist.m3u8"), "utf-8");
-    reply.type("application/vnd.apple.mpegurl").send(body);
-  });
+  app.get<{ Params: { sessionId: string } }>(
+    "/playback/:sessionId/playlist.m3u8",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
+      const live = liveSessions.get(req.params.sessionId);
+      if (!live) return reply.code(404).send({ error: "no active session" });
+      const body = await readFile(path.join(live.outDir, "playlist.m3u8"), "utf-8");
+      reply.type("application/vnd.apple.mpegurl").send(body);
+    },
+  );
 
   // REMUX: the live fragmented-MP4 file, still growing under ffmpeg. sendFile
   // handles Range/206 for native <video> seeking; noCache keeps a restarted
@@ -602,9 +760,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
   // duration. Instead, block until the remux child exits (the file is
   // complete) — copy-speed makes this ~3s for an episode, seconds-to-a-minute
   // for movies — then serve a file whose content-range can never lie.
-  app.get<{ Params: { sessionId: string } }>("/playback/:sessionId/stream.mp4", async (req, reply) => {
-    const live = liveSessions.get(req.params.sessionId);
-    if (!live?.remux) return reply.code(404).send({ error: "no active remux session" });
+  app.get<{ Params: { sessionId: string } }>(
+    "/playback/:sessionId/stream.mp4",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
+      const live = liveSessions.get(req.params.sessionId);
+      if (!live?.remux) return reply.code(404).send({ error: "no active remux session" });
 
     const child = live.transcode.child;
     const waitMs = Math.min(60_000, Math.max(5_000, estRemuxRemainingSec(live) * 1000 + 3_000));
@@ -624,8 +785,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     // fragments (a slow connection shows a fraction of the episode). One
     // 20-byte in-place insert per remux (seek/audio-switch restarts rewrite
     // the file, so patched resets to false there); a failed patch must never
-    // take the stream down.
-    if (!live.remux.patched) {
+    // take the stream down. Patching a *live* file (wait deadline expired
+    // with the child still writing) would shift every byte after moov while
+    // ffmpeg writes — corruption. Serve it unpatched; the client plays with
+    // progressive duration until the next restart.
+    if (child.exitCode === 0 && !live.remux.patched) {
       if (patchRemuxMehd(live.remux.outFile, live.mediaFile.durationMs, live.remux.startMs)) {
         live.remux.patched = true;
       }
@@ -640,6 +804,15 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
 
   app.get<{ Params: { sessionId: string; n: string } }>(
     "/playback/:sessionId/segment-:n.ts",
+    {
+      // `n` is joined straight into a path below — a plain string param would
+      // accept `..%2F..%2Fetc%2Fpasswd` and path.join would resolve it out of
+      // the transcode dir (arbitrary file disclosure, unauthenticated).
+      preHandler: app.authenticate,
+      schema: {
+        params: z.object({ sessionId: z.string(), n: z.string().regex(/^\d+$/) }),
+      },
+    },
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
       if (!live) return reply.code(404).send({ error: "no active session" });
@@ -656,12 +829,19 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // the request 120s for a file that will never appear.
       const deadline = Date.now() + 120_000;
       let lastSize = -1;
+      let stablePolls = 0;
       while (Date.now() < deadline) {
+        const child = live.transcode.child;
         // exitCode and signalCode are mutually exclusive — a SIGKILLed child
         // (seek/audio-switch restart) sets signalCode, never exitCode. `||`
         // is the "is the child dead at all" check; `&&` here would poll a
         // killed child's missing segments for the full 120s.
-        if ((live.transcode.child.exitCode ?? live.transcode.child.signalCode) !== null && !existsSync(segPath)) {
+        const dead = (child.exitCode ?? child.signalCode) !== null;
+        if (dead && child.exitCode !== 0) {
+          // Child died mid-write (killed or errored): any existing file is
+          // only a partial segment — serving it poisons hls.js's parser.
+          // 404 instead; the client's restart reloads a fresh manifest with
+          // the new anchor's segment numbers anyway.
           break;
         }
         let size = 0;
@@ -669,10 +849,21 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           size = statSync(segPath).size;
         } catch {
           // not created yet
+          if (dead) break;
         }
-        if (size > 0 && size === lastSize) break;
+        if (dead && size > 0 && size === lastSize) {
+          // Clean exit = the file it wrote is final on disk — no need to wait
+          // the stability polls out.
+          break;
+        }
+        if (size > 0 && size === lastSize) {
+          stablePolls += 1;
+          if (stablePolls >= 3) break;
+        } else {
+          stablePolls = 0;
+        }
         lastSize = size;
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 250));
       }
       if (!existsSync(segPath)) return reply.code(404).send({ error: "segment not ready" });
 
@@ -684,6 +875,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
   app.post(
     "/playback/:sessionId/seek",
     {
+      preHandler: app.authenticate,
       schema: {
         params: PlaybackSessionParams,
         body: SeekBody,
@@ -719,35 +911,84 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         if ("cancelled" in restarted) {
           return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
         }
-        const { transcode, jobId } = restarted;
+        const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
         // Seeking backwards below the original media sequence — rewrite the
-        // playlist so the player knows segments before it exist again.
-        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
-        await writeFile(path.join(live.outDir, "playlist.m3u8"), playlist);
+        // playlist so the player knows segments before it exist again. Uses
+        // the actual keyframe-anchored segment the new child starts at (it
+        // may differ from the requested target's floored segment by one).
+        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
+        await writePlaylistAtomically(live.outDir, playlist);
 
         liveSessions.set(req.params.sessionId, {
           ...live,
           transcode,
-          currentSegmentFrom: targetSegment,
-          playlistStartSegment: targetSegment,
+          currentSegmentFrom: actualSegmentFrom,
+          playlistStartSegment: actualSegmentFrom,
           currentTranscodeJobId: jobId,
         });
 
         await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
-        return { restarted: true, segmentFrom: targetSegment, pid: transcode.pid, killedPid: oldPid };
+        return {
+          restarted: true,
+          segmentFrom: actualSegmentFrom,
+          pid: transcode.pid,
+          killedPid: oldPid,
+          actualStartMs: startMs,
+        };
       }
 
       // REMUX: seeks within what the live file has already written are
       // native browser seeks (range requests) — no restart, no stall.
-      // Forward seeks beyond the written frontier need the remux to restart
-      // from the target keyframe (copy-speed, sub-second).
-      if (targetMs <= remuxCoveredMs(live) - 30_000) {
-        await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
-        return {
-          restarted: false,
-          segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
-          pid: live.transcode.pid,
-        };
+      // Forward seeks beyond the written frontier simply wait for the copy
+      // to reach the target: the remux copies at far above playback rate
+      // (~60MB/s), so the frontier crosses the target in seconds without a
+      // single restart — the mounted element keeps its patched mehd and its
+      // range machinery, and Chrome's follow-up byte-range request is served
+      // once the bytes physically exist. A restart would recopy the whole
+      // remainder and force a fresh mount that the stream route blocks on
+      // (serve-after-complete) — that freeze is what made far-forward REMUX
+      // clicks look dead. Restart only for seeks BELOW the file's start:
+      // the file only spans [startMs, end] — anything earlier physically
+      // doesn't exist in it, the browser clamps to its start, and a
+      // "restarted:false" there would silently dead-end the user's backward
+      // scrub (the client can't reach the target natively).
+      if (targetMs >= live.remux.startMs) {
+        // +15s margin past the size-derived estimate: the target's fragment
+        // (moof+mdat) must exist in full, not just its moof header, or the
+        // element's range request ends the fragment early (mid-mdat).
+        // Clamp the goal to the media end (-2s playback tail): a seek to the
+        // final seconds can never make a size-derived estimate reach
+        // durationMs+15s, and must not burn the full deadline waiting.
+        const goalMs = Math.min(targetMs + 15_000, live.mediaFile.durationMs - 2_000);
+        const deadline = Date.now() + 30_000;
+        let covered = remuxCoveredMs(live);
+        while (covered < goalMs && Date.now() < deadline) {
+          // Refresh per iteration: a quality/audio restart swaps the entry
+          // (and the file) mid-wait; wait on what's live, not the snapshot.
+          const child = (liveSessions.get(req.params.sessionId) ?? live).transcode.child;
+          // Child done (clean exit) = file final on disk — everything is
+          // seekable, margin irrelevant (the estimate's last fragments are
+          // fully written). A failed/signaled child leaves a truncated or
+          // empty file on disk — do NOT treat that as covered; bail out of
+          // the wait so the restart path below recovers the seek.
+          if (child.exitCode === 0) {
+            covered = goalMs;
+            break;
+          }
+          if ((child.exitCode ?? child.signalCode) !== null) break;
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          covered = remuxCoveredMs(live);
+        }
+        if (covered >= goalMs) {
+          await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
+          return {
+            restarted: false,
+            segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
+            pid: live.transcode.pid,
+          };
+        }
+        // Frontier never made it (child died / disk stalled) — fall through
+        // to a real restart so the seek still lands.
       }
 
       const oldPid = live.transcode.pid;
@@ -758,11 +999,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
       const { transcode, jobId, startMs } = restarted;
+      const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
 
       liveSessions.set(req.params.sessionId, {
         ...live,
         transcode,
-        currentSegmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
+        currentSegmentFrom: segmentFrom,
         currentTranscodeJobId: jobId,
         remux: { outFile: live.remux.outFile, startMs, patched: false },
       });
@@ -770,7 +1012,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
       return {
         restarted: true,
-        segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
+        segmentFrom,
         pid: transcode.pid,
         killedPid: oldPid,
         actualStartMs: startMs,
@@ -786,6 +1028,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
   app.post(
     "/playback/:sessionId/audio-track",
     {
+      preHandler: app.authenticate,
       schema: {
         params: PlaybackSessionParams,
         body: AudioTrackSwitchBody,
@@ -817,10 +1060,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // New outDir → the media sequence starts at the target segment (HLS)
       // or the stream file lives in the fresh per-track dir (REMUX).
       const isRemux = live.method === "REMUX";
-      if (!isRemux) {
-        const m3u8 = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
-        await writeFile(path.join(newOutDir, "playlist.m3u8"), m3u8);
-      }
 
       const restarted = await restartTranscode(
         req.params.sessionId,
@@ -830,14 +1069,20 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs } = restarted;
+      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
+      if (!isRemux) {
+        // Written after the restart so the first listed segment matches the
+        // keyframe-anchored segment the new child actually starts at.
+        const m3u8 = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
+        await writePlaylistAtomically(newOutDir, m3u8);
+      }
 
       liveSessions.set(req.params.sessionId, {
         ...live,
         transcode,
         outDir: newOutDir,
-        currentSegmentFrom: targetSegment,
-        playlistStartSegment: targetSegment,
+        currentSegmentFrom: actualSegmentFrom,
+        playlistStartSegment: actualSegmentFrom,
         currentTranscodeJobId: jobId,
         audioStreamIndex: audioIndex,
         audioCodec,
@@ -847,10 +1092,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
       return {
         restarted: true,
-        segmentFrom: targetSegment,
+        segmentFrom: actualSegmentFrom,
         pid: transcode.pid,
         killedPid: oldPid,
-        actualStartMs: isRemux ? startMs : undefined,
+        actualStartMs: startMs,
       };
     },
   );
@@ -863,6 +1108,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
   app.post(
     "/playback/:sessionId/quality",
     {
+      preHandler: app.authenticate,
       schema: {
         params: PlaybackSessionParams,
         body: QualitySwitchBody,
@@ -872,19 +1118,21 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
       const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
-      // The DB row keeps the session's *start* profile — reset restores it.
-      const startProfile = session.deviceProfile as unknown as DeviceProfile;
+      // The DB row keeps the session's *start* profile — the raw, un-normalized
+      // profile (no 1080p ceiling) — so reset re-decides exactly like /start did.
+      const startRawProfile = session.deviceProfile as unknown as DeviceProfile;
 
       // reset drops the forced caps and re-decides with the start profile;
       // otherwise merge the new caps over whatever the session runs now.
-      const newProfile = req.body.reset
-        ? normalizeDeviceProfile(startProfile)
-        : normalizeDeviceProfile({
-            ...(live?.deviceProfile ?? startProfile),
+      const mergedRaw = req.body.reset
+        ? startRawProfile
+        : {
+            ...(live?.deviceProfile ?? startRawProfile),
             ...(req.body.maxWidth !== undefined ? { maxWidth: req.body.maxWidth } : {}),
             ...(req.body.maxHeight !== undefined ? { maxHeight: req.body.maxHeight } : {}),
             ...(req.body.maxVideoBitrateKbps !== undefined ? { maxVideoBitrateKbps: req.body.maxVideoBitrateKbps } : {}),
-          });
+          };
+      const newProfile = normalizeDeviceProfile(mergedRaw);
 
       // Same caps as the running encode — nothing to do; report current state
       // so the client can just sync its menu.
@@ -917,7 +1165,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if (!candidate) return reply.code(404).send({ error: "media file not found" });
 
       const targetMs = Math.min(req.body.positionMs, Math.max(0, candidate.durationMs - 1000));
-      const decision = decidePlaybackMethod(candidate.input, newProfile);
+      // Decide on the raw merged profile (never the normalized one): a reset
+      // must re-decide without the encode ceiling (4K direct/remux), and a
+      // caps request only needs the decider to see the caps being asked for.
+      const decision = decidePlaybackMethod(candidate.input, mergedRaw);
 
       // Easiest tier first: the decider only lands on DIRECT_PLAY when the
       // source actually direct-plays at these caps. A reset drops the forced
@@ -957,7 +1208,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         );
         await mkdir(newOutDir, { recursive: true });
 
-        const startMs = newMethod === "REMUX" ? keyframeAtOrBeforeMs(candidate.path, targetMs) : targetMs;
+        const startMs = anchoredStreamStartMs(
+          await keyframeAtOrBeforeMs(candidate.path, targetMs),
+          newMethod === "REMUX",
+        );
         const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
         const toneMap = needsToneMap(candidate.input.isHdr, newProfile.supportsHdr);
         const args =
@@ -969,6 +1223,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
                 durationMs: candidate.durationMs,
                 audioStreamIndex: candidate.relativeAudioIndex,
                 audioCodec: candidate.input.audioCodec,
+                videoCodec: candidate.input.videoCodec,
               })
             : buildFfmpegArgs({
                 inputPath: candidate.path,
@@ -987,7 +1242,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
 
         if (newMethod === "TRANSCODE") {
           const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
-          await writeFile(path.join(newOutDir, "playlist.m3u8"), playlist);
+          await writePlaylistAtomically(newOutDir, playlist);
         }
 
         const { transcode, jobId } = await spawnTranscodeJob(
@@ -997,16 +1252,23 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           newProfile,
           args,
           segmentFrom,
+          newOutDir,
+          candidate.durationMs,
         );
 
         liveSessions.set(req.params.sessionId, {
           transcode,
           outDir: newOutDir,
-          mediaFile: { path: candidate.path, durationMs: candidate.durationMs, bitrateKbps: candidate.bitrateKbps },
+          mediaFile: {
+            path: candidate.path,
+            durationMs: candidate.durationMs,
+            bitrateKbps: candidate.bitrateKbps,
+            videoCodec: candidate.input.videoCodec,
+          },
           method: newMethod,
           deviceProfile: newProfile,
-          currentSegmentFrom: targetSegment,
-          playlistStartSegment: targetSegment,
+          currentSegmentFrom: segmentFrom,
+          playlistStartSegment: segmentFrom,
           currentTranscodeJobId: jobId,
           toneMap,
           subtitleBurnIn: candidate.subtitleBurnIn,
@@ -1022,9 +1284,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         return {
           restarted: true,
           method: newMethod,
-          segmentFrom: targetSegment,
+          segmentFrom,
           pid: transcode.pid,
-          actualStartMs: newMethod === "REMUX" ? startMs : undefined,
+          actualStartMs: startMs,
           playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
           streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
         };
@@ -1038,11 +1300,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       );
       await mkdir(newOutDir, { recursive: true });
 
-      if (newMethod === "TRANSCODE") {
-        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, targetSegment);
-        await writeFile(path.join(newOutDir, "playlist.m3u8"), playlist);
-      }
-
       const oldPid = live.transcode.pid;
       await cancelCurrentJob(req.params.sessionId);
 
@@ -1055,14 +1312,20 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs } = restarted;
+      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
+      if (newMethod === "TRANSCODE") {
+        // Written after the restart: the first listed segment must be the
+        // keyframe-anchored one the new child actually starts at.
+        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
+        await writePlaylistAtomically(newOutDir, playlist);
+      }
 
       liveSessions.set(req.params.sessionId, {
         ...live,
         transcode,
         outDir: newOutDir,
-        currentSegmentFrom: targetSegment,
-        playlistStartSegment: targetSegment,
+        currentSegmentFrom: actualSegmentFrom,
+        playlistStartSegment: actualSegmentFrom,
         currentTranscodeJobId: jobId,
         deviceProfile: newProfile,
         method: newMethod,
@@ -1076,10 +1339,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       return {
         restarted: true,
         method: newMethod,
-        segmentFrom: targetSegment,
+        segmentFrom: actualSegmentFrom,
         pid: transcode.pid,
         killedPid: oldPid,
-        actualStartMs: newMethod === "REMUX" ? startMs : undefined,
+        actualStartMs: startMs,
         playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
         streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
       };

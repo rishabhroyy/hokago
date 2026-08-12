@@ -9,6 +9,7 @@ import {
 import { paths, useRouter } from "../router";
 import { useIsAdmin, usePrimaryProfile } from "../profile";
 import { useSoundToggle, useWiiSound } from "./useWiiSound";
+import { clearAuth } from "../api-client";
 import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
 import { HUE_CLASS, hueFor, iconFor } from "./Tile";
@@ -260,8 +261,7 @@ export function TopNav() {
               <button
                 className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-accent/8 hover:text-accent"
                 onClick={() => {
-                  localStorage.removeItem("hokago_access_token");
-                  localStorage.removeItem("hokago_refresh_token");
+                  clearAuth();
                   location.assign("/login");
                 }}
               >

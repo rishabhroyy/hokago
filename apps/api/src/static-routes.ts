@@ -70,8 +70,11 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
   // only supply the explicit container MIME type (extension-based sniffing
   // would get this wrong for e.g. `.mkv`) and skip its cache headers, which
   // this route never set.
-  app.get<{ Params: { id: string } }>("/media-files/:id/direct", async (req, reply) => {
-    const mediaFile = await db.mediaFile.findUnique({ where: { id: req.params.id } });
+  app.get<{ Params: { id: string } }>(
+    "/media-files/:id/direct",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
+      const mediaFile = await db.mediaFile.findUnique({ where: { id: req.params.id } });
     if (!mediaFile || !existsSync(mediaFile.path)) {
       return reply.code(404).send({ error: "media file not found" });
     }
@@ -86,14 +89,17 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
 
   // Chrome fonts — one font stack, so this is just every vendored font,
   // unconditionally, no per-theme lookup.
-  app.get("/fonts", async () => {
+  app.get("/fonts", { preHandler: app.authenticate }, async () => {
     const fonts = await db.font.findMany({ where: { source: "VENDORED" } });
     return fonts.map((f) => ({ hash: f.hash, family: f.family, weight: f.weight, style: f.style, url: `/fonts/${f.hash}` }));
   });
 
  // Font store — hash-keyed, so the response is safe to cache
   // forever regardless of which of the four sources produced it.
-  app.get<{ Params: { hash: string } }>("/fonts/:hash", async (req, reply) => {
+  app.get<{ Params: { hash: string } }>(
+    "/fonts/:hash",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
     const font = await db.font.findUnique({ where: { hash: req.params.hash } });
     const fontPath = font && resolveConfigFilePath(font.path, "fonts");
     if (!fontPath) return reply.code(404).send({ error: "font not found" });
@@ -105,7 +111,10 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
   });
 
  // Artwork store — bytes fetched once server-side, never a URL.
-  app.get<{ Params: { id: string } }>("/artwork/:id", async (req, reply) => {
+  app.get<{ Params: { id: string } }>(
+    "/artwork/:id",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
     const artwork = await db.artwork.findUnique({ where: { id: req.params.id } });
     // resolveConfigFilePath handles every legacy path shape: host-absolute
     // (/Users/.../data/config/...), cwd-relative, or container-relative.
@@ -122,7 +131,10 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
   // JASSUB's `availableFonts` map is built from this on the client.
   app.get(
     "/media-files/:id/fonts",
-    { schema: { params: MediaFileParams, response: { 200: MediaFileFontsResponse } } },
+    {
+      preHandler: app.authenticate,
+      schema: { params: MediaFileParams, response: { 200: MediaFileFontsResponse } },
+    },
     async (req) => {
       const links = await db.mediaFileFont.findMany({
         where: { mediaFileId: req.params.id },
@@ -142,6 +154,7 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
   app.get(
     "/media-files/:id/tracks",
     {
+      preHandler: app.authenticate,
       schema: { params: MediaFileParams, response: { 200: MediaFileTracksResponse, 404: ErrorResponse } },
     },
     async (req, reply) => {
@@ -174,6 +187,7 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
  // ASS track references — — so this has to happen at request time).
   app.get<{ Params: { id: string; trackId: string } }>(
     "/media-files/:id/subtitle-tracks/:trackId",
+    { preHandler: app.authenticate },
     async (req, reply) => {
       const track = await db.subtitleTrack.findUnique({ where: { id: req.params.trackId } });
       if (!track || track.mediaFileId !== req.params.id) {

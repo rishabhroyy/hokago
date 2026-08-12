@@ -37,6 +37,11 @@ export function hashOpaqueToken(token: string): string {
 
 export const ACCESS_TOKEN_TTL = "15m";
 export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// Media-routes access cookie: <video>/<img>/etc. can't attach an Authorization
+// header, so the web app mirrors the access JWT into a cookie (SameSite=Lax —
+// cross-site subresource requests never carry it) and every same-origin
+// element request authenticates like any fetch.
+export const ACCESS_TOKEN_COOKIE = "hokago_access";
 
 export interface AccessTokenPayload {
   accountId: string;
@@ -56,6 +61,14 @@ declare module "@fastify/jwt" {
   }
 }
 
+function cookieToken(req: FastifyRequest): string | null {
+  const cookie = req.headers.cookie
+    ?.split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${ACCESS_TOKEN_COOKIE}=`));
+  return cookie ? decodeURIComponent(cookie.slice(ACCESS_TOKEN_COOKIE.length + 1)) : null;
+}
+
 export async function registerAuth(app: FastifyInstance): Promise<void> {
   const secret = process.env.HOKAGO_JWT_SECRET;
   if (!secret) {
@@ -68,7 +81,18 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
 
   app.decorate("authenticate", async (req: FastifyRequest, reply: FastifyReply) => {
     try {
-      const payload = await req.jwtVerify<AccessTokenPayload>();
+      // jwtVerify reads the Authorization header; the cookie token verifies
+      // via the same secret. Try the header first (fetch client), fall back
+      // to the cookie (media elements).
+      let payload: AccessTokenPayload | null = null;
+      try {
+        payload = await req.jwtVerify<AccessTokenPayload>();
+      } catch {
+        // Header auth failed (missing/expired) — try the media cookie next.
+        const token = cookieToken(req);
+        if (token) payload = app.jwt.verify<AccessTokenPayload>(token);
+      }
+      if (!payload) throw new Error("no valid token");
       req.accountId = payload.accountId;
       req.isAdmin = payload.isAdmin;
     } catch {

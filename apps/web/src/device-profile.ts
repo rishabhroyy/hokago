@@ -23,11 +23,11 @@ export const BROWSER_DEVICE_PROFILE: BrowserDeviceProfile = {
   supportedAudioCodecs: ["aac", "opus"],
   supportsHdr: false,
   subtitleMode: "external",
-  // Real screen ceiling — transcodes never exceed it (the server also
-  // defaults these, so a profile without caps still gets sane encoding).
-  maxWidth: 1920,
-  maxHeight: 1080,
-  maxVideoBitrateKbps: 8000,
+  // Deliberately NO maxWidth/maxHeight/maxVideoBitrateKbps: these caps are
+  // *encode* constraints, and the decider feeding them in would cap
+  // DIRECT_PLAY/REMUX at 1080p — browsers decode 4K h264/hevc natively. The
+  // decider gets a raw profile (capability-only checks); encode caps arrive
+  // only via the quality menu, and the server defaults them when encoding.
 };
 
 /**

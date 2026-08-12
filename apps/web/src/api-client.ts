@@ -2,6 +2,23 @@ import { createHokagoClient } from "@hokago/contract/client";
 
 const ACCESS_KEY = "hokago_access_token";
 const REFRESH_KEY = "hokago_refresh_token";
+// Mirror of the access token for the browser to send on media/font/artwork
+// subresource requests — `<video>`, `<img>` and CSS font fetches can't carry
+// an Authorization header, so the API's authenticate decorator falls back to
+// this cookie. SameSite=Lax: cross-site subresource loads never include it,
+// and same-origin img/video/font requests always do.
+const ACCESS_COOKIE = "hokago_access";
+
+export function storeAccessToken(token: string): void {
+  localStorage.setItem(ACCESS_KEY, token);
+  const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+  const maxAge = typeof payload.exp === "number" ? Math.max(60, Math.round(payload.exp - Date.now() / 1000)) : 900;
+  document.cookie = `${ACCESS_COOKIE}=${token}; Path=/; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function clearAccessCookie(): void {
+  document.cookie = `${ACCESS_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`;
+}
 
 // One in-flight refresh at a time — concurrent 401s must not race.
 let refreshInFlight: Promise<string | null> | null = null;
@@ -10,6 +27,13 @@ function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_KEY);
 }
 
+// Seed the cookie from any token that survived a reload. A fresh login and
+// every refresh set it too, but a mid-TTL token must land in the cookie
+// before the first <video>/<img> subresource request fires — otherwise the
+// media stalls until the token approaches expiry and a refresh happens.
+const bootToken = getAccessToken();
+if (bootToken) storeAccessToken(bootToken);
+
 function getRefreshToken(): string | null {
   return localStorage.getItem(REFRESH_KEY);
 }
@@ -17,6 +41,7 @@ function getRefreshToken(): string | null {
 export function clearAuth(): void {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
+  clearAccessCookie();
 }
 
 function tokenExpiresInMs(token: string): number | null {
@@ -49,7 +74,7 @@ async function refreshAccessToken(): Promise<string | null> {
         });
         if (!res.ok) return null;
         const data = (await res.json()) as { accessToken: string };
-        localStorage.setItem(ACCESS_KEY, data.accessToken);
+        storeAccessToken(data.accessToken);
         return data.accessToken;
       } catch {
         return null;

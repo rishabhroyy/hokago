@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api-client";
+import { api, storeAccessToken } from "../api-client";
 import { Icon } from "../ui/icons";
 import { LogoMark } from "../ui/Logo";
 import { ThemeToggle } from "../ui/useTheme";
@@ -53,7 +53,7 @@ export function LoginView() {
         body: { username: username.trim(), password, device: "web" },
       });
       if (loginError || !data) throw new Error("invalid username or password");
-      localStorage.setItem("hokago_access_token", data.accessToken);
+      storeAccessToken(data.accessToken);
       localStorage.setItem("hokago_refresh_token", data.refreshToken);
       // Full reload: drops the anonymous session's caches and 401 state.
       location.assign("/");

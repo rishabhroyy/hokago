@@ -28,6 +28,8 @@ export interface RemuxJobInput {
   /** Remux only carries the video — the muxer must know where the file ends or it runs past the media end. */
   durationMs: number;
   audioCodec?: string | null;
+  /** Source video codec (ffprobe name). `-tag:v` must match the copied stream's codec — hvc1 only exists for HEVC. */
+  videoCodec?: string | null;
 }
 
 export function buildRemuxArgs(input: RemuxJobInput): string[] {
@@ -40,7 +42,11 @@ export function buildRemuxArgs(input: RemuxJobInput): string[] {
   args.push("-c:v", "copy");
   // hvc1 (not hev1) is the tag Chrome/Safari's native demuxer recognizes for
   // HEVC-in-MP4; Matroska carries hev1-style NALs, so the remuxer must retag.
-  args.push("-tag:v", "hvc1");
+  // Only for HEVC — forcing it on an H.264 copy makes ffmpeg abort at header
+  // write (`Tag hvc1 incompatible with output codec id '27' (avc1)`).
+  if (input.videoCodec === "hevc" || input.videoCodec === "h265") {
+    args.push("-tag:v", "hvc1");
+  }
   args.push("-c:a", input.audioCodec && MP4_SAFE_AUDIO.has(input.audioCodec) ? "copy" : "aac");
   args.push("-movflags", "+empty_moov+frag_keyframe+default_base_moof", "-f", "mp4");
   // Remux only carries the video — without an end cap the muxer runs past the

@@ -25,12 +25,24 @@ import type { MetadataProvider } from "@hokago/metadata";
 const db = new PrismaClient();
 const connection = getConnection();
 
-const scanQueue = new Queue<ScanJobData>(QUEUE_NAMES.SCAN, { connection });
+const scanQueue = new Queue<ScanJobData>(QUEUE_NAMES.SCAN, {
+  connection,
+  // The deterministic jobId (scanJobId) means a *kept* completed job would
+  // permanently block any later re-enqueue for the same library — a manual
+  // "rescan" would silently no-op. Postgres is truth (the boot reconciler
+  // re-enqueues work from it), so both terminal states can be dropped.
+  defaultJobOptions: { removeOnComplete: true, removeOnFail: true },
+});
 const artworkQueue = new Queue<ArtworkJobData>(QUEUE_NAMES.ARTWORK, {
   connection,
   defaultJobOptions: {
     attempts: JOB_FAILURE_THRESHOLD,
     backoff: { type: "exponential", delay: 2000 },
+    // Same deterministic-jobId argument as scan above: without this, a
+    // completed artwork job stays in Redis and artworkJobId(mediaItemId)
+    // silently refuses to re-enqueue after the first success.
+    removeOnComplete: true,
+    removeOnFail: true,
   },
 });
 
@@ -135,6 +147,17 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
   await db.library.update({
     where: { id: library.id },
     data: { scanCursor: null, lastScanAt: new Date() },
+  });
+  // Rescan = the universal retry. The failure threshold poisons items
+  // (artwork → NEEDS_ATTENTION, metadata → silent); clearing both here lets
+  // the next scan/reconcile re-derive their artwork and metadata jobs from
+  // Postgres. Anything still genuinely broken re-poisons itself — self-
+  // correcting, and it gives admins a working recovery lever for the
+  // attention list instead of a permanent dead end.
+  await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id } } });
+  await db.mediaItem.updateMany({
+    where: { libraryId: library.id, state: "NEEDS_ATTENTION" },
+    data: { state: "OK" },
   });
 }
 

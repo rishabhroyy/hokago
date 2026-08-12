@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import {
   MediaPlayer,
   MediaProvider,
   Track,
   hasTriggerEvent,
   isHLSProvider,
+  useMediaRemote,
   useMediaState,
   type AudioTrack,
   type MediaAudioTrackChangeEvent,
@@ -37,7 +38,7 @@ import { getPrimaryProfile } from "./profile";
 import { clearDetailCache, fetchMediaItemDetail } from "./browse-api";
 import { paths, useRouter } from "./router";
 import { Icon } from "./ui/icons";
-import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveQualityPref, saveSubtitlePref } from "./track-prefs";
+import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveQualityPref, saveSubtitlePref, type TrackPrefs } from "./track-prefs";
 import { audioTrackLabel } from "./language-names";
 
 // An empty WebVTT that vidstack loads (so the track is a real, selectable entry
@@ -89,10 +90,216 @@ interface NativeAudioTrackList {
   [index: number]: NativeAudioTrack;
 }
 
+/**
+ * Absolute-coordinate time slider replacing the stock one, which scales to
+ * the *stream* timeline — shortened on resumes, re-scaled on every seek/
+ * quality restart — so its size and the absolute clock disagree. This one
+ * maps playhead + offset onto the file's full duration, keeping the thumb,
+ * buffered bar, hover preview, and clock on one scale. Builds on the stock
+ * class names + CSS vars (--slider-fill/progress/pointer) so the bundled
+ * layout styles apply unchanged.
+ */
+function AbsoluteTimeSlider({
+  playerRef,
+  offsetMs,
+  absoluteDurationMs,
+  onScrub,
+}: {
+  playerRef: RefObject<MediaPlayerInstance | null>;
+  offsetMs: number;
+  absoluteDurationMs: number;
+  onScrub: (mediaTimeMs: number) => void;
+}) {
+  const remote = useMediaRemote(playerRef);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const currentTime = useMediaState("currentTime", playerRef) as number;
+  const duration = useMediaState("duration", playerRef) as number;
+  const bufferedEnd = useMediaState("bufferedEnd", playerRef) as number;
+  const [pointerPct, setPointerPct] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  // State flushes are async — under React's concurrent batching a pointerup
+  // can commit against a render that hasn't seen pointerdown yet, reading a
+  // stale `dragging` and dropping the seek. The gate lives on a ref so the
+  // commit decision is exactly synchronous with the input events.
+  const draggingRef = useRef(false);
+
+  // The playbar's total span: the file's real duration when the server
+  // reported it (always does), else the element duration shifted by the offset.
+  const endSec =
+    absoluteDurationMs > 0
+      ? absoluteDurationMs / 1000
+      : Number.isFinite(duration)
+        ? duration + offsetMs / 1000
+        : 0;
+  const posSec = Number.isFinite(currentTime) ? currentTime + offsetMs / 1000 : 0;
+  const pct = endSec > 0 ? Math.min(100, Math.max(0, (posSec / endSec) * 100)) : 0;
+  const bufferedPct = endSec > 0 ? Math.min(100, Math.max(0, ((bufferedEnd + offsetMs / 1000) / endSec) * 100)) : 0;
+  const shownPct = pointerPct ?? pct;
+
+  const pctFromClientX = (clientX: number) => {
+    const el = rootRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 ? Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100)) : 0;
+  };
+
+  const seekToPct = useCallback(
+    (p: number) => {
+      if (!endSec) return;
+      // The absolute target (media time), converted back to the stream
+      // timeline (media coordinates). Clamp at 0: on a resumed stream the
+      // target can fall before the timeline origin — a negative seek is a
+      // no-op in the media element, and the *server* restart below is what
+      // actually lands the position (the local seek is only instant
+      // feedback while the target is already buffered).
+      const mediaSec = (p / 100) * endSec;
+      const streamSec = mediaSec - offsetMs / 1000;
+      remote.seek(streamSec > 0 ? streamSec : 0);
+      onScrub(Math.round(mediaSec * 1000));
+    },
+    [remote, endSec, offsetMs, onScrub],
+  );
+
+  if (!endSec) {
+    return <div className="vds-time-slider vds-slider" aria-disabled="true" />;
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      className="vds-time-slider vds-slider"
+      role="slider"
+      tabIndex={0}
+      aria-label="Seek"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(pct)}
+      aria-valuetext={`${formatClock(posSec)} of ${formatClock(endSec)}`}
+      data-active={dragging || undefined}
+      style={
+        {
+          "--slider-fill": `${(dragging ? shownPct : pct).toFixed(2)}%`,
+          "--slider-progress": `${bufferedPct.toFixed(2)}%`,
+          "--slider-pointer": `${shownPct.toFixed(2)}%`,
+        } as CSSProperties
+      }
+      onPointerDown={(e) => {
+        if (e.button !== 0 && e.pointerType === "mouse") return;
+        e.preventDefault();
+        // Capture keeps the drag over the video; a late pointerId (e.g.
+        // synthesized events) throws — never let it abort the gesture.
+        try {
+          rootRef.current?.setPointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        draggingRef.current = true;
+        setDragging(true);
+        setPointerPct(pctFromClientX(e.clientX));
+      }}
+      // A completed gesture (click or drag end) bubbles up to vidstack's
+      // click-to-toggle and lands as a *trusted* pause right as the seek
+      // fires — after a restart remount the autoplay guard then respects it
+      // and playback is frozen at the seek target ("seek didn't work").
+      // Seeks never toggle play/pause; keep the gesture from reaching the
+      // player. (Same-element handlers still run — only ancestors are cut.)
+      onClick={(e) => e.stopPropagation()}
+      onPointerMove={(e) => {
+        // Hover (no buttons) moves the preview; drag moves the thumb+fill.
+        if (draggingRef.current || e.buttons === 0) setPointerPct(pctFromClientX(e.clientX));
+      }}
+      onPointerUp={(e) => {
+        if (!draggingRef.current) return;
+        const p = pctFromClientX(e.clientX);
+        draggingRef.current = false;
+        setDragging(false);
+        setPointerPct(null);
+        seekToPct(p);
+      }}
+      onPointerCancel={() => {
+        draggingRef.current = false;
+        setDragging(false);
+        setPointerPct(null);
+      }}
+      onPointerLeave={() => {
+        if (!draggingRef.current) setPointerPct(null);
+      }}
+      onKeyDown={(e) => {
+        const stepSec = e.shiftKey ? 10 : 5;
+        let next: number | null = null;
+        if (e.key === "ArrowLeft") next = pct - (stepSec / endSec) * 100;
+        else if (e.key === "ArrowRight") next = pct + (stepSec / endSec) * 100;
+        else if (e.key === "PageUp") next = pct + 10;
+        else if (e.key === "PageDown") next = pct - 10;
+        else if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = 100;
+        if (next !== null) {
+          e.preventDefault();
+          seekToPct(Math.min(100, Math.max(0, next)));
+        }
+      }}
+    >
+      <div className="vds-slider-track" />
+      <div className="vds-slider-progress vds-slider-track" />
+      <div className="vds-slider-track-fill vds-slider-track" />
+      <div className="vds-slider-thumb" />
+      <div
+        className="vds-slider-preview"
+        data-visible={pointerPct !== null || undefined}
+        style={{ position: "absolute", bottom: "calc(100% + 8px)", left: "var(--slider-pointer)", transform: "translateX(-50%)" }}
+      >
+        <span className="vds-slider-value">{formatClock((shownPct / 100) * endSec)}</span>
+      </div>
+    </div>
+  );
+}
+
 /** True when a media event was triggered by a real user gesture (menu radio
  *  click/keypress) rather than auto-selection or a programmatic change. */
 const isUserGesture = (event: Event) =>
   hasTriggerEvent(event, "click") || hasTriggerEvent(event, "keydown") || hasTriggerEvent(event, "pointerup");
+
+// mm:ss (h:mm:ss past an hour) for the playbar clock slots.
+function formatClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return h > 0 ? `${h}:${mm}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+/**
+ * Playbar time slots rendered in media-absolute time. On resumed/restarted
+ * streams the element clock restarts at the resume point, so the stock
+ * currentTime/endTime would show a shortened episode; adding the timeline
+ * offset (clamped to the file's real duration from the start response) keeps
+ * the playbar honest — 12:34 of a resumed episode reads 22:34 / 24:00.
+ */
+function PlayerTimeClock({
+  kind,
+  playerRef,
+  offsetMs,
+  absoluteDurationMs,
+}: {
+  kind: "current" | "end";
+  playerRef: RefObject<MediaPlayerInstance | null>;
+  offsetMs: number;
+  absoluteDurationMs: number;
+}) {
+  const currentTime = useMediaState("currentTime", playerRef) as number;
+  const duration = useMediaState("duration", playerRef) as number;
+  const endSeconds = absoluteDurationMs > 0 ? absoluteDurationMs / 1000 : duration + offsetMs / 1000;
+  if (kind === "end") {
+    if (!Number.isFinite(endSeconds)) return null;
+    return <span className="font-mono tabular-nums">{formatClock(endSeconds)}</span>;
+  }
+  // currentTime is Infinity before metadata loads — the stock layout shows
+  // 0:00 then; keep the slot empty instead of flashing the clamped file end.
+  if (!Number.isFinite(currentTime)) return null;
+  const shown = Math.max(0, Math.min(currentTime + offsetMs / 1000, endSeconds));
+  return <span className="font-mono tabular-nums">{formatClock(shown)}</span>;
+}
 
 export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const { navigate } = useRouter();
@@ -109,14 +316,31 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const [subtitles, setSubtitles] = useState<SubtitleTrackInfo[]>([]);
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
+  // Cache-buster appended to the stream/playlist URL, and the MediaPlayer
+  // remount key. Split so a same-method restart (seek, audio, quality) only
+  // bumps the src nonce — the provider type doesn't change, and the full
+  // key remount visibly "refreshed" the whole player UI on every seek. The
+  // key still forces a fresh subtree when the method actually changes
+  // (native <video> <-> HLS/MSE), which vidstack can't hot-swap.
+  const [srcNonce, setSrcNonce] = useState(0);
+  const [keyNonce, setKeyNonce] = useState(0);
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const playerRef = useRef<MediaPlayerInstance>(null);
   const jassubRef = useRef<JASSUB | null>(null);
   const pendingSeekRef = useRef<number | null>(null);
-  const skipNextSeekRef = useRef(false);
-  const scrubTimerRef = useRef<number | null>(null);
-  const lastScrubPosRef = useRef(0);
+  // Live mirror of `start` for the seek machinery below — seeking must never
+  // depend on a state value the commit callback might close over stale.
+  const startRef = useRef(start);
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
+  // One /seek in flight, latest-wins queue. Every committed scrub replaces
+  // the queued target; a response only pumps the queue when it's free. This
+  // keeps rapid scrubs / held arrow keys from firing a kill-respawn storm at
+  // ffmpeg (each restart takes ~a second to yield its first segment).
+  const seekQueueRef = useRef<number | null>(null);
+  const seekInFlightRef = useRef(false);
+  const seekTimerRef = useRef<number | null>(null);
   // Media-absolute time at the video timeline's zero point. The server speaks
   // media time end-to-end (playlist MEDIA-SEQUENCE, remux -ss target, stored
   // watch positions); the <video>/hls.js timeline restarts at the resume or
@@ -128,6 +352,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // and refs alone don't re-render.
   const [timelineOffsetMs, setTimelineOffsetMs] = useState(0);
   const prefs = useMemo(() => loadTrackPrefs(), []);
+  // Media-absolute duration of the file (ms), from the start response — the
+  // playbar's end time. The element's own duration is stream-relative on
+  // RESUMEd REMUX/TRANSCODE, which would show a shortened total.
+  const [absoluteDurationMs, setAbsoluteDurationMs] = useState(0);
+  // Live mirror of the remembered quality pref: the menu checkmark must
+  // re-render the moment the pref changes, and the frozen `prefs` memo can't.
+  const [qualitySelection, setQualitySelection] = useState<TrackPrefs["quality"] | undefined>(
+    () => loadTrackPrefs().quality ?? undefined,
+  );
   const userInteractedRef = useRef(false);
   const userPausedRef = useRef(false);
   const [title, setTitle] = useState<string | null>(null);
@@ -135,19 +368,19 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // Caps for the current quality selection — null for a fresh user or an
   // "Original" pick means the device profile's own ceiling applies.
   const qualityCaps = useMemo(() => {
-    const q = prefs.quality;
+    const q = qualitySelection;
     if (!q || q.maxWidth == null || q.maxHeight == null || q.maxVideoBitrateKbps == null) return null;
     return { maxWidth: q.maxWidth, maxHeight: q.maxHeight, maxVideoBitrateKbps: q.maxVideoBitrateKbps };
-  }, [prefs.quality]);
+  }, [qualitySelection]);
 
   // Which menu entry is active: the remembered label when it's still a valid
   // option, else the remembered caps matched against the option set.
   const selectedQuality = useMemo(() => {
-    const q = prefs.quality;
+    const q = qualitySelection;
     if (!q || q.maxWidth == null) return QUALITY_OPTIONS[0].label;
     const byCaps = QUALITY_OPTIONS.find((o) => o.maxWidth === q.maxWidth && o.maxHeight === q.maxHeight);
     return byCaps?.label ?? q.label;
-  }, [prefs.quality]);
+  }, [qualitySelection]);
 
   const applyTimelineOffset = useCallback((ms: number) => {
     timelineOffsetRef.current = ms;
@@ -350,20 +583,34 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           return;
         }
         setStart(data);
+        setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
         // The video timeline is relative to where playback resumed, but the
         // server speaks media-absolute time. Track the offset so every
         // position the client sends (seek, audio switch, heartbeat) can be
         // converted back to media time.
         // - TRANSCODE: playlist starts at the resume segment — offset is the
-        //   segment start; no client seek needed (media sequence handles it).
+        //   exact keyframe the server's seek landed on (actualStartMs);
+        //   no client seek needed (media sequence handles it).
         // - REMUX: the file starts at the keyframe at-or-before the resume
         //   point — offset is that point, so no client seek either.
         // - DIRECT_PLAY: the file is the media itself — offset 0, seek to
         //   the exact resume once the file opens.
-        if (data.method === "TRANSCODE") {
-          applyTimelineOffset(Math.floor(data.resumePositionMs / (HLS_SEGMENT_SECONDS * 1000)) * HLS_SEGMENT_SECONDS * 1000);
-        } else if (data.method === "REMUX") {
-          applyTimelineOffset(data.resumePositionMs);
+        if (data.method === "TRANSCODE" || data.method === "REMUX") {
+          // The stream starts at the anchored point (keyframe or its segment
+          // boundary); the video timeline is relative to it. Self-seek the
+          // gap so continue-watching resumes on the exact stored position —
+          // the anchored stream starts at-or-before it, so the seek is small
+          // (within the first TRANSCODE segment; the REMUX file is served
+          // only once complete).
+          const anchor =
+            data.actualStartMs ??
+            (data.method === "TRANSCODE"
+              ? Math.floor(data.resumePositionMs / (HLS_SEGMENT_SECONDS * 1000)) * HLS_SEGMENT_SECONDS * 1000
+              : data.resumePositionMs);
+          applyTimelineOffset(anchor);
+          if (data.resumePositionMs - anchor > 1000) {
+            pendingSeekRef.current = (data.resumePositionMs - anchor) / 1000;
+          }
         } else if (data.resumePositionMs > 0) {
           pendingSeekRef.current = data.resumePositionMs / 1000;
         }
@@ -385,7 +632,9 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     const heartbeat = () => {
       const player = playerRef.current;
       if (!player) return;
-      const durationMs = player.duration ? Math.round(player.duration * 1000) : undefined;
+      // Media-absolute duration: the element's duration is stream-relative on
+      // resumed streams; adding the timeline offset yields the file's total.
+      const durationMs = player.duration ? Math.round(player.duration * 1000 + timelineOffsetRef.current) : undefined;
       api
         .POST("/playback/{sessionId}/heartbeat", {
           params: { path: { sessionId: start.sessionId } },
@@ -419,6 +668,113 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     };
   }, [start?.sessionId]);
 
+  // Unifies every restart path (seek / audio / quality): the server responds
+  // with the method, the exact media time the new stream starts at
+  // (actualStartMs — the keyframe or the keyframe's segment boundary), and
+  // the playlist's first segment. The video timeline rebases to zero at the
+  // restart point, so the offset moves to the anchor and a self-seek lands on
+  // the pre-restart position. All three handlers used to duplicate this.
+  const applyRestart = useCallback(
+    (method: PlaybackStart["method"], segmentFrom: number | null, actualStartMs: number | null | undefined, targetMs: number) => {
+      if (method === "DIRECT_PLAY") {
+        // The file itself is the media: offset 0, seek to the exact target.
+        applyTimelineOffset(0);
+        pendingSeekRef.current = targetMs / 1000;
+        return;
+      }
+      if (method === "TRANSCODE") {
+        // The playlist's MEDIA-SEQUENCE starts at the anchored segment, so
+        // the timeline origin is exactly segmentFrom * segment seconds.
+        const newOffset = actualStartMs ?? (segmentFrom ?? 0) * HLS_SEGMENT_SECONDS * 1000;
+        applyTimelineOffset(newOffset);
+        pendingSeekRef.current = (targetMs - newOffset) / 1000;
+        return;
+      }
+      // REMUX: the restarted file starts at the keyframe at-or-before the
+      // target (actualStartMs) — the file's own start is the timeline origin.
+      const newOffset = actualStartMs ?? targetMs;
+      applyTimelineOffset(newOffset);
+      pendingSeekRef.current = (targetMs - newOffset) / 1000;
+    },
+    [applyTimelineOffset],
+  );
+
+  // User-committed scrub, fired at the gesture (pointerup/keydown), never
+  // from media events. The server is the source of truth for where the stream
+  // restarts; the local video seek is just instant feedback while the target
+  // is buffered. No dependence on hls.js firing `seeked` — an event that a
+  // clamped or no-op seek (click at the current position, backward below the
+  // resume point) never produces, which silently ate scrubs.
+  const commitSeek = useCallback((mediaTimeMs: number) => {
+    if (!Number.isFinite(mediaTimeMs)) return;
+    seekQueueRef.current = Math.max(0, Math.round(mediaTimeMs));
+    if (seekTimerRef.current === null) {
+      seekTimerRef.current = window.setTimeout(() => {
+        seekTimerRef.current = null;
+        pumpSeek(0);
+      }, 200);
+    }
+  }, []);
+
+  const pumpSeek = useCallback(
+    (attempt: number) => {
+      const session = startRef.current;
+      if (!session || session.method === "DIRECT_PLAY") {
+        seekQueueRef.current = null;
+        return;
+      }
+      if (seekInFlightRef.current) return;
+      const target = seekQueueRef.current;
+      if (target === null) return;
+      seekQueueRef.current = null;
+      seekInFlightRef.current = true;
+      const sessionId = session.sessionId;
+      api
+        .POST("/playback/{sessionId}/seek", {
+          params: { path: { sessionId } },
+          body: { positionMs: target },
+        })
+        .then(({ data, response }) => {
+          seekInFlightRef.current = false;
+          // Session died underneath (stop / tab close / re-login) — its
+          // offsets describe a state nobody wants anymore.
+          if (startRef.current?.sessionId !== sessionId) {
+            seekQueueRef.current = null;
+            return;
+          }
+          if (response?.status === 503 && attempt < 5) {
+            // Transcoder cap: the old child is already dead from the 503
+            // path server-side — re-queue and keep trying so the seek lands
+            // instead of parking the video at the target forever. Never
+            // clobber a newer commit that queued during the flight.
+            if (seekQueueRef.current === null) seekQueueRef.current = target;
+            window.setTimeout(() => pumpSeek(attempt + 1), 1000);
+            return;
+          }
+          if (data?.restarted) {
+            applyRestart(startRef.current.method, data.segmentFrom ?? null, data.actualStartMs, target);
+            setSrcNonce((n) => n + 1);
+          }
+          // A newer commit queued mid-flight: pump it now that the slot is free.
+          if (seekQueueRef.current !== null) window.setTimeout(() => pumpSeek(0), 50);
+        })
+        .catch(() => {
+          // Transient network failure: the queue stays available for the
+          // next scrub; the video keeps playing the buffered position.
+          seekInFlightRef.current = false;
+        });
+    },
+    [applyRestart],
+  );
+
+  // Drop a pending debounce when the player unmounts (tab close, error).
+  useEffect(
+    () => () => {
+      if (seekTimerRef.current !== null) window.clearTimeout(seekTimerRef.current);
+      seekQueueRef.current = null;
+    },
+    [],
+  );
   // DIRECT_PLAY exposes the container's other audio streams natively, so the
   // stock audio menu switches them client-side. TRANSCODE/DIRECT_STREAM bake one
  // audio track into the segments , so switching means asking the server
@@ -443,41 +799,38 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         .POST("/playback/{sessionId}/audio-track", { params: { path: { sessionId: start.sessionId } }, body })
         .then(({ data, error }) => {
           if (error) throw new Error("audio-track switch failed");
-          if (data && start.method === "TRANSCODE" && data.segmentFrom != null) {
-            // New playlist starts at the target segment (continuous PTS, so
-            // segment N begins at N*6s) — rebase the offset and reseek to the
-            // exact pre-switch position on the fresh timeline.
-            applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
-            pendingSeekRef.current = (positionMs - timelineOffsetRef.current) / 1000;
-          } else {
-            // REMUX: the restarted file starts at the keyframe at-or-before the
-            // target (actualStartMs). Rebase the offset to it and self-seek to
-            // the exact pre-switch position so the video doesn't jump back.
-            const newOffset = data?.actualStartMs ?? positionMs;
-            applyTimelineOffset(newOffset);
-            pendingSeekRef.current = (positionMs - newOffset) / 1000;
-          }
+          if (!data) return;
+          // Restart responses always carry the method and the exact anchored
+          // stream start; rebase the timeline and self-seek to the exact
+          // pre-switch position on the fresh timeline.
+          applyRestart(start.method, data.segmentFrom, data.actualStartMs, positionMs);
           // A restart is explicit intent to keep watching: the menu/slider click
           // that triggered it bubbles into vidstack's click-to-toggle and lands
           // as a *trusted* pause during the teardown, which would otherwise
           // silence the autoplay resume below.
           userPausedRef.current = false;
-          setReloadNonce((n) => n + 1);
+          // Audio switches never change the method (the server restarts with
+          // live.method) — a src bust reloads the pipeline without the full
+          // key remount that visibly "refreshed" the player.
+          setSrcNonce((n) => n + 1);
         })
         .catch((err: Error) => setError(err.message));
     },
-    [start, audioTracks, applyTimelineOffset],
+    [start, audioTracks, applyTimelineOffset, applyRestart],
   );
 
   const handleCanPlay = useCallback(() => {
-    if (!playerRef.current) return;
+    const player = playerRef.current;
+    if (!player) return;
     if (pendingSeekRef.current !== null) {
-      playerRef.current.currentTime = pendingSeekRef.current;
+      // Clamp defensively: a restart that anchored past the element's
+      // duration (end-of-file remux) would otherwise park playback at a
+      // position the media can't reach.
+      const target = pendingSeekRef.current;
       pendingSeekRef.current = null;
+      const max = Number.isFinite(player.duration) ? player.duration : Infinity;
+      player.currentTime = Math.max(0, Math.min(target, max));
     }
-    // The seek we just applied fires a `seeked` event — don't let it
-    // round-trip into a redundant /seek restart.
-    skipNextSeekRef.current = true;
     // Autoplay: navigating into /watch carries the user activation from the
     // detail-page click (same-document navigation), so play() normally
     // succeeds; when the browser blocks it (NotAllowedError) the big play
@@ -485,7 +838,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     // later restarts — src reloads (seek/quality switches) fire canPlay
     // again and must not fight the paused state.
     if (!userPausedRef.current) {
-      playerRef.current.play().catch(() => {});
+      player.play().catch(() => {});
     }
   }, []);
 
@@ -497,6 +850,13 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const opt = QUALITY_OPTIONS.find((o) => o.label === label);
       if (!opt) return;
       saveQualityPref({
+        label: opt.label,
+        maxWidth: opt.maxWidth ?? null,
+        maxHeight: opt.maxHeight ?? null,
+        maxVideoBitrateKbps: opt.maxVideoBitrateKbps ?? null,
+      });
+      // Mirror to state so the checkmark moves immediately with the click.
+      setQualitySelection({
         label: opt.label,
         maxWidth: opt.maxWidth ?? null,
         maxHeight: opt.maxHeight ?? null,
@@ -521,37 +881,24 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         .then(({ data, error }) => {
           if (error) throw new Error("quality switch failed");
           if (!data?.restarted) return;
-          if (data.method === "DIRECT_PLAY") {
-            // Reset walked back up the ladder: the file itself is the media —
-            // offset 0, self-seek to the exact pre-switch position.
-            applyTimelineOffset(0);
-            pendingSeekRef.current = positionMs / 1000;
-          } else if (data.method === "TRANSCODE" && data.segmentFrom != null) {
-            applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
-            pendingSeekRef.current = (positionMs - timelineOffsetRef.current) / 1000;
-          } else {
-            // REMUX: the restarted file starts at the keyframe at-or-before
-            // the target (actualStartMs). Rebase the offset to it.
-            const newOffset = data.actualStartMs ?? positionMs;
-            applyTimelineOffset(newOffset);
-            pendingSeekRef.current = (positionMs - newOffset) / 1000;
-          }
           // The method can change (REMUX -> TRANSCODE when the new caps are
           // below the source resolution, TRANSCODE -> DIRECT_PLAY on reset) —
-          // swap the src accordingly.
+          // swap the src accordingly, then rebase like any other restart.
           setStart((prev) =>
             prev
               ? { ...prev, method: data.method, playlistUrl: data.playlistUrl, streamUrl: data.streamUrl }
               : prev,
           );
+          applyRestart(data.method, data.segmentFrom, data.actualStartMs, positionMs);
           // See audio switch: restart = explicit intent to keep watching; the
           // triggering click's trusted pause must not silence the resume.
           userPausedRef.current = false;
-          setReloadNonce((n) => n + 1);
+          setSrcNonce((n) => n + 1);
+          if (data.method !== start.method) setKeyNonce((n) => n + 1);
         })
         .catch((err: Error) => setError(err.message));
     },
-    [start, applyTimelineOffset],
+    [start, applyTimelineOffset, applyRestart],
   );
 
   // DIRECT_PLAY switches audio client-side via native <video> tracks; honor the
@@ -592,45 +939,6 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     saveAudioPref({ streamIndex: null, id: detail.id, lang: detail.language || null, title: detail.label || null });
   }, []);
 
-  // Scrubbing in TRANSCODE/DIRECT_STREAM: the server must restart ffmpeg at
-  // the target segment, then we reload the (rewritten) playlist. Debounced so
-  // scrub-drag fires one /seek for the final position, not a kill/respawn
-  // storm per scrub event.
-  const handleSeeked = useCallback(() => {
-    if (!start || start.method === "DIRECT_PLAY") return;
-    const player = playerRef.current;
-    if (!player) return;
-    if (skipNextSeekRef.current) {
-      skipNextSeekRef.current = false;
-      return;
-    }
-    if (player.currentTime < 1) return;
-    lastScrubPosRef.current = Math.round(player.currentTime * 1000 + timelineOffsetRef.current);
-    if (scrubTimerRef.current !== null) window.clearTimeout(scrubTimerRef.current);
-    scrubTimerRef.current = window.setTimeout(() => {
-      api
-        .POST("/playback/{sessionId}/seek", {
-          params: { path: { sessionId: start.sessionId } },
-          body: { positionMs: lastScrubPosRef.current },
-        })
-        .then(({ data }) => {
-          if (!data?.restarted) return;
-          if (start.method === "TRANSCODE" && data.segmentFrom != null) {
-            applyTimelineOffset(data.segmentFrom * HLS_SEGMENT_SECONDS * 1000);
-          } else {
-            // REMUX: rebase to the restarted file's actual keyframe start and
-            // self-seek to the exact scrub target so playback lands precisely.
-            const newOffset = data.actualStartMs ?? lastScrubPosRef.current;
-            applyTimelineOffset(newOffset);
-            pendingSeekRef.current = (lastScrubPosRef.current - newOffset) / 1000;
-          }
-          userPausedRef.current = false;
-          setReloadNonce((n) => n + 1);
-        })
-        .catch(() => {});
-    }, 2500);
-  }, [start, applyTimelineOffset]);
-
   const src =
     start?.method === "DIRECT_PLAY"
       ? { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const }
@@ -640,12 +948,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             // MSE, which is exactly why HEVC works here. Restarts (seek past
             // the written frontier, audio switch) truncate and rewrite the
             // file, so the nonce forces a fresh open.
-            src: reloadNonce > 0 ? `${start.streamUrl}?r=${reloadNonce}` : start.streamUrl,
+            src: srcNonce > 0 ? `${start.streamUrl}?r=${srcNonce}` : start.streamUrl,
             type: "video/mp4" as const,
           }
         : start?.playlistUrl
           ? {
-              src: reloadNonce > 0 ? `${start.playlistUrl}?r=${reloadNonce}` : start.playlistUrl,
+              src: srcNonce > 0 ? `${start.playlistUrl}?r=${srcNonce}` : start.playlistUrl,
               type: "application/x-mpegurl" as const,
             }
           : undefined;
@@ -697,7 +1005,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         </div>
       ) : src ? (
         <MediaPlayer
-          key={reloadNonce}
+          key={keyNonce}
           ref={playerRef}
           className="h-full w-full"
           src={src}
@@ -705,7 +1013,6 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           title={title ?? "hokago"}
           onProviderChange={handleProviderChange}
           onCanPlay={handleCanPlay}
-          onSeeked={handleSeeked}
           onPlay={() => {
             userInteractedRef.current = true;
             userPausedRef.current = false;
@@ -740,7 +1047,9 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                 params: { path: { sessionId: start.sessionId } },
                 body: {
                   positionMs: Math.round(player.currentTime * 1000 + timelineOffsetRef.current),
-                  durationMs: player.duration ? Math.round(player.duration * 1000) : undefined,
+                  durationMs: player.duration
+                    ? Math.round(player.duration * 1000 + timelineOffsetRef.current)
+                    : undefined,
                 },
               })
               .catch(() => {});
@@ -763,12 +1072,39 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           </MediaProvider>
           <DefaultVideoLayout
             icons={defaultLayoutIcons}
-            slots={{ settingsMenuItemsEnd: (
-              <>
-                {qualityMenu}
-                {serverAudioMenu}
-              </>
-            ) }}
+            slots={{
+              currentTime: (
+                <PlayerTimeClock
+                  kind="current"
+                  playerRef={playerRef}
+                  offsetMs={timelineOffsetMs}
+                  absoluteDurationMs={absoluteDurationMs}
+                />
+              ),
+              timeDivider: <span className="opacity-60">/</span>,
+              endTime: (
+                <PlayerTimeClock
+                  kind="end"
+                  playerRef={playerRef}
+                  offsetMs={timelineOffsetMs}
+                  absoluteDurationMs={absoluteDurationMs}
+                />
+              ),
+              timeSlider: (
+                <AbsoluteTimeSlider
+                  playerRef={playerRef}
+                  offsetMs={timelineOffsetMs}
+                  absoluteDurationMs={absoluteDurationMs}
+                  onScrub={commitSeek}
+                />
+              ),
+              settingsMenuItemsEnd: (
+                <>
+                  {qualityMenu}
+                  {serverAudioMenu}
+                </>
+              ),
+            }}
           />
         </MediaPlayer>
       ) : (

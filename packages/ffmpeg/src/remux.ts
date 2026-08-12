@@ -10,10 +10,21 @@
  * up front and fragments append as the file grows, so <video> can open and
  * play a file that ffmpeg is still writing — the progressive-playback trick
  * media servers use to start streaming a remux within a second.
+ *
+ * Resume starts (`pipedInput`): ffmpeg's fast input seek (`-ss`) lands on the
+ * keyframe the container's Cue index points at, which can disagree with the
+ * bitstream keyframe the probe reported (sparse mkv Cues) — the stream then
+ * starts at a different media time than the client's reported offset, and
+ * every subtitle drifts by the difference. Instead of seeking at all, the API
+ * feeds the header + the tail from the exact keyframe cluster via stdin
+ * (buildResumeInput) — the demuxer reads sequentially, no seek table
+ * involved, so the output origin is exactly the probed keyframe.
  */
 
 import path from "node:path";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { Readable } from "node:stream";
 
 /** Codecs MP4-safe for Chrome/Safari/Firefox — copied verbatim, no re-encode. */
 const MP4_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "flac", "pcm_s16le"]);
@@ -21,7 +32,7 @@ const MP4_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "flac", "pcm_s16le"]);
 export interface RemuxJobInput {
   inputPath: string;
   outputPath: string;
-  /** Wall-clock seek target (ms) — input-side `-ss` lands on the keyframe at-or-before it, so the file starts there. */
+  /** Media time the output begins at (ms) — the stream origin the client is told about. */
   startMs: number;
   /** Which audio stream to map (track switching) — index among audio-type streams, not absolute container index. */
   audioStreamIndex?: number;
@@ -30,13 +41,29 @@ export interface RemuxJobInput {
   audioCodec?: string | null;
   /** Source video codec (ffprobe name). `-tag:v` must match the copied stream's codec — hvc1 only exists for HEVC. */
   videoCodec?: string | null;
+  /**
+   * Resume mode: read the source from stdin (header + tail from the exact
+   * keyframe cluster) instead of `-ss` — the origin is then exactly startMs
+   * with no container seek-table involved. The caller supplies the stream
+   * via buildResumeInput.
+   */
+  pipedInput?: boolean;
 }
 
 export function buildRemuxArgs(input: RemuxJobInput): string[] {
   const startSeconds = input.startMs / 1000;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
-  if (startSeconds > 0) args.push("-ss", String(startSeconds));
-  args.push("-i", input.inputPath);
+  if (input.pipedInput) {
+    // Resume mode: the caller streams the header + the tail from the exact
+    // keyframe cluster into stdin — no -ss, so the output origin is exactly
+    // startMs (no container seek table involved). The mkv demuxer reads
+    // clusters sequentially and tolerates a pipe (streaming mkv over HTTP is
+    // the same shape).
+    args.push("-i", "pipe:0");
+  } else {
+    if (startSeconds > 0) args.push("-ss", String(startSeconds));
+    args.push("-i", input.inputPath);
+  }
 
   args.push("-map", "0:v:0", "-map", `0:a:${input.audioStreamIndex ?? 0}?`);
   args.push("-c:v", "copy");
@@ -161,5 +188,138 @@ export function patchRemuxMehd(filePath: string, durationMs: number, startMs: nu
     return false;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// --- Resume-stub input (exact-origin REMUX resumes) -------------------------
+//
+// Matroska Cue entries are sparse: ffmpeg's fast `-ss` lands on the keyframe
+// the Cues point at, which is not necessarily the bitstream keyframe the
+// server probed — the stream then starts at a different media time than the
+// reported offset and subs drift by the difference. Rather than seek at all,
+// build a streaming input whose first packet IS the probed keyframe: the
+// file's EBML header (up to the first cluster) followed by everything from
+// the keyframe's cluster onward. The demuxer reads it sequentially; the
+// output origin is exactly the probed keyframe, deterministically.
+
+/** Matroska Cluster element ID (EBML). */
+const CLUSTER_ID = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
+
+const PROBE_MAX_BUFFER = 16 * 1024 * 1024;
+
+function runProbe(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("ffprobe", args, { maxBuffer: PROBE_MAX_BUFFER }, (err, stdout) =>
+      err ? reject(err) : resolve(stdout),
+    );
+  });
+}
+
+/**
+ * Byte offset of the first Cluster in the file — the end of the EBML header
+ * (Segment info + Tracks + attachments), i.e. where the resume stub's header
+ * part ends. ffprobe packet pos points at the first block; the Cluster
+ * element header starts a few bytes (or a large SeekHead) earlier, so walk
+ * back to the nearest Cluster ID.
+ */
+async function probeHeaderEnd(path: string): Promise<number | null> {
+  try {
+    const out = await runProbe([
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_packets", "-show_entries", "packet=pos",
+      "-of", "csv=p=0",
+      "-read_intervals", "0%1",
+      path,
+    ]);
+    const line = out.trim().split("\n").find((l) => /^\d+$/.test(l));
+    if (!line) return null;
+    return await walkBackToCluster(path, Number(line));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Byte offset of the Cluster containing the given keyframe — the resume
+ * stub's tail starts here. Matches the packet whose PTS equals the keyframe
+ * (within tolerance) and walks back to its Cluster ID.
+ */
+async function probeKeyframeClusterStart(path: string, keyframeMs: number): Promise<number | null> {
+  try {
+    const target = keyframeMs / 1000;
+    const out = await runProbe([
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_packets", "-show_entries", "packet=pts_time,pos,flags",
+      "-of", "csv=p=0",
+      "-read_intervals", `${Math.max(0, target - 2)}%${target + 3}`,
+      path,
+    ]);
+    let pos: number | null = null;
+    for (const line of out.trim().split("\n")) {
+      if (!line.includes(",K")) continue;
+      const [ptsStr, posStr] = line.split(",");
+      const pts = Number(ptsStr);
+      if (Number.isNaN(pts) || Math.abs(pts - target) > 0.1) continue;
+      const p = Number(posStr);
+      if (!Number.isNaN(p) && p > 0) {
+        pos = p;
+        break;
+      }
+    }
+    if (pos === null) return null;
+    return await walkBackToCluster(path, pos);
+  } catch {
+    return null;
+  }
+}
+
+/** Nearest preceding Cluster element ID within a 64KB window of `pos`. */
+async function walkBackToCluster(path: string, pos: number): Promise<number | null> {
+  try {
+    const fd = await fs.promises.open(path, "r");
+    try {
+      const windowLen = 64 * 1024;
+      const start = Math.max(0, pos - windowLen);
+      const buf = Buffer.alloc(pos - start);
+      await fd.read(buf, 0, pos - start, start);
+      const idx = buf.lastIndexOf(CLUSTER_ID);
+      if (idx < 0) return null;
+      return start + idx;
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds the stdin stream for a resume remux: the EBML header (up to the
+ * first Cluster) followed by the tail from the keyframe's Cluster onward —
+ * both read from the source, so nothing is copied or rewritten. Returns null
+ * when the source isn't probeable (falls back to the legacy `-ss` remux).
+ */
+export async function buildResumeInput(path: string, keyframeMs: number): Promise<{ input: Readable } | null> {
+  if (keyframeMs <= 0) return null;
+  try {
+    const [headerEnd, clusterStart] = await Promise.all([probeHeaderEnd(path), probeKeyframeClusterStart(path, keyframeMs)]);
+    if (headerEnd === null || clusterStart === null || clusterStart <= headerEnd) return null;
+    // mkvs cluster boundaries start at video keyframes (mkvmerge convention).
+    // If a file ever clusters otherwise, the demuxer reads the stray leading
+    // blocks of the landing cluster — same failure class as the old -ss seek.
+    const header = fs.createReadStream(path, { end: headerEnd - 1 });
+    const tail = fs.createReadStream(path, { start: clusterStart });
+    return {
+      input: Readable.from(
+        (async function* () {
+          for await (const chunk of header) yield chunk;
+          for await (const chunk of tail) yield chunk;
+        })(),
+      ),
+    };
+  } catch {
+    return null;
   }
 }

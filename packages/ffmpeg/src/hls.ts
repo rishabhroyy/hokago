@@ -76,9 +76,21 @@ export function buildTruncatedM3u8(
 export interface SegmentJobInput {
   inputPath: string;
   outputDir: string;
-  /** DIRECT_PLAY/REMUX never reach here — no ffmpeg process is spawned for them. */
+  /** DIRECT_PLAY never reaches here — no ffmpeg process is spawned for it. */
   startSegment: number;
   segmentSeconds: number;
+  /**
+   * The exact input timestamp the output must begin at (media-absolute ms).
+   * Applied as an ACCURATE seek (`-ss` after `-i`): ffmpeg demuxes up to the
+   * target and discards everything before it, so the first output frame is
+   * exactly the frame at (or just after) this timestamp — no keyframe
+   * requirement, no reliance on the container's seek table. The client's
+   * reported timeline offset (actualStartMs) therefore equals the browser's
+   * timeline origin with zero drift, whatever the source container.
+   * Without it (one-off tooling) the -ss point is derived from the segment
+   * grid as before.
+   */
+  seekMs?: number;
   videoCodec?: string;
   audioCodec?: string;
  /** Which audio stream to map (track switching) — index among audio-type streams, not absolute container index. Defaults to 0. */
@@ -117,21 +129,29 @@ function escapeFilterPath(p: string): string {
 /**
  * `-f segment` muxer, not `-f hls` — the app owns playlist content (already
  * built by buildM3u8), ffmpeg only ever produces the .ts bytes.
- * `-ss` before `-i` seeks the input for a fast keyframe-aligned-ish start;
+ * `-ss` AFTER `-i` is an ACCURATE seek: ffmpeg demuxes to the target and
+ * discards everything before it, so the output begins at the exact requested
+ * input timestamp — frame-exact by construction, independent of the
+ * container's seek table (which can land at a different keyframe than the
+ * bitstream probe reports, drifting the client's timeline offset by the whole
+ * keyframe gap) and of source B-frames/audio priming. The muxer normalizes
+ * the output timeline to ~0, so the client's offset (actualStartMs) matches
+ * the browser timeline origin with zero drift.
  * `-segment_start_number` keeps output filenames matching the segment index
  * the playlist already promised. `-loglevel error` keeps stderr to
  * failures only (the tail that TranscodeJob.lastError captures).
  */
 export function buildFfmpegArgs(input: SegmentJobInput): string[] {
-  const startSeconds = input.startSegment * input.segmentSeconds;
+  const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
-  // A 100ms trim on the very first segment drops a source pre-roll (leading
-  // keyframe lands ~1.4s in while audio starts at 0) without the garbage
-  // frames reaching the player. Resume seeks below use the existing -ss.
-  if (startSeconds === 0) args.push("-ss", "0.1");
-  if (startSeconds > 0) args.push("-ss", String(startSeconds));
   args.push("-i", input.inputPath);
+  // Accurate seek. A 100ms trim on a fresh start (seekMs absent → segment
+  // grid ~0) drops the source pre-roll (leading keyframe lands ~1.4s in
+  // while audio starts at 0) without the garbage frames reaching the player;
+  // every seeked start lands on the exact target instead.
+  if (startSeconds <= 0.1) args.push("-ss", "0.1");
+  else args.push("-ss", String(startSeconds));
 
   const videoFilters: string[] = [];
   if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);

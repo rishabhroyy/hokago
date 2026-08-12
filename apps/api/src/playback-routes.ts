@@ -1,6 +1,7 @@
 import { execFileSync, execFile } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import type { Readable } from "node:stream";
 import path from "node:path";
 import { z } from "zod";
 
@@ -16,7 +17,7 @@ import {
   HLS_SEGMENT_SECONDS,
 } from "@hokago/ffmpeg/device-profile";
 import { buildM3u8, buildTruncatedM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
-import { buildRemuxArgs, patchRemuxMehd } from "@hokago/ffmpeg/remux";
+import { buildRemuxArgs, buildResumeInput, patchRemuxMehd } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { broadcastPresence } from "./presence.js";
 import { acquireTranscodeSlot, releaseTranscodeSlot } from "./transcode-slot.js";
@@ -240,11 +241,16 @@ async function resumePositionMs(profileId: string, mediaItemId: string, duration
 }
 
 /**
- * The keyframe ffmpeg's fast input seek (`-ss`) actually lands on for a target:
- * the last keyframe at-or-before it. REMUX resumes with that exact packet, so
- * the client's timeline↔media offset (and the stored session position) must
- * use K, not the requested resume point — otherwise subs/positions drift by
- * the whole keyframe gap (seconds on sparsely-keyed sources). Bounded read
+ * The keyframe ffmpeg's fast input seek (`-ss`) lands on for a target: the
+ * last keyframe at-or-before it. REMUX-only now: copy mode can only begin at
+ * a keyframe packet, and the mp4 muxer normalizes the output timeline to 0,
+ * so REMUX streams start at exactly this keyframe's media time and the
+ * reported startMs equals the browser's actual timeline origin. TRANSCODE no
+ * longer probes: it uses an accurate seek (`-ss` after `-i`) whose origin is
+ * the exact requested timestamp by construction, so its startMs is the raw
+ * resume/target — no keyframe round-trip, no container-seek-table ambiguity
+ * (sparse indexes can land at a different keyframe than the bitstream probe
+ * reports, which is what drifted sub/clock sync chronically). Bounded read
  * keeps the scan to the resume position. Async: an ffprobe of a long file can
  * take seconds, and a synchronous spawn would freeze the whole API.
  */
@@ -283,20 +289,6 @@ async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<n
     // Probe failure — fall back to the requested position (current behavior).
     return positionMs;
   }
-}
-
-/**
- * The exact media time a restarted stream's output starts at, from the probed
- * keyframe. TRANSCODE re-encodes: buildFfmpegArgs fast-seeks with
- * `-ss segmentFrom*segmentSeconds` (it derives the seek from startSegment,
- * never from the raw keyframe) and the encoder forces a keyframe at output
- * t=0 — so the output always begins at the segment-aligned `-ss` point, not
- * at the probed keyframe K ∈ [B, B+6s). Reporting K as the offset would
- * drift the clock/sub-sync by up to a segment per restart; the true start is
- * B. REMUX copies: output starts at the probed keyframe K verbatim.
- */
-function anchoredStreamStartMs(probeMs: number, isRemux: boolean): number {
-  return isRemux ? probeMs : Math.floor(probeMs / (HLS_SEGMENT_SECONDS * 1000)) * HLS_SEGMENT_SECONDS * 1000;
 }
 
 /**
@@ -423,6 +415,7 @@ async function spawnTranscodeJob(
   segmentFrom: number,
   outDir: string,
   durationMs: number,
+  input?: Readable,
 ): Promise<{ transcode: RunningTranscode; jobId: string }> {
   const job = await db.transcodeJob.create({
     data: {
@@ -445,7 +438,7 @@ async function spawnTranscodeJob(
     void setTranscodeJobTerminal(job.id, result.code === 0 ? "DONE" : "FAILED", result.code === 0 ? null : result.stderr.slice(0, 2000))
       .catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
     void truncatePlaylistOnExit(sessionId, transcode.pid, outDir, durationMs, segmentFrom);
-  });
+  }, input);
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
   return { transcode, jobId: job.id };
 }
@@ -495,14 +488,16 @@ async function restartTranscode(
   // live.remux null from the TRANSCODE leg — consulting it here would
   // silently start a transcode and report REMUX).
   const isRemux = (overrides?.method ?? live.method) === "REMUX";
-  // Both methods fast-seek with `-ss`; the exact stream start differs per
-  // method (TRANSCODE re-encodes from the segment-aligned -ss point, REMUX
-  // copies from the probed keyframe) — anchoredStreamStartMs reports the
-  // true one so the client's timeline offset, the playlist MEDIA-SEQUENCE,
-  // and what ffmpeg writes stay mutually consistent.
-  const probeMs = await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs);
-  const startMs = anchoredStreamStartMs(probeMs, isRemux);
+  // The stream origin must equal the client's reported offset exactly, or
+  // sub/clock sync drifts. REMUX fast-seeks and can only start at the probed
+  // keyframe; TRANSCODE accurate-seeks, so its origin is the raw target.
+  const startMs = isRemux ? await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
   const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+  // Resume via a piped stub (header + tail from the exact keyframe cluster):
+  // the container seek table lies (Cue → different keyframe than the bitstream
+  // probe), so -ss on mkv would start at a different media time than startMs
+  // and subs drift. Falls back to the legacy -ss remux when probing fails.
+  const resumeInput = isRemux ? await buildResumeInput(live.mediaFile.path, startMs) : null;
   const args = isRemux
     ? buildRemuxArgs({
         inputPath: live.mediaFile.path,
@@ -518,12 +513,16 @@ async function restartTranscode(
         audioStreamIndex: live.audioStreamIndex,
         audioCodec: live.audioCodec,
         videoCodec: live.mediaFile.videoCodec,
+        pipedInput: resumeInput !== null,
       })
     : buildFfmpegArgs({
         inputPath: live.mediaFile.path,
         outputDir: live.outDir,
         startSegment: segmentFrom,
         segmentSeconds: HLS_SEGMENT_SECONDS,
+        // -ss targets the stream origin exactly — the reported startMs — so
+        // the browser timeline origin matches the client offset.
+        seekMs: startMs,
         videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
         audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
         audioStreamIndex: live.audioStreamIndex,
@@ -562,7 +561,7 @@ async function restartTranscode(
     // Truthful playlist for the *session's current* outDir — the caller's
     // spread object (fresh per-track/per-quality dir) is what's live.
     void truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
-  });
+  }, resumeInput?.input);
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
 
   return { transcode, jobId: job.id, startMs, segmentFrom };
@@ -600,17 +599,13 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     const profile = normalizeDeviceProfile(deviceProfile);
     const resumeMs = await resumePositionMs(profileId, mediaItemId, candidate.durationMs);
 
-    // REMUX and TRANSCODE both fast-seek with `-ss`; the exact stream start
-    // differs per method (TRANSCODE re-encodes from the segment-aligned -ss
-    // point, REMUX copies from the probed keyframe) — report the true one so
-    // the client's timeline offset, the playlist MEDIA-SEQUENCE, and what
-    // ffmpeg writes stay mutually consistent. Otherwise the clock drifts by
-    // the keyframe gap and the first listed segment mismatches the first
-    // written one (seek/quality switches stall up to a segment).
+    // The stream origin must equal the client's reported offset exactly, or
+    // sub/clock sync drifts. REMUX fast-seeks and can only start at the
+    // probed keyframe; TRANSCODE accurate-seeks (`-ss` after `-i`), so its
+    // origin is the raw resume position — frame-exact, no keyframe
+    // round-trip.
     const isRemux = decision.method === "REMUX";
-    const probeMs =
-      isRemux || decision.method === "TRANSCODE" ? await keyframeAtOrBeforeMs(candidate.path, resumeMs) : resumeMs;
-    const startMs = anchoredStreamStartMs(probeMs, isRemux);
+    const startMs = isRemux ? await keyframeAtOrBeforeMs(candidate.path, resumeMs) : resumeMs;
 
     const session = await db.playbackSession.create({
       data: {
@@ -651,6 +646,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
 
     const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
     const outFile = path.join(outDir, "stream.mp4");
+    // REMUX resume via a piped stub (header + tail from the exact keyframe
+    // cluster): the mkv Cue table can point at a different keyframe than the
+    // bitstream probe, so -ss would start elsewhere than the reported startMs
+    // and subs drift. Falls back to the legacy -ss remux when probing fails.
+    const resumeInput = isRemux ? await buildResumeInput(candidate.path, startMs) : null;
     const args = isRemux
       ? buildRemuxArgs({
           inputPath: candidate.path,
@@ -660,12 +660,16 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           audioStreamIndex: audioIndex,
           audioCodec: candidate.input.audioCodec,
           videoCodec: candidate.input.videoCodec,
+          pipedInput: resumeInput !== null,
         })
       : buildFfmpegArgs({
           inputPath: candidate.path,
           outputDir: outDir,
           startSegment: segmentFrom,
           segmentSeconds: HLS_SEGMENT_SECONDS,
+          // -ss targets the stream origin exactly — the reported startMs —
+          // so the browser timeline origin matches the client offset.
+          seekMs: startMs,
           videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
           audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
           audioStreamIndex: audioIndex,
@@ -688,6 +692,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       segmentFrom,
       outDir,
       candidate.durationMs,
+      resumeInput?.input,
     );
 
     let playlistUrl: string | null = null;
@@ -730,9 +735,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // once the stream is open; actualStartMs carries the anchored origin.
       resumePositionMs: resumeMs,
       absoluteDurationMs: candidate.durationMs,
-      // Exact media time the stream starts at (the keyframe the server's fast
-      // seek lands on, or the segment boundary of that keyframe) — the
-      // client's timeline offset.
+      // Exact media time the stream starts at: the raw resume position for
+      // TRANSCODE (accurate seek), the keyframe at-or-before it for REMUX —
+      // the client's timeline offset.
       actualStartMs: startMs,
     };
     },
@@ -1072,7 +1077,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
       if (!isRemux) {
         // Written after the restart so the first listed segment matches the
-        // keyframe-anchored segment the new child actually starts at.
+        // segment the new child actually starts at.
         const m3u8 = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
         await writePlaylistAtomically(newOutDir, m3u8);
       }
@@ -1208,12 +1213,16 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         );
         await mkdir(newOutDir, { recursive: true });
 
-        const startMs = anchoredStreamStartMs(
-          await keyframeAtOrBeforeMs(candidate.path, targetMs),
-          newMethod === "REMUX",
-        );
+        // REMUX fast-seeks and must start at the probed keyframe; TRANSCODE
+        // accurate-seeks, so its origin is the raw target position.
+        const startMs = newMethod === "REMUX" ? await keyframeAtOrBeforeMs(candidate.path, targetMs) : targetMs;
         const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
         const toneMap = needsToneMap(candidate.input.isHdr, newProfile.supportsHdr);
+        // REMUX resume via a piped stub — the mkv Cue table can point at a
+        // different keyframe than the bitstream probe, which would drift subs
+        // against the reported startMs. Falls back to -ss when probing fails.
+        const resumeInput =
+          newMethod === "REMUX" ? await buildResumeInput(candidate.path, startMs) : null;
         const args =
           newMethod === "REMUX"
             ? buildRemuxArgs({
@@ -1224,12 +1233,16 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
                 audioStreamIndex: candidate.relativeAudioIndex,
                 audioCodec: candidate.input.audioCodec,
                 videoCodec: candidate.input.videoCodec,
+                pipedInput: resumeInput !== null,
               })
             : buildFfmpegArgs({
                 inputPath: candidate.path,
                 outputDir: newOutDir,
                 startSegment: segmentFrom,
                 segmentSeconds: HLS_SEGMENT_SECONDS,
+                // -ss targets the stream origin exactly — the reported
+                // startMs.
+                seekMs: startMs,
                 videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs),
                 audioCodec: pickAudioEncoder(newProfile.supportedAudioCodecs),
                 audioStreamIndex: candidate.relativeAudioIndex,
@@ -1254,6 +1267,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           segmentFrom,
           newOutDir,
           candidate.durationMs,
+          resumeInput?.input,
         );
 
         liveSessions.set(req.params.sessionId, {

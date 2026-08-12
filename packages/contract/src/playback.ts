@@ -45,10 +45,11 @@ export const StartPlaybackResponse = z.object({
    */
   absoluteDurationMs: z.number().default(0),
   /**
-   * Exact media time the stream starts at (the keyframe the server's fast
-   * seek lands on, or that keyframe's segment boundary for TRANSCODE) — the
-   * client's timeline offset. The client self-seeks from here to
-   * resumePositionMs so continue-watching lands on the exact stored position.
+   * Exact media time the stream starts at — the client's timeline offset.
+   * TRANSCODE (accurate seek) starts at the raw resume/target position,
+   * frame-exact; REMUX starts at the keyframe at-or-before it. The client
+   * self-seeks from here to resumePositionMs so continue-watching lands on
+   * the exact stored position.
    */
   actualStartMs: z.number().optional(),
 });
@@ -64,9 +65,12 @@ export const SeekResponse = z.object({
   segmentFrom: z.number(),
   pid: z.number(),
   killedPid: z.number().optional(),
-  /** REMUX restarts land on the keyframe at-or-before the target — the position
-   *  the restarted stream actually starts at. The client's timeline offset uses
-   *  this so subs/positions stay exact after a restart. */
+  /**
+   * TRANSCODE (accurate seek) restarts land on the exact target; REMUX lands
+   * on the keyframe at-or-before it — the position the restarted stream
+   * actually starts at. The client's timeline offset uses this so subs and
+   * positions stay exact after a restart.
+   */
   actualStartMs: z.number().optional(),
 });
 
@@ -98,8 +102,11 @@ export const QualitySwitchResponse = z.object({
   segmentFrom: z.number().nullable(),
   pid: z.number().nullable(),
   killedPid: z.number().optional(),
-  /** REMUX restarts land on the keyframe at-or-before the target — the position
-   *  the restarted stream actually starts at. */
+  /**
+   * TRANSCODE (accurate seek) restarts land on the exact target; REMUX lands
+   * on the keyframe at-or-before it — the position the restarted stream
+   * actually starts at.
+   */
   actualStartMs: z.number().optional(),
   playlistUrl: z.string().nullable(),
   streamUrl: z.string().nullable(),
@@ -110,8 +117,11 @@ export const AudioTrackSwitchResponse = z.object({
   segmentFrom: z.number(),
   pid: z.number(),
   killedPid: z.number(),
-  /** REMUX restarts land on the keyframe at-or-before the target — the position
-   *  the restarted stream actually starts at. */
+  /**
+   * TRANSCODE (accurate seek) restarts land on the exact target; REMUX lands
+   * on the keyframe at-or-before it — the position the restarted stream
+   * actually starts at.
+   */
   actualStartMs: z.number().optional(),
 });
 

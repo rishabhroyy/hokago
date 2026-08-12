@@ -6,6 +6,7 @@ import { LibraryView } from "./views/LibraryView";
 import { DetailView } from "./views/DetailView";
 import { LoginView } from "./views/LoginView";
 import { PrefsView } from "./views/PrefsView";
+import { SearchView } from "./views/SearchView";
 import { NotFoundView } from "./views/NotFoundView";
 import { WatchPage } from "./WatchPage";
 import { AdminView } from "./admin/AdminView";
@@ -26,6 +27,8 @@ function Shell() {
       return <WatchPage mediaFileId={route.mediaFileId} />;
     case "prefs":
       return <PrefsView />;
+    case "search":
+      return <SearchView initialQuery={route.q} />;
     case "notfound":
       return <NotFoundView />;
     default:

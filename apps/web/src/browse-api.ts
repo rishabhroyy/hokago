@@ -25,6 +25,20 @@ export async function fetchLibraryItems(id: string): Promise<MediaCard[]> {
   return (data ?? []).map(fixCreatedAt);
 }
 
+// Search index: every top-level title across all libraries, fetched lazily the
+// first time search is used, then cached for the session (libraries only
+// change via admin action).
+let searchIndexPromise: Promise<MediaCard[]> | null = null;
+
+export function fetchSearchIndex(): Promise<MediaCard[]> {
+  if (!searchIndexPromise) {
+    searchIndexPromise = fetchLibraries().then((libs) =>
+      Promise.all(libs.map((l) => fetchLibraryItems(l.id))).then((lists) => lists.flat()),
+    );
+  }
+  return searchIndexPromise;
+}
+
 // /home rows carry the same z.coerce.date()→string widening — coerce every
 // card so callers get the real contract shape.
 type ClientCard = Omit<MediaCard, "createdAt"> & { createdAt: string | null };

@@ -6,6 +6,7 @@ type Paths = { vb: string; body: string };
 
 const ICONS = {
   "search": { vb: "0 0 24 24", body: `<circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` },
+  "x": { vb: "0 0 24 24", body: `<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>` },
   "play": { vb: "0 0 24 24", body: `<path d="M6 4l14 8-14 8V4Z" fill="currentColor"/>` },
   "pause": { vb: "0 0 24 24", body: `<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>` },
   "plus": { vb: "0 0 24 24", body: `<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` },

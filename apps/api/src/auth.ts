@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { argon2id, argon2Verify } from "hash-wasm";
 import fastifyJwt from "@fastify/jwt";
+import { PrismaClient } from "@hokago/db";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 // Pure-WASM argon2id (hash-wasm), not the native `argon2` package — avoids a
@@ -46,6 +47,8 @@ export const ACCESS_TOKEN_COOKIE = "hokago_access";
 export interface AccessTokenPayload {
   accountId: string;
   isAdmin: boolean;
+  /** Session row backing this token — lets the guard re-check revocation/disable live. */
+  sessionId?: string;
 }
 
 declare module "fastify" {
@@ -67,6 +70,45 @@ function cookieToken(req: FastifyRequest): string | null {
     .map((c) => c.trim())
     .find((c) => c.startsWith(`${ACCESS_TOKEN_COOKIE}=`));
   return cookie ? decodeURIComponent(cookie.slice(ACCESS_TOKEN_COOKIE.length + 1)) : null;
+}
+
+// The JWT carries accountId/isAdmin frozen at sign time (15m TTL), so a
+// revoked session or a disabled account would otherwise keep API access until
+// the token expires. Re-check both against the DB on every authenticated
+// request, via a short-TTL in-memory cache (segment/media routes authenticate
+// every few seconds per stream — a point query per request would hammer the DB
+// for no real win). Revoke/logout call invalidateSessionLiveness to make the
+// kill immediate.
+const db = new PrismaClient();
+const LIVENESS_TTL_MS = 30_000;
+interface Liveness {
+  accountDisabled: boolean;
+  revoked: boolean;
+}
+const livenessCache = new Map<string, { value: Liveness; expires: number }>();
+
+export async function sessionIsLive(sessionId: string): Promise<boolean> {
+  const now = Date.now();
+  const cached = livenessCache.get(sessionId);
+  if (cached && cached.expires > now) {
+    return !cached.value.accountDisabled && !cached.value.revoked;
+  }
+  const session = await db.session.findUnique({
+    where: { id: sessionId },
+    select: { revokedAt: true, account: { select: { disabled: true } } },
+  });
+  const value: Liveness = {
+    // A missing session is a revoked session.
+    accountDisabled: session?.account.disabled ?? true,
+    revoked: !session || session.revokedAt !== null,
+  };
+  livenessCache.set(sessionId, { value, expires: now + LIVENESS_TTL_MS });
+  return !value.accountDisabled && !value.revoked;
+}
+
+/** Drop the cached liveness verdict so a revocation takes effect immediately. */
+export function invalidateSessionLiveness(sessionId: string): void {
+  livenessCache.delete(sessionId);
 }
 
 export async function registerAuth(app: FastifyInstance): Promise<void> {
@@ -93,6 +135,13 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
         if (token) payload = app.jwt.verify<AccessTokenPayload>(token);
       }
       if (!payload) throw new Error("no valid token");
+      // Re-check the session+account live state carried by the token. Tokens
+      // minted before sessionId existed (rolling deploys, old sessions) skip
+      // the check until their next refresh re-mints with a sessionId.
+      if (payload.sessionId && !(await sessionIsLive(payload.sessionId))) {
+        reply.code(401).send({ error: "unauthorized" });
+        return;
+      }
       req.accountId = payload.accountId;
       req.isAdmin = payload.isAdmin;
     } catch {

@@ -8,7 +8,8 @@
     "./metadata": "./dist/metadata.js",
     "./probe": "./dist/probe.js",
     "./child-registry": "./dist/child-registry.js",
-    "./trickplay": "./dist/trickplay.js"
+    "./trickplay": "./dist/trickplay.js",
+    "./artwork": "./dist/artwork.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

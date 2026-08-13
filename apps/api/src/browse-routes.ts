@@ -6,6 +6,8 @@ import {
   LibraryItemsParams,
   MediaItemDetailParams,
   MediaItemDetailQuery,
+  MediaItemFilesParams,
+  MediaItemFilesResponse,
   NotFoundError,
 } from "@hokago/contract/browse";
 import { z } from "zod";
@@ -208,6 +210,66 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
         })),
       })),
     };
+    },
+  );
+
+  // Every playable file of an item, not just the primary one browse exposes.
+  // The download/version picker needs this: multi-file episodes, alternate
+  // files, and the full track listing per file.
+  app.get(
+    "/media-items/:id/files",
+    {
+      preHandler: app.authenticate,
+      schema: { params: MediaItemFilesParams, response: { 200: MediaItemFilesResponse, 404: NotFoundError } },
+    },
+    async (req, reply) => {
+      const item = await db.mediaItem.findUnique({ where: { id: req.params.id }, select: { id: true } });
+      if (!item) return reply.code(404).send({ error: "media item not found" });
+
+      const files = await db.mediaFile.findMany({
+        where: { mediaItemId: item.id },
+        include: { streams: true, subtitleTracks: true },
+        orderBy: { createdAt: "asc" },
+      });
+
+      return files.map((f, i) => {
+        const video = f.streams.find((s) => s.type === "VIDEO");
+        return {
+          mediaFileId: f.id,
+          isPrimary: i === 0,
+          container: f.container,
+          durationMs: f.durationMs,
+          sizeBytes: Number(f.sizeBytes),
+          bitrate: f.bitrate,
+          video: video
+            ? {
+                codec: video.codec,
+                width: video.width,
+                height: video.height,
+                frameRate: video.frameRate,
+                isHdr: video.hdrMeta != null,
+              }
+            : null,
+          audioTracks: f.streams
+            .filter((s) => s.type === "AUDIO")
+            .map((s) => ({
+              streamIndex: s.streamIndex,
+              codec: s.codec,
+              lang: s.lang,
+              title: s.title,
+              isDefault: s.isDefault,
+            })),
+          subtitleTracks: f.subtitleTracks.map((t) => ({
+            id: t.id,
+            lang: t.lang,
+            title: t.title,
+            format: t.format,
+            forced: t.forced,
+            sdh: t.sdh,
+            requiresBurnIn: t.requiresBurnIn,
+          })),
+        };
+      });
     },
   );
 }

@@ -1,4 +1,4 @@
-/** subtitle/audio track listing and font linking for a media file. Binary byte-range/font/artwork routes are never JSON and stay outside this contract. */
+/** subtitle/audio track listing and font linking for a media file. Binary byte routes (direct file, subtitle text, fonts, trickplay sheets, HLS) are registered in openapi.ts typed as strings — they stay out of the JSON schemas here. */
 
 import { z } from "zod";
 

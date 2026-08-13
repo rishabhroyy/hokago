@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@hokago/db": "workspace:*",
+    "@hokago/ffmpeg": "workspace:*",
     "@hokago/metadata": "workspace:*",
     "@hokago/providers": "workspace:*",
     "@hokago/queue": "workspace:*",

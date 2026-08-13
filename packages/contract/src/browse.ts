@@ -1,6 +1,10 @@
 /** / — library browsing and item detail contracts. */
 
 import { z } from "zod";
+import {
+  AudioTrackInfo as MediaFileAudioTrackInfo,
+  SubtitleTrackInfo as MediaFileSubtitleTrackInfo,
+} from "./media-files.js";
 
 export const MediaKind = z.enum(["MOVIE", "SERIES", "SEASON", "EPISODE"]);
 export const ContentProfile = z.enum(["GENERAL", "ANIME"]);
@@ -106,3 +110,30 @@ export const MediaItemDetail = MediaCard.extend({
 export type MediaItemDetail = z.infer<typeof MediaItemDetail>;
 
 export const NotFoundError = z.object({ error: z.string() });
+
+/** One playable file of a media item — everything a download/version picker needs. */
+export const MediaFileDescriptor = z.object({
+  mediaFileId: z.string(),
+  /** The file browse/detail's `mediaFileId` points at — the primary playable. */
+  isPrimary: z.boolean(),
+  container: z.string().nullable(),
+  durationMs: z.number().int().nullable(),
+  sizeBytes: z.number().nullable(),
+  bitrate: z.number().int().nullable(),
+  video: z
+    .object({
+      codec: z.string().nullable(),
+      width: z.number().int().nullable(),
+      height: z.number().int().nullable(),
+      frameRate: z.number().nullable(),
+      isHdr: z.boolean(),
+    })
+    .nullable(),
+  audioTracks: z.array(MediaFileAudioTrackInfo),
+  subtitleTracks: z.array(MediaFileSubtitleTrackInfo),
+});
+export type MediaFileDescriptor = z.infer<typeof MediaFileDescriptor>;
+
+export const MediaItemFilesParams = z.object({ id: z.string() });
+
+export const MediaItemFilesResponse = z.array(MediaFileDescriptor);

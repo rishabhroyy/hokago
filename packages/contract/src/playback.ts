@@ -197,4 +197,23 @@ export type SetWatchedBody = z.infer<typeof SetWatchedBody>;
 
 export const SetWatchedResponse = z.object({ ok: z.boolean(), watched: z.boolean() });
 
+/** One row of offline watch progress a native client replays on reconnect. */
+export const WatchStateSyncEntry = z.object({
+  mediaItemId: z.string(),
+  positionMs: z.number().int().nonnegative(),
+  durationMs: z.number().int().positive().optional(),
+  watched: z.boolean().optional(),
+  lastWatchedAt: z.coerce.date().optional(),
+});
+export type WatchStateSyncEntry = z.infer<typeof WatchStateSyncEntry>;
+
+/** Bulk upsert of per-profile playback state from offline playback sessions. */
+export const WatchStateSyncBody = z.object({
+  profileId: z.string(),
+  entries: z.array(WatchStateSyncEntry).max(1000),
+});
+export type WatchStateSyncBody = z.infer<typeof WatchStateSyncBody>;
+
+export const WatchStateSyncResponse = z.object({ synced: z.number() });
+
 export const ErrorResponse = z.object({ error: z.string() });

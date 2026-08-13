@@ -1,4 +1,7 @@
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
 import { PrismaClient } from "@hokago/db";
 import {
@@ -11,17 +14,22 @@ import {
   artworkJobId,
   trickplayJobId,
   metadataJobId,
+  downloadJobId,
   type ScanJobData,
   type ArtworkJobData,
   type TrickplayJobData,
   type MetadataJobData,
+  type DownloadJobData,
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
 import { probeFile } from "@hokago/scanner/probe";
 import { generateTrickplaySheets } from "@hokago/scanner/trickplay";
-import { killTrackedChildren, trackedPidCount } from "@hokago/scanner/child-registry";
+import { killTrackedChildren, trackedPidCount, trackPid, untrackPid } from "@hokago/scanner/child-registry";
+import { configDir } from "@hokago/scanner/artwork";
+import { buildDownloadArgs } from "@hokago/ffmpeg/download";
+import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
 import { AniListProvider, JikanProvider, TvMazeProvider, WikidataBridge } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
@@ -59,6 +67,18 @@ const trickplayQueue = new Queue<TrickplayJobData>(QUEUE_NAMES.TRICKPLAY, {
     backoff: { type: "exponential", delay: 2000 },
     // Same deterministic-jobId argument as artwork above: a kept completed
     // trickplay job would permanently block re-enqueue for a changed file.
+    removeOnComplete: true,
+    removeOnFail: true,
+  },
+});
+// User-initiated offline downloads (the API enqueues; the row in Postgres is
+// truth and survives the job). Three attempts with backoff, then the job
+// disappears and the Download row stays FAILED for the client to see.
+const downloadQueue = new Queue<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, {
+  connection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5000 },
     removeOnComplete: true,
     removeOnFail: true,
   },
@@ -274,6 +294,191 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
     throw err; // let BullMQ retry with backoff until the threshold is hit
   }
 }
+
+// ── Downloads ────────────────────────────────────────────────────────────────
+
+const SUBTITLE_MUX: Record<string, string> = { ASS: "ass", SSA: "ass", SRT: "srt", VTT: "webvtt" };
+const SUBTITLE_EXT: Record<string, string> = { ASS: "ass", SSA: "ass", SRT: "srt", VTT: "vtt" };
+const FONT_EXT: Record<string, string> = { WOFF2: "woff2", WOFF: "woff", TTF: "ttf", OTF: "otf", TTC: "ttc" };
+
+/** Same convention buildCandidateInput/static-routes use: ffmpeg's `-map 0:s:N` is relative to subtitle-type streams only. */
+async function subtitleRelativeIndex(mediaFileId: string, absoluteStreamIndex: number): Promise<number> {
+  const preceding = await db.mediaStream.count({
+    where: { mediaFileId, type: "SUBTITLE", streamIndex: { lt: absoluteStreamIndex } },
+  });
+  return preceding;
+}
+
+/** Font bytes live at <configDir>/fonts/<hash><ext> — content-addressed, never a URL. */
+function resolveFontStorePath(hash: string, ext: string): string {
+  return path.join(configDir(), "fonts", `${hash}${ext}`);
+}
+
+/**
+ * Runs ffmpeg to completion, rejecting with the stderr tail on failure.
+ * spawnFfmpeg tracks the pid in the ffmpeg package's registry (the API's
+ * registry); the worker's shutdown sweeps the *scanner* registry, so the
+ * download's child is also tracked there — otherwise a SIGTERM mid-encode
+ * would orphan the ffmpeg process.
+ */
+async function runFfmpegToCompletion(args: string[]): Promise<void> {
+  const { child } = spawnFfmpeg(args);
+  trackPid(child.pid);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
+      child.on("error", reject);
+    });
+  } finally {
+    untrackPid(child.pid);
+  }
+}
+
+interface DownloadManifest {
+  media: { filename: string; sizeBytes: number | null } | null;
+  subtitles: { trackId: string; filename: string; format: string; lang: string | null }[];
+  fonts: { hash: string; filename: string }[];
+}
+
+/**
+ * Produces a packaged offline artifact into /config/downloads/<id> (built in a
+ * sibling tmp dir and renamed in atomically). A download deleted while this
+ * runs (API DELETE) leaves the Download row gone — the finalize step detects
+ * that and just cleans up. Retries (attempts: 3) re-run the whole encode.
+ */
+async function processDownload(job: Job<DownloadJobData>): Promise<void> {
+  const { downloadId } = job.data;
+  const download = await db.download.findUnique({
+    where: { id: downloadId },
+    include: { mediaFile: { include: { subtitleTracks: true, fonts: { include: { font: true } } } } },
+  });
+  if (!download) return; // deleted while queued
+
+  const baseDir = path.join(configDir(), "downloads");
+  const tmpDir = path.join(baseDir, `.${downloadId}.tmp`);
+  const finalDir = path.join(baseDir, downloadId);
+  await mkdir(baseDir, { recursive: true });
+  await rm(tmpDir, { recursive: true, force: true });
+  await mkdir(tmpDir, { recursive: true });
+
+  try {
+    await db.download.update({ where: { id: downloadId }, data: { status: "PROCESSING", error: null } });
+    const mediaFile = download.mediaFile;
+    const subtitles: DownloadManifest["subtitles"] = [];
+    const fonts: DownloadManifest["fonts"] = [];
+
+    // Media: copy the original, or encode a self-contained MP4.
+    let mediaFilename: string;
+    if (download.variant === "original") {
+      mediaFilename = path.basename(mediaFile.path);
+      await copyFile(mediaFile.path, path.join(tmpDir, mediaFilename));
+    } else {
+      const burnTrack = download.subtitleTrackIds
+        .map((id) => mediaFile.subtitleTracks.find((t) => t.id === id))
+        .find((t): t is NonNullable<typeof t> => !!t?.requiresBurnIn);
+      const outputPath = path.join(tmpDir, "media.mp4");
+      await runFfmpegToCompletion(
+        buildDownloadArgs({
+          inputPath: mediaFile.path,
+          outputPath,
+          maxHeight: download.targetHeight ?? undefined,
+          maxVideoBitrateKbps: download.targetBitrateKbps ?? undefined,
+          subtitleBurnIn: burnTrack
+            ? { streamIndex: burnTrack.streamIndex ?? 0, bitmap: true }
+            : undefined,
+        }),
+      );
+      mediaFilename = "media.mp4";
+    }
+
+    // Sidecar subtitles: text formats only (bitmap tracks were either rejected
+    // at creation for originals or burned into the transcode above).
+    for (const trackId of download.subtitleTrackIds) {
+      const track = mediaFile.subtitleTracks.find((t) => t.id === trackId);
+      if (!track || track.requiresBurnIn) continue;
+      const muxer = SUBTITLE_MUX[track.format];
+      if (!muxer) continue;
+      let content: Buffer;
+      if (track.path && existsSync(track.path)) {
+        content = await readFile(track.path);
+      } else if (track.streamIndex !== null) {
+        const relIndex = await subtitleRelativeIndex(mediaFile.id, track.streamIndex);
+        content = execFileSync("ffmpeg", [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          mediaFile.path,
+          "-map",
+          `0:s:${relIndex}`,
+          "-f",
+          muxer,
+          "pipe:1",
+        ]);
+      } else {
+        continue;
+      }
+      const filename = `subtitle-${trackId}.${SUBTITLE_EXT[track.format]}`;
+      await writeFile(path.join(tmpDir, filename), content);
+      subtitles.push({ trackId, filename, format: track.format, lang: track.lang });
+    }
+
+    // Fonts any packaged ASS track needs — the offline subtitle renderer has
+    // to map the same hashes JASSUB uses online.
+    const needsFonts = download.subtitleTrackIds.some((id) => {
+      const t = mediaFile.subtitleTracks.find((x) => x.id === id);
+      return t && (t.format === "ASS" || t.format === "SSA");
+    });
+    if (needsFonts) {
+      const fontsDir = path.join(tmpDir, "fonts");
+      await mkdir(fontsDir, { recursive: true });
+      for (const link of mediaFile.fonts) {
+        const ext = FONT_EXT[link.font.format] ?? "ttf";
+        const fontPath = resolveFontStorePath(link.font.hash, ext);
+        if (!existsSync(fontPath)) continue;
+        const filename = `${link.font.hash}.${ext}`;
+        await copyFile(fontPath, path.join(fontsDir, filename));
+        fonts.push({ hash: link.font.hash, filename: `fonts/${filename}` });
+      }
+    }
+
+    const mediaStat = mediaFilename ? await stat(path.join(tmpDir, mediaFilename)) : null;
+    const manifest: DownloadManifest = {
+      media: mediaFilename
+        ? { filename: mediaFilename, sizeBytes: mediaStat?.size ?? null }
+        : null,
+      subtitles,
+      fonts,
+    };
+    await writeFile(path.join(tmpDir, "manifest.json"), JSON.stringify(manifest));
+
+    // Finalize — if the API deleted this download while we encoded, drop the
+    // artifact and leave (the row is gone, nothing to mark READY against).
+    const stillThere = await db.download.findUnique({ where: { id: downloadId } });
+    if (!stillThere) {
+      await rm(tmpDir, { recursive: true, force: true });
+      return;
+    }
+    await rm(finalDir, { recursive: true, force: true });
+    await rename(tmpDir, finalDir);
+    await db.download.update({
+      where: { id: downloadId },
+      data: {
+        status: "READY",
+        artifactPath: downloadId,
+        sizeBytes: manifest.media?.sizeBytes ?? null,
+        error: null,
+      },
+    });
+  } catch (err) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await db.download
+      .update({ where: { id: downloadId }, data: { status: "FAILED", error: String(err) } })
+      .catch(() => {});
+    throw err; // let BullMQ retry with backoff; after 3 attempts the job dies and FAILED stays
+  }
+}
+
 /**
  * Same degrade-never-error/poison-pill shape as processArtwork. `providerName`
  * is baked in per-queue (one handler instance per provider) — a miss doesn't
@@ -342,6 +547,13 @@ const trickplayConcurrency = Math.max(1, Number(process.env.HOKAGO_TRICKPLAY_CON
 const trickplayWorker = new Worker<TrickplayJobData>(QUEUE_NAMES.TRICKPLAY, processTrickplay, {
   connection,
   concurrency: trickplayConcurrency,
+});
+// Downloads are whole-file ffmpeg encodes (or copies) — one per job. Default
+// 2 concurrent keeps a bulk "download the whole series" from melting the box.
+const downloadConcurrency = Math.max(1, Number(process.env.HOKAGO_DOWNLOAD_CONCURRENCY ?? 2));
+const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, processDownload, {
+  connection,
+  concurrency: downloadConcurrency,
 });
 
 // Per-provider rate budgets (doc's real published limits) enforced by
@@ -477,7 +689,13 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`${signal}: closing workers (tracked children: ${trackedPidCount()})...`);
 
   await Promise.race([
-    Promise.all([scanWorker.close(), artworkWorker.close(), trickplayWorker.close(), ...Object.values(metadataWorkers).map((w) => w.close())]),
+    Promise.all([
+      scanWorker.close(),
+      artworkWorker.close(),
+      trickplayWorker.close(),
+      downloadWorker.close(),
+      ...Object.values(metadataWorkers).map((w) => w.close()),
+    ]),
     new Promise((resolve) => setTimeout(resolve, 10_000)),
   ]);
 
@@ -487,6 +705,7 @@ async function shutdown(signal: string): Promise<void> {
     scanQueue.close(),
     artworkQueue.close(),
     trickplayQueue.close(),
+    downloadQueue.close(),
     ...Object.values(metadataQueues).map((q) => q.close()),
     connection.quit(),
   ]);

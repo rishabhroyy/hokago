@@ -12,6 +12,7 @@
     "./home": "./dist/home.js",
     "./admin": "./dist/admin.js",
     "./media-files": "./dist/media-files.js",
+    "./downloads": "./dist/downloads.js",
     "./watch-party": "./dist/watch-party.js",
     "./openapi": "./dist/openapi.js",
     "./client": "./dist/client.js"

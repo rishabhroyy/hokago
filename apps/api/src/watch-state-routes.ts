@@ -14,6 +14,8 @@ import {
   SetWatchedParams,
   SetWatchedBody,
   SetWatchedResponse,
+  WatchStateSyncBody,
+  WatchStateSyncResponse,
   ErrorResponse,
 } from "@hokago/contract/playback";
 import { PlaybackSessionParams } from "@hokago/contract/playback";
@@ -290,6 +292,50 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
     },
     async (req) => {
       return loadContinueWatching(db, req.query.profileId);
+    },
+  );
+
+  // Offline watch-state replay: a native client plays a downloaded item with
+  // no network, records progress locally, then pushes the whole batch back on
+  // reconnect. Plain upserts against the same PlaybackState rows heartbeats
+  // write — no watchDay credit (that's real-time watch time only).
+  app.post(
+    "/watch-state/sync",
+    {
+      preHandler: app.authenticate,
+      schema: { body: WatchStateSyncBody, response: { 200: WatchStateSyncResponse, 404: ErrorResponse } },
+    },
+    async (req, reply) => {
+      const { profileId, entries } = req.body;
+      const owned = await db.profile.findFirst({
+        where: { id: profileId, accountId: req.accountId },
+        select: { id: true },
+      });
+      if (!owned) return reply.code(404).send({ error: "profile not found" });
+
+      await db.$transaction(
+        entries.map((e) =>
+          db.playbackState.upsert({
+            where: { profileId_mediaItemId: { profileId, mediaItemId: e.mediaItemId } },
+            create: {
+              profileId,
+              mediaItemId: e.mediaItemId,
+              positionMs: e.positionMs,
+              durationMs: e.durationMs ?? null,
+              watched: e.watched ?? false,
+              playCount: e.watched ? 1 : 0,
+              lastWatchedAt: e.watched ? (e.lastWatchedAt ?? new Date()) : null,
+            },
+            update: {
+              positionMs: e.positionMs,
+              ...(e.durationMs !== undefined ? { durationMs: e.durationMs } : {}),
+              ...(e.watched !== undefined ? { watched: e.watched } : {}),
+              ...(e.watched && e.lastWatchedAt !== undefined ? { lastWatchedAt: e.lastWatchedAt } : {}),
+            },
+          }),
+        ),
+      );
+      return { synced: entries.length };
     },
   );
 }

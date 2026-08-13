@@ -26,10 +26,18 @@ import { registerWatchStateRoutes } from "./watch-state-routes.js";
 import { registerWatchPartyRoutes, reapStalePartyMembers } from "./watch-party-routes.js";
 import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
+import { registerDownloadRoutes, closeDownloadQueue } from "./download-routes.js";
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
 
-const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
+// trustProxy is opt-in (HOKAGO_TRUST_PROXY=true): req.ip then honors
+// X-Forwarded-For so rate limiting / logging see the real client behind a
+// reverse proxy (nginx/caddy). Cloudflare's CF-Connecting-IP is always
+// honored by the clientIp helper regardless — see rate-limit.ts.
+const app = Fastify({
+  logger: true,
+  trustProxy: process.env.HOKAGO_TRUST_PROXY === "true",
+}).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
 // Avatar uploads are raw image bytes, not JSON — parse them into a Buffer.
@@ -64,6 +72,7 @@ await registerHomeRoutes(app);
 await registerPlaybackRoutes(app);
 await registerWatchStateRoutes(app);
 await registerWatchPartyRoutes(app);
+await registerDownloadRoutes(app);
 await registerStaticRoutes(app);
 // Last: the SPA catch-all — everything the API doesn't own is the web app.
 await registerWebRoutes(app);
@@ -110,6 +119,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   app.log.info(`${signal}: closing (tracked ffmpeg children: ${trackedPidCount()})...`);
   killTrackedChildren("SIGKILL");
+  await closeDownloadQueue();
   await app.close();
   process.exit(0);
 }

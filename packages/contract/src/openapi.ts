@@ -32,10 +32,32 @@ import {
   ChangePasswordResponse,
   SessionSummary,
   SessionParams,
+  DeviceSummary,
+  DeviceParams,
+  PairingRequestBody,
+  PairingRequestResponse,
+  PairingVerifyBody,
+  PairingVerifyResponse,
+  PairingStatusBody,
+  PairingStatusResponse,
   CreateInviteBody,
   InviteResponse,
   ErrorResponse as AuthErrorResponse,
 } from "./auth.js";
+import {
+  MediaItemFilesParams,
+  MediaItemFilesResponse,
+} from "./browse.js";
+import {
+  DownloadCreateBody,
+  DownloadInfo,
+  DownloadListQuery,
+  DownloadParams,
+  DownloadSubtitleParams,
+  DownloadFontParams,
+  DownloadArtifactManifest,
+  ErrorResponse as DownloadErrorResponse,
+} from "./downloads.js";
 import {
   StartPlaybackBody,
   StartPlaybackResponse,
@@ -56,6 +78,8 @@ import {
   SetWatchedParams,
   SetWatchedBody,
   SetWatchedResponse,
+  WatchStateSyncBody,
+  WatchStateSyncResponse,
   ErrorResponse as PlaybackErrorResponse,
 } from "./playback.js";
 import {
@@ -109,6 +133,12 @@ import {
 
 const json = (schema: z.ZodTypeAny) => ({ content: { "application/json": { schema } } });
 
+// Binary/byte routes (media files, fonts, subtitles, segments, playlists)
+// return raw bytes, not JSON. They're registered so generated clients know
+// the paths exist and are typed as strings — openapi-fetch still returns a
+// Response for them either way.
+const binary = (mime: string) => ({ content: { [mime]: { schema: { type: "string" as const, format: "binary" as const } } } });
+
 export function buildOpenApiDocument(): OpenAPIObject {
   const registry = new OpenAPIRegistry();
 
@@ -140,6 +170,16 @@ export function buildOpenApiDocument(): OpenAPIObject {
     request: { params: MediaItemDetailParams, query: MediaItemDetailQuery },
     responses: {
       200: { description: "OK", ...json(MediaItemDetail) },
+      404: { description: "Not found", ...json(BrowseNotFoundError) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/media-items/{id}/files",
+    summary: "All playable files of a media item (downloads/version picker; browse only exposes the first)",
+    request: { params: MediaItemFilesParams },
+    responses: {
+      200: { description: "OK", ...json(MediaItemFilesResponse) },
       404: { description: "Not found", ...json(BrowseNotFoundError) },
     },
   });
@@ -264,6 +304,54 @@ export function buildOpenApiDocument(): OpenAPIObject {
     request: { body: json(CreateInviteBody.optional()) },
     responses: { 200: { description: "OK", ...json(InviteResponse) } },
   });
+  registry.registerPath({
+    method: "get",
+    path: "/auth/devices",
+    summary: "List registered devices for the authenticated account",
+    responses: { 200: { description: "OK", ...json(z.array(DeviceSummary)) } },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/auth/devices/{id}",
+    summary: "Remove a device — revokes every session bound to it",
+    request: { params: DeviceParams },
+    responses: {
+      200: { description: "OK", ...json(RevokedResponse) },
+      404: { description: "Device not found", ...json(AuthErrorResponse) },
+    },
+  });
+
+  // TV-style pairing — TVs can't type passwords.
+  registry.registerPath({
+    method: "post",
+    path: "/auth/pair/request",
+    summary: "Request a pairing code to display (unauthenticated — the TV)",
+    request: { body: json(PairingRequestBody) },
+    responses: {
+      200: { description: "OK — code to show on screen", ...json(PairingRequestResponse) },
+      429: { description: "Rate limited", ...json(AuthErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/auth/pair/verify",
+    summary: "Approve a pairing code (authenticated — the phone/PC)",
+    request: { body: json(PairingVerifyBody) },
+    responses: {
+      200: { description: "OK — code approved", ...json(PairingVerifyResponse) },
+      404: { description: "Invalid or expired code", ...json(AuthErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/auth/pair/status",
+    summary: "Poll pairing status; mints the session once approved (unauthenticated — the TV)",
+    request: { body: json(PairingStatusBody) },
+    responses: {
+      200: { description: "OK — status, plus tokens when just approved", ...json(PairingStatusResponse) },
+      404: { description: "Unknown pairing", ...json(AuthErrorResponse) },
+    },
+  });
 
   registry.registerPath({
     method: "get",
@@ -356,6 +444,16 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: {
       200: { description: "OK", ...json(SetWatchedResponse) },
       404: { description: "Media item not found", ...json(PlaybackErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/watch-state/sync",
+    summary: "Bulk-upsert per-profile playback state — native clients replay offline progress on reconnect",
+    request: { body: json(WatchStateSyncBody) },
+    responses: {
+      200: { description: "OK", ...json(WatchStateSyncResponse) },
+      404: { description: "Profile not found", ...json(PlaybackErrorResponse) },
     },
   });
 
@@ -668,6 +766,141 @@ export function buildOpenApiDocument(): OpenAPIObject {
       200: { description: "OK", ...json(MediaFileTrickplayResponse) },
       404: { description: "Media file or trickplay sheets not found", ...json(MediaFileErrorResponse) },
     },
+  });
+
+ // Downloads — offline playback for native clients
+  registry.registerPath({
+    method: "post",
+    path: "/downloads",
+    summary: "Create an offline download (original or transcoded variant) for a device",
+    request: { body: json(DownloadCreateBody) },
+    responses: {
+      201: { description: "Created — job queued", ...json(DownloadInfo) },
+      404: { description: "Media file or device not found", ...json(DownloadErrorResponse) },
+      422: { description: "Unsupported combination (e.g. bitmap subtitle on an original variant)", ...json(DownloadErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/downloads",
+    summary: "List the account's downloads (optionally scoped to one device)",
+    request: { query: DownloadListQuery },
+    responses: { 200: { description: "OK", ...json(z.array(DownloadInfo)) } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/downloads/{id}",
+    summary: "Download status",
+    request: { params: DownloadParams },
+    responses: {
+      200: { description: "OK", ...json(DownloadInfo) },
+      404: { description: "Download not found", ...json(DownloadErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/downloads/{id}",
+    summary: "Remove a download (cancels a queued job and deletes the artifact)",
+    request: { params: DownloadParams },
+    responses: {
+      200: { description: "OK", ...json(RevokedResponse) },
+      404: { description: "Download not found", ...json(DownloadErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/downloads/{id}/artifact",
+    summary: "Packaged artifact manifest: media + sidecar subtitles + fonts",
+    request: { params: DownloadParams },
+    responses: {
+      200: { description: "OK", ...json(DownloadArtifactManifest) },
+      404: { description: "Download or artifact not ready", ...json(DownloadErrorResponse) },
+    },
+  });
+
+ // Binary routes — raw bytes, typed as strings in the generated client
+  registry.registerPath({
+    method: "get",
+    path: "/media-files/{id}/direct",
+    summary: "Raw media file bytes (Direct Play / download source), Range-enabled",
+    request: { params: MediaFileParams },
+    responses: {
+      200: { description: "File bytes", ...binary("video/mp4") },
+      404: { description: "Media file not found", ...json(MediaFileErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/media-files/{id}/subtitle-tracks/{trackId}",
+    summary: "Subtitle track text (external sidecar or extracted on demand)",
+    request: { params: z.object({ id: z.string(), trackId: z.string() }) },
+    responses: {
+      200: { description: "Subtitle text", ...binary("text/vtt") },
+      404: { description: "Track not found", ...json(MediaFileErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/media-files/{id}/trickplay/sheets/{index}",
+    summary: "Trickplay sprite sheet bytes",
+    request: { params: z.object({ id: z.string(), index: z.string() }) },
+    responses: { 200: { description: "JPEG sheet", ...binary("image/jpeg") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/fonts/{hash}",
+    summary: "Font bytes (hash-keyed, cacheable forever)",
+    request: { params: z.object({ hash: z.string() }) },
+    responses: { 200: { description: "Font bytes", ...binary("font/woff2") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/artwork/{id}",
+    summary: "Artwork bytes",
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: "Image bytes", ...binary("image/jpeg") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/playback/{sessionId}/playlist.m3u8",
+    summary: "HLS playlist for a transcoding session",
+    request: { params: PlaybackSessionParams },
+    responses: { 200: { description: "m3u8", ...binary("application/vnd.apple.mpegurl") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/playback/{sessionId}/stream.mp4",
+    summary: "Fragmented-MP4 remux stream (Range-enabled)",
+    request: { params: PlaybackSessionParams },
+    responses: { 200: { description: "video/mp4", ...binary("video/mp4") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/playback/{sessionId}/segment-{n}.ts",
+    summary: "HLS segment bytes for a transcoding session",
+    request: { params: z.object({ sessionId: z.string(), n: z.string() }) },
+    responses: { 200: { description: "MPEG-TS segment", ...binary("video/mp2t") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/downloads/{id}/artifact/media",
+    summary: "Downloaded media bytes (Range-enabled)",
+    request: { params: DownloadParams },
+    responses: { 200: { description: "video/mp4", ...binary("video/mp4") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/downloads/{id}/artifact/subtitles/{trackId}",
+    summary: "Downloaded subtitle sidecar bytes",
+    request: { params: DownloadSubtitleParams },
+    responses: { 200: { description: "Subtitle text", ...binary("text/vtt") } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/downloads/{id}/artifact/fonts/{hash}",
+    summary: "Downloaded font bytes",
+    request: { params: DownloadFontParams },
+    responses: { 200: { description: "Font bytes", ...binary("font/woff2") } },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

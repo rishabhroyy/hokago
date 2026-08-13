@@ -6,6 +6,7 @@ import { LibraryView } from "./views/LibraryView";
 import { DetailView } from "./views/DetailView";
 import { LoginView } from "./views/LoginView";
 import { PrefsView } from "./views/PrefsView";
+import { PairView } from "./views/PairView";
 import { SearchView } from "./views/SearchView";
 import { PartyView } from "./views/PartyView";
 import { NotFoundView } from "./views/NotFoundView";
@@ -28,6 +29,8 @@ function Shell() {
       return <WatchPage mediaFileId={route.mediaFileId} />;
     case "prefs":
       return <PrefsView />;
+    case "pair":
+      return <PairView />;
     case "search":
       return <SearchView initialQuery={route.q} />;
     case "party":

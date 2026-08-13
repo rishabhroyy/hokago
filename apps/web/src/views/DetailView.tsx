@@ -36,11 +36,13 @@ function SeasonGrid({
   season,
   eps,
   onOpen,
+  onParty,
   onContextMenu,
 }: {
   season: number | null;
   eps: EpisodeCard[];
   onOpen: (ep: EpisodeCard, el: HTMLElement) => void;
+  onParty?: (ep: EpisodeCard, el: HTMLElement) => void;
   onContextMenu?: (ep: EpisodeCard, x: number, y: number) => void;
 }) {
   const s = useWiiSound();
@@ -104,10 +106,22 @@ function SeasonGrid({
                     />
                   </span>
                 )}
-                <span className="absolute inset-0 z-[2] flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                  <span className="flex h-12 w-12 items-center justify-center rounded-full wii-btn text-white shadow-btn-blue">
+                <span className="absolute inset-0 z-[2] flex items-center justify-center gap-2.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                  <span className="pointer-events-none flex h-12 w-12 items-center justify-center rounded-full wii-btn text-white shadow-btn-blue">
                     <Icon name="play" className="ml-0.5 h-5 w-5" />
                   </span>
+                  {onParty && ep.mediaFileId && (
+                    <span
+                      title="Watch party — invite friends"
+                      className="pointer-events-auto flex h-12 w-12 cursor-pointer items-center justify-center rounded-full bg-ink text-white shadow-btn-ink transition-transform duration-150 ease-snap hover:scale-110 active:scale-92"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onParty(ep, e.currentTarget);
+                      }}
+                    >
+                      <Icon name="users" className="h-5 w-5" />
+                    </span>
+                  )}
                 </span>
               </div>
             </div>
@@ -240,6 +254,23 @@ export function DetailView({ itemId }: { itemId: string }) {
   const openTile = (tile: TileItem) => navigate(paths.detail(tile.id));
   const prefetchTile = (tile: TileItem) => prefetchMediaItemDetail(tile.id);
 
+  // Watch party: creates a room for a specific playable item (a chosen
+  // episode, or the hero target for series / the movie itself otherwise) and
+  // drops the host into it. el/x/y are optional — the context-menu path has
+  // no element to pop.
+  const startPartyFor = (ep: { id: string; mediaFileId: string | null }, el?: HTMLElement, x?: number, y?: number) => {
+    if (!profileId || !ep.mediaFileId) return;
+    s.select();
+    if (el && x != null && y != null) popAndPing(el, x, y, reduced);
+    api
+      .POST("/parties", { body: { profileId, mediaItemId: ep.id } })
+      .then(({ data, error }) => {
+        if (error || !data) throw new Error("could not start a party");
+        navigate(paths.player(ep.mediaFileId!, ep.id, profileId, selectedAudio, data.id));
+      })
+      .catch((err: Error) => console.warn("start party failed", err.message));
+  };
+
   // Right-click mark-watched: flip the episode's PlaybackState, then refetch
   // the (invalidated) detail so gray-out, the watched counter, and rollover
   // all reflect it immediately.
@@ -264,6 +295,9 @@ export function DetailView({ itemId }: { itemId: string }) {
   const episodeMenuItems = (ep: EpisodeCard): ContextMenuItem[] => [
     ...(ep.mediaFileId
       ? [{ label: "Play", icon: "play" as const, onClick: () => navigate(paths.player(ep.mediaFileId!, ep.id, profileId ?? "dev")) }]
+      : []),
+    ...(ep.mediaFileId
+      ? [{ label: "Watch party", icon: "users" as const, onClick: () => startPartyFor(ep) }]
       : []),
     ...(ep.watched
       ? [{ label: "Mark as unwatched", icon: "check" as const, onClick: () => markWatched(ep, false) }]
@@ -355,19 +389,25 @@ export function DetailView({ itemId }: { itemId: string }) {
 
               <div className="mb-5 flex items-center gap-3 max-[820px]:flex-wrap">
                 {playMediaFileId && (
-                  <button
-                    className="btn btn-primary"
-                    onClick={(e) => {
-                      s.select();
-                      popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
-                      navigate(paths.player(playMediaFileId, playMediaItemId!, profileId ?? "dev", selectedAudio));
-                    }}
-                  >
-                    <Icon name="play" className="h-4 w-4" />
-                    {item.kind === "SERIES"
-                      ? `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} · E${nextEpisode?.episodeNumber ?? 1}`
-                      : "Play"}
-                  </button>
+                  <>
+                    <button
+                      className="btn btn-primary"
+                      onClick={(e) => {
+                        s.select();
+                        popAndPing(e.currentTarget, e.clientX, e.clientY, reduced);
+                        navigate(paths.player(playMediaFileId, playMediaItemId!, profileId ?? "dev", selectedAudio));
+                      }}
+                    >
+                      <Icon name="play" className="h-4 w-4" />
+                      {item.kind === "SERIES"
+                        ? `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} · E${nextEpisode?.episodeNumber ?? 1}`
+                        : "Play"}
+                    </button>
+                    <button className="btn btn-ghost" onClick={(e) => startPartyFor(nextEpisode ?? item, e.currentTarget, e.clientX, e.clientY)}>
+                      <Icon name="users" className="h-4 w-4" />
+                      Watch party
+                    </button>
+                  </>
                 )}
               </div>
 
@@ -418,6 +458,7 @@ export function DetailView({ itemId }: { itemId: string }) {
               season={season}
               eps={eps}
               onOpen={openEpisode}
+              onParty={(ep, el) => startPartyFor(ep, el, el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2, el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2)}
               onContextMenu={(ep, x, y) => setMenu({ x, y, ep })}
             />
           ))}

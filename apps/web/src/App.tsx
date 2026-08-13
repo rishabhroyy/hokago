@@ -7,6 +7,7 @@ import { DetailView } from "./views/DetailView";
 import { LoginView } from "./views/LoginView";
 import { PrefsView } from "./views/PrefsView";
 import { SearchView } from "./views/SearchView";
+import { PartyView } from "./views/PartyView";
 import { NotFoundView } from "./views/NotFoundView";
 import { WatchPage } from "./WatchPage";
 import { AdminView } from "./admin/AdminView";
@@ -29,6 +30,8 @@ function Shell() {
       return <PrefsView />;
     case "search":
       return <SearchView initialQuery={route.q} />;
+    case "party":
+      return <PartyView code={route.code} />;
     case "notfound":
       return <NotFoundView />;
     default:

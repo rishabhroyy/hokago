@@ -27,6 +27,7 @@ import type {
   AudioTrackSwitchBody,
 } from "@hokago/contract/playback";
 import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo, MediaFileTrickplayResponse as TrickplayIndex } from "@hokago/contract/media-files";
+import type { WatchPartyResponse } from "@hokago/contract/watch-party";
 import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
 import { getPrimaryProfile } from "./profile";
@@ -36,6 +37,8 @@ import { Icon } from "./ui/icons";
 import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveQualityPref, saveSubtitlePref, type TrackPrefs } from "./track-prefs";
 import { audioTrackLabel } from "./language-names";
 import { useJassubRenderer } from "./useJassubRenderer";
+import { useParty, type PartyCommand } from "./useParty";
+import { leaveParty, linkPartySession } from "./party-api";
 
 // An empty WebVTT that vidstack loads (so the track is a real, selectable entry
 // in the stock captions menu) but which draws nothing — JASSUB does the actual
@@ -101,12 +104,15 @@ function AbsoluteTimeSlider({
   absoluteDurationMs,
   onScrub,
   trickplay,
+  locked,
 }: {
   playerRef: RefObject<MediaPlayerInstance | null>;
   offsetMs: number;
   absoluteDurationMs: number;
   onScrub: (mediaTimeMs: number) => void;
   trickplay: TrickplayIndex | null;
+  /** Watch-party guests: the host owns the timeline — gestures are inert. */
+  locked?: boolean;
 }) {
   const remote = useMediaRemote(playerRef);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -194,8 +200,9 @@ function AbsoluteTimeSlider({
       ref={rootRef}
       className="vds-time-slider vds-slider"
       role="slider"
-      tabIndex={0}
+      tabIndex={locked ? -1 : 0}
       aria-label="Seek"
+      aria-disabled={locked || undefined}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(pct)}
@@ -209,6 +216,7 @@ function AbsoluteTimeSlider({
         } as CSSProperties
       }
       onPointerDown={(e) => {
+        if (locked) return;
         if (e.button !== 0 && e.pointerType === "mouse") return;
         e.preventDefault();
         // Capture keeps the drag over the video; a late pointerId (e.g.
@@ -239,7 +247,7 @@ function AbsoluteTimeSlider({
         draggingRef.current = false;
         setDragging(false);
         setPointerPct(null);
-        seekToPct(p);
+        if (!locked) seekToPct(p);
       }}
       onPointerCancel={() => {
         draggingRef.current = false;
@@ -250,6 +258,7 @@ function AbsoluteTimeSlider({
         if (!draggingRef.current) setPointerPct(null);
       }}
       onKeyDown={(e) => {
+        if (locked) return;
         const stepSec = e.shiftKey ? 10 : 5;
         let next: number | null = null;
         if (e.key === "ArrowLeft") next = pct - (stepSec / endSec) * 100;
@@ -352,6 +361,29 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // "dev" is the historical router default, not a real profile — resolve the
   // account's primary profile so heartbeats land on a real profileId row.
   const [profileId, setProfileId] = useState<string | null>(queryProfileId && queryProfileId !== "dev" ? queryProfileId : null);
+  // Watch party membership, from the ?party= share link. Held in state so a
+  // local leave() can drop the room without remounting the player.
+  const [partyId, setPartyId] = useState<string | null>(params.get("party"));
+  const party = useParty(partyId, profileId);
+  // The party-sync machinery lives below the playback-start effect; this ref
+  // lets the start flow call it without a TDZ dance in its dependency array.
+  const applyPartyCommandRef = useRef<(cmd: PartyCommand) => void>(() => {});
+  const [partyReady, setPartyReady] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [dismissedEnded, setDismissedEnded] = useState(false);
+
+  const copyInvite = useCallback(() => {
+    if (!party.party) return;
+    const url = `${location.origin}${paths.party(party.party.inviteCode)}`;
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {});
+  }, [party.party]);
 
   const [start, setStart] = useState<PlaybackStart | null>(null);
   // Playback never started (bad /start, auth, 404 after retries). No player
@@ -633,6 +665,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         }
         setStart(data);
         setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
+        // Party members link their session so heartbeats flow into the
+        // member list (positions + liveness) and the server knows the
+        // member's stream is live.
+        if (partyIdRef.current) void linkPartySession(partyIdRef.current, data.sessionId);
+        // Late-join catch-up: the initial snapshot can land while our session
+        // doesn't exist yet (the WS command no-ops), leaving a guest at their
+        // own resume point. Re-apply the party anchor now that we can play.
+        const partyAnchor = partyLiveRef.current;
+        if (partyAnchor && !partyIsHostRef.current) applyPartyCommandRef.current(partyAnchor);
         // The video timeline is relative to where playback resumed, but the
         // server speaks media-absolute time. Track the offset so every
         // position the client sends (seek, audio switch, heartbeat) can be
@@ -867,7 +908,21 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         };
       },
       apply: (outcome) => {
-        if (!outcome.restarted || !startRef.current) return;
+        if (!outcome.restarted || !startRef.current) {
+          // Covered-frontier fast path: the server didn't restart anything
+          // and no src reload (hence no canplay) will fire — the target is
+          // already playable on the current timeline. Land it by hand. User
+          // scrubs double-seek harmlessly (the gesture already set the same
+          // target); party commands and retries have no gesture feedback
+          // and NEED this to arrive at the anchor.
+          const p = playerRef.current;
+          if (p) {
+            const offsetMs = timelineOffsetRef.current;
+            const max = Number.isFinite(p.duration) ? p.duration : Infinity;
+            p.currentTime = Math.max(0, Math.min((targetMs - offsetMs) / 1000, max));
+          }
+          return;
+        }
         // Bump before rebasing so the pending seek is tagged with the nonce
         // the reloading src will actually load under.
         bumpSrcNonce();
@@ -885,7 +940,16 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const commitSeek = useCallback(
     (mediaTimeMs: number) => {
       if (!Number.isFinite(mediaTimeMs)) return;
+      // Guests in a live party: the host owns the timeline.
+      if (partyLockedRef.current) return;
       seekTargetRef.current = Math.max(0, Math.round(mediaTimeMs));
+      // The host with a live party: every scrub is also a party command —
+      // the room's anchor follows the host's playhead (WAITING sets the
+      // start position, PLAYING/PAUSED moves the whole room).
+      const live = partyLiveRef.current;
+      if (partyIdRef.current && live) {
+        party.control(live.state, seekTargetRef.current);
+      }
       if (seekDebounceRef.current === null) {
         seekDebounceRef.current = window.setTimeout(() => {
           seekDebounceRef.current = null;
@@ -893,7 +957,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         }, 200);
       }
     },
-    [commitRestart, buildSeekRequest],
+    [commitRestart, buildSeekRequest, party.control],
   );
 
   // Drop a pending debounce + queued restart when the player unmounts (tab
@@ -905,6 +969,159 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     },
     [],
   );
+
+  // ── Watch-party sync (the timekeeper's client) ───────────────────────────
+  // Server commands land via party.command; this client applies them and
+  // never fights them. partyAppliedStateRef tracks the last APPLIED state —
+  // for the host, echo suppression means their own commands never reach
+  // apply, so applied-state and party-state legitimately differ.
+  const partyLockedRef = useRef(false);
+  useEffect(() => {
+    partyLockedRef.current = party.locked;
+  }, [party.locked]);
+  // Latest live party anchor (state + position + issuedAt) for the
+  // stale-closure callbacks (commitSeek, playback start catch-up).
+  const partyLiveRef = useRef<PartyCommand | null>(null);
+  useEffect(() => {
+    partyLiveRef.current =
+      party.party && party.party.state !== "ENDED"
+        ? { state: party.party.state, positionMs: party.party.positionMs, issuedAt: party.party.issuedAt }
+        : null;
+  }, [party.party]);
+  const partyIsHostRef = useRef(false);
+  useEffect(() => {
+    partyIsHostRef.current = party.isHost;
+  }, [party.isHost]);
+  const partyApplyingRef = useRef(false);
+  const partyAppliedStateRef = useRef<PartyCommand["state"] | null>(null);
+  // Guests resync when their position drifts more than this from the server
+  // anchor — absorbs buffer jitter while pulling stalled members back.
+  const PARTY_RESYNC_TOLERANCE_MS = 3000;
+
+  const applyPartyCommand = useCallback(
+    (cmd: PartyCommand) => {
+      const player = playerRef.current;
+      const session = startRef.current;
+      if (!player || !session) return;
+      const prev = partyAppliedStateRef.current;
+      // The anchor is PAUSED-flat; while PLAYING it advances with wall clock.
+      const targetMs =
+        cmd.state === "PLAYING"
+          ? cmd.positionMs + Math.max(0, Date.now() - Date.parse(cmd.issuedAt))
+          : cmd.positionMs;
+      const myMs = Math.round((player.currentTime || 0) * 1000 + timelineOffsetRef.current);
+      const drifted = Math.abs(targetMs - myMs) > PARTY_RESYNC_TOLERANCE_MS;
+      const stateChanged = prev !== cmd.state;
+      partyApplyingRef.current = true;
+      try {
+        if (stateChanged || drifted) {
+          userPausedRef.current = cmd.state !== "PLAYING";
+          if (drifted) {
+            if (session.method === "DIRECT_PLAY") {
+              // The file is the media: seek and set state directly.
+              player.currentTime = Math.max(0, targetMs / 1000);
+              if (cmd.state === "PLAYING") player.play().catch(() => {});
+              else player.pause();
+            } else {
+              // Restart the stream at the target — the replay machinery
+              // relands playback on canplay under the play state we just set.
+              player.pause();
+              const base = buildSeekRequest(targetMs);
+              commitRestart({
+                ...base,
+                apply: (outcome) => {
+                  base.apply(outcome);
+                  // Fast path (target inside the server's written frontier):
+                  // no src reload happened, so canplay never fires and the
+                  // play state set above wouldn't land — apply it by hand.
+                  if (outcome.restarted) return;
+                  if (cmd.state === "PLAYING") playerRef.current?.play().catch(() => {});
+                  else playerRef.current?.pause();
+                },
+              });
+            }
+          } else if (cmd.state === "PLAYING") {
+            player.play().catch(() => {});
+          } else {
+            player.pause();
+          }
+        }
+        // Same state within tolerance: nothing — a guest's local pause holds
+        // until their drift passes the tolerance, then they're pulled back.
+      } finally {
+        partyApplyingRef.current = false;
+      }
+      partyAppliedStateRef.current = cmd.state;
+    },
+    [buildSeekRequest, commitRestart],
+  );
+  applyPartyCommandRef.current = applyPartyCommand;
+
+  useEffect(() => {
+    if (party.command) applyPartyCommand(party.command);
+  }, [party.command, applyPartyCommand]);
+
+  // Live party id for the stale-closure callbacks (commitSeek, handlers).
+  const partyIdRef = useRef(partyId);
+  useEffect(() => {
+    partyIdRef.current = partyId;
+  }, [partyId]);
+
+  // Leaving the room on unmount (back-nav, tab close). The StrictMode
+  // double-mount self-heals for guests: the remount's socket re-asserts
+  // membership server-side, so the transient leave is invisible to the room.
+  // The room ref matters here: at the transient mount-1 cleanup the snapshot
+  // hasn't arrived yet (null), so nothing is left — and a host MUST never
+  // auto-leave anyway, because a host leave ENDS the party for everyone. A
+  // dead host's party ends via the reaper instead.
+  const partyRoomRef = useRef<{ isHost: boolean } | null>(null);
+  useEffect(() => {
+    partyRoomRef.current =
+      party.party && party.party.state !== "ENDED" ? { isHost: party.isHost } : null;
+  }, [party.party, party.isHost]);
+  const partyLeftRef = useRef(false);
+  useEffect(
+    () => () => {
+      const id = partyIdRef.current;
+      const room = partyRoomRef.current;
+      if (id && !partyLeftRef.current && room && !room.isHost) leaveParty(id);
+    },
+    [],
+  );
+
+  // The party's own Start button: the host's trusted play drives the whole
+  // room — command the server (guests apply via WS), then restart our own
+  // stream at the party anchor so everyone lands together.
+  const startPartyPlayback = useCallback(() => {
+    if (!party.party) return;
+    const targetMs = party.party.positionMs;
+    party.control("PLAYING", targetMs);
+    userPausedRef.current = false;
+    if (startRef.current?.method === "DIRECT_PLAY") {
+      const player = playerRef.current;
+      if (player) {
+        player.currentTime = Math.max(0, targetMs / 1000);
+        player.play().catch(() => {});
+      }
+    } else {
+      const base = buildSeekRequest(targetMs);
+      commitRestart({
+        ...base,
+        apply: (outcome) => {
+          base.apply(outcome);
+          // Covered-frontier fast path: no reload, no canplay — the restart
+          // is a local seek; resume explicitly (the party is now PLAYING).
+          if (!outcome.restarted) playerRef.current?.play().catch(() => {});
+        },
+      });
+    }
+  }, [party.party, party.control, buildSeekRequest, commitRestart]);
+
+  const leaveCurrentParty = useCallback(() => {
+    partyLeftRef.current = true;
+    party.leave();
+    setPartyId(null);
+  }, [party.leave]);
   // DIRECT_PLAY exposes the container's other audio streams natively, so the
   // stock audio menu switches them client-side. TRANSCODE/DIRECT_STREAM bake one
  // audio track into the segments , so switching means asking the server
@@ -1252,9 +1469,23 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
               onProviderChange={handleProviderChange}
               onCanPlay={handleCanPlay}
               onError={handleMediaError}
-              onPlay={() => {
+              onPlay={(event) => {
             userInteractedRef.current = true;
             userPausedRef.current = false;
+            // Party rules: guests must not start playback while the room is
+            // parked (WAITING/PAUSED); the host's trusted play is a room
+            // command everyone else follows over WS.
+            const roomState = party.party?.state;
+            if (roomState && roomState !== "ENDED") {
+              if (!party.isHost && !partyApplyingRef.current && roomState !== "PLAYING") {
+                playerRef.current?.pause();
+              } else if (party.isHost && event.isOriginTrusted) {
+                const player = playerRef.current;
+                if (player) {
+                  party.control("PLAYING", Math.round(player.currentTime * 1000 + timelineOffsetRef.current));
+                }
+              }
+            }
           }}
           onTextTrackChange={handleTextTrackChange}
           onAudioTrackChange={handleNativeAudioTrackChange}
@@ -1264,6 +1495,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             // pauses (src reloads, tab throttling) must not.
             if (event.isOriginTrusted) {
               userPausedRef.current = true;
+            }
+            // The host's trusted pause drives the room — everyone parks.
+            const pplayer = playerRef.current;
+            if (pplayer && party.party && party.isHost && event.isOriginTrusted && party.party.state !== "ENDED") {
+              party.control("PAUSED", Math.round(pplayer.currentTime * 1000 + timelineOffsetRef.current));
             }
             // Persist position promptly on pause — don't wait for the next
             // 10s tick, in case the tab is throttled or closed soon after.
@@ -1292,6 +1528,11 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                 },
               })
               .catch(() => {});
+            // Host reaching the end parks the room (guests pause at the tail);
+            // the party ends when the host navigates away or leaves.
+            if (party.party && party.isHost && party.party.state !== "ENDED") {
+              party.control("PAUSED", Math.round(player.currentTime * 1000 + timelineOffsetRef.current));
+            }
           }}
         >
           <MediaProvider>
@@ -1339,6 +1580,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                   absoluteDurationMs={absoluteDurationMs}
                   onScrub={commitSeek}
                   trickplay={trickplay}
+                  locked={party.locked}
                 />
               ),
               settingsMenuItemsEnd: (
@@ -1357,6 +1599,306 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       )}
       </>
     )}
+    {/* ── watch party chrome ─────────────────────────────────────────── */}
+    {party.party && party.party.state !== "ENDED" && (
+      <>
+        <WaitingRoom
+          party={party.party}
+          me={profileId}
+          isHost={party.isHost}
+          ready={partyReady}
+          onReady={party.setReady}
+          onStart={startPartyPlayback}
+          copied={copied}
+          onCopy={copyInvite}
+        />
+        <PartyPill
+          party={party.party}
+          me={profileId}
+          isHost={party.isHost}
+          open={panelOpen}
+          onToggle={() => setPanelOpen((v) => !v)}
+          onCopy={copyInvite}
+          copied={copied}
+        />
+        {panelOpen && (
+          <PartyPanel
+            party={party.party}
+            me={profileId}
+            onClose={() => setPanelOpen(false)}
+            onLeave={leaveCurrentParty}
+            copied={copied}
+            onCopy={copyInvite}
+          />
+        )}
+      </>
+    )}
+    {party.party?.state === "ENDED" && !dismissedEnded && (
+      <div className="absolute left-1/2 top-5 z-40 -translate-x-1/2 rounded-full bg-red-950/90 px-4 py-2 text-sm text-red-100 shadow-lg ring-1 ring-red-400/30">
+        The party ended —{" "}
+        {party.party.members.find((m) => m.profileId === party.party!.hostProfileId)?.name ?? "the host"} left.
+        <button className="ml-3 text-red-300 underline underline-offset-2 hover:text-white" onClick={() => setDismissedEnded(true)}>
+          watch alone
+        </button>
+      </div>
+    )}
+    </div>
+  );
+}
+
+// ── watch party chrome ─────────────────────────────────────────────────────
+
+function MemberFace({ member, size = 28 }: { member: { name: string; avatarUrl: string | null }; size?: number }) {
+  if (member.avatarUrl) {
+    return (
+      <img
+        src={member.avatarUrl}
+        alt=""
+        style={{ height: size, width: size }}
+        className="shrink-0 rounded-full object-cover ring-2 ring-white/80 dark:ring-black/40"
+      />
+    );
+  }
+  return (
+    <span
+      style={{ height: size, width: size, fontSize: Math.round(size * 0.44) }}
+      className="flex shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display font-bold text-white ring-2 ring-white/80 dark:ring-black/40"
+    >
+      {member.name[0]?.toUpperCase() ?? "?"}
+    </span>
+  );
+}
+
+/** Host-guest pickup room shown over the paused player while the party is
+ *  WAITING: the invite code, the roll call of members, and the gate controls
+ *  (guests toggle ready; the host starts). */
+function WaitingRoom({
+  party,
+  me,
+  isHost,
+  ready,
+  onReady,
+  onStart,
+  copied,
+  onCopy,
+}: {
+  party: WatchPartyResponse;
+  me: string | null;
+  isHost: boolean;
+  ready: boolean;
+  onReady: (ready: boolean) => void;
+  onStart: () => void;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  if (party.state !== "WAITING") return null;
+  const guests = party.members.filter((m) => m.profileId !== party.hostProfileId);
+  const everyoneReady = guests.every((m) => m.ready);
+  const myMember = me ? party.members.find((m) => m.profileId === me) : null;
+  return (
+    <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-[2px]">
+      <div className="pointer-events-auto w-[min(92vw,420px)] rounded-2xl bg-wii-deep/95 p-6 text-white shadow-2xl ring-1 ring-white/15 dark:bg-paper dark:text-wii-ink dark:ring-line">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-h2 font-bold tracking-tight">Watch party</h2>
+          <button
+            className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 font-mono text-card-head font-bold tracking-[0.2em] transition hover:bg-white/20 dark:bg-wii-deep/10 dark:hover:bg-wii-deep/20"
+            onClick={onCopy}
+            title="Copy invite link"
+          >
+            {party.inviteCode}
+            {copied ? <Icon name="check" className="h-3.5 w-3.5" /> : <Icon name="copy" className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <div className="mt-5 space-y-2.5">
+          {party.members.map((m) => {
+            const isMe = m.profileId === me;
+            return (
+              <div key={m.profileId} className="flex items-center gap-3">
+                <MemberFace member={m} />
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {m.name}
+                  {isMe && <span className="text-white/50 dark:text-wii-ink/50"> (you)</span>}
+                  {m.profileId === party.hostProfileId && !isMe && (
+                    <span className="ml-1.5 rounded-full bg-amber-400/20 px-2 py-0.5 text-kicker font-bold uppercase tracking-wider text-amber-300 dark:text-amber-700">
+                      host
+                    </span>
+                  )}
+                </span>
+                {isMe && isHost ? (
+                  <span className="font-mono text-kicker font-bold uppercase tracking-wider text-white/50 dark:text-wii-ink/50">
+                    host
+                  </span>
+                ) : m.ready ? (
+                  <span className="font-mono text-kicker font-bold uppercase tracking-wider text-emerald-400 dark:text-emerald-600">
+                    ready
+                  </span>
+                ) : (
+                  <span className="font-mono text-kicker font-bold uppercase tracking-wider text-white/40 dark:text-wii-ink/40">
+                    …
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {isHost ? (
+          <div className="mt-6">
+            <button
+              className="w-full rounded-xl bg-wii-deep font-display text-card-head font-bold text-white shadow-[0_2px_0_rgba(0,0,0,0.35)] transition hover:brightness-110 active:translate-y-px disabled:opacity-40 dark:bg-wii-deep"
+              onClick={onStart}
+              disabled={!everyoneReady}
+              title={everyoneReady ? "Start the party" : "Waiting for everyone to be ready"}
+            >
+              {everyoneReady ? "Start party" : `Waiting for ${guests.filter((m) => !m.ready).length} guest${guests.filter((m) => !m.ready).length === 1 ? "" : "s"}…`}
+            </button>
+            <p className="mt-2 text-center text-kicker text-white/50 dark:text-wii-ink/50">
+              Everyone joins on the code link above — scrubbing here while waiting sets the start point.
+            </p>
+          </div>
+        ) : (
+          <button
+            className={`mt-6 w-full rounded-xl py-2.5 font-display text-card-head font-bold transition active:translate-y-px ${
+              ready
+                ? "bg-emerald-500/90 text-white dark:bg-emerald-600"
+                : "bg-wii-deep text-white dark:bg-wii-deep"
+            }`}
+            onClick={() => onReady(!ready)}
+          >
+            {ready ? "I'm ready — waiting for host" : "I'm ready"}
+          </button>
+        )}
+        {myMember && (
+          <p className="mt-3 text-center text-kicker text-white/50 dark:text-wii-ink/50">
+            {myMember.ready ? "Locked to the host's timeline once the party starts." : "Mark ready when you're settled — playback starts when everyone is."}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Compact status chip (top-left, under the back button): member avatars, the
+ *  invite code, and host/guest role. Opens the member panel. */
+function PartyPill({
+  party,
+  me,
+  isHost,
+  open,
+  onToggle,
+  onCopy,
+  copied,
+}: {
+  party: WatchPartyResponse;
+  me: string | null;
+  isHost: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onCopy: () => void;
+  copied: boolean;
+}) {
+  const meMember = me ? party.members.find((m) => m.profileId === me) : null;
+  return (
+    <button
+      onClick={onToggle}
+      className={`absolute left-16 top-5 z-40 flex items-center gap-2 rounded-full px-3 py-1.5 shadow-lg ring-1 transition hover:brightness-110 ${
+        open
+          ? "bg-white/95 text-wii-ink ring-line dark:bg-wii-deep/95 dark:text-white dark:ring-white/20"
+          : "bg-wii-deep/95 text-white ring-white/20 dark:bg-paper/95 dark:text-wii-ink dark:ring-line"
+      }`}
+      title={open ? "Close party panel" : "Party — click for details"}
+    >
+      <span className="flex -space-x-1.5">
+        {party.members.slice(0, 4).map((m) => (
+          <MemberFace key={m.profileId} member={m} size={22} />
+        ))}
+      </span>
+      <span className="flex flex-col items-start leading-none">
+        <span className="font-mono text-kicker font-bold tracking-[0.18em]">{party.inviteCode}</span>
+        <span className="text-kicker opacity-60">
+          {isHost ? "you're hosting" : meMember ? "synced to host" : party.members.length + " watching"}
+        </span>
+      </span>
+      <button
+        className="ml-1 rounded-full bg-white/10 px-2 py-1 font-mono text-kicker font-bold tracking-wider transition hover:bg-white/25 dark:bg-wii-deep/10 dark:hover:bg-wii-deep/25"
+        onClick={(e) => {
+          e.stopPropagation();
+          onCopy();
+        }}
+        title="Copy invite link"
+      >
+        {copied ? "copied" : "copy"}
+      </button>
+    </button>
+  );
+}
+
+/** Member roster: live positions, staleness, and the leave action. */
+function PartyPanel({
+  party,
+  me,
+  onClose,
+  onLeave,
+  copied,
+  onCopy,
+}: {
+  party: WatchPartyResponse;
+  me: string | null;
+  onClose: () => void;
+  onLeave: () => void;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="absolute left-16 top-[4.75rem] z-40 w-[min(88vw,340px)] rounded-2xl bg-wii-deep/95 p-4 text-white shadow-2xl ring-1 ring-white/15 dark:bg-paper dark:text-wii-ink dark:ring-line">
+      <div className="flex items-center justify-between">
+        <h3 className="font-display text-card-head font-bold">Party</h3>
+        <button onClick={onClose} className="text-white/50 transition hover:text-white dark:text-wii-ink/50 dark:hover:text-wii-ink" title="Close">
+          <Icon name="x" className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mt-1 flex items-center justify-between">
+        <p className="text-kicker text-white/50 dark:text-wii-ink/50">
+          {party.state === "PLAYING" ? "playing together" : party.state === "PAUSED" ? "paused" : "waiting to start"}
+        </p>
+        <button
+          className="flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 font-mono text-kicker font-bold tracking-[0.15em] transition hover:bg-white/20 dark:bg-wii-deep/10 dark:hover:bg-wii-deep/20"
+          onClick={onCopy}
+          title="Copy invite link"
+        >
+          {party.inviteCode}
+          {copied ? <Icon name="check" className="h-3 w-3" /> : <Icon name="copy" className="h-3 w-3" />}
+        </button>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {party.members.map((m) => {
+          const isMe = m.profileId === me;
+          const isHostMember = m.profileId === party.hostProfileId;
+          const stale = !m.reportedAt || Date.now() - Date.parse(m.reportedAt) > 30_000;
+          return (
+            <li key={m.profileId} className="flex items-center gap-2.5">
+              <MemberFace member={m} size={26} />
+              <span className="min-w-0 flex-1 truncate text-sm">
+                {m.name}
+                {isMe && <span className="text-white/50 dark:text-wii-ink/50"> (you)</span>}
+                {isHostMember && (
+                  <span className="ml-1.5 rounded-full bg-amber-400/20 px-1.5 py-0.5 text-kicker font-bold uppercase tracking-wider text-amber-300 dark:text-amber-700">
+                    host
+                  </span>
+                )}
+              </span>
+              <span className="font-mono text-kicker tabular-nums text-white/60 dark:text-wii-ink/60">
+                {stale ? "away" : "in sync"}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <button
+        onClick={onLeave}
+        className="mt-4 w-full rounded-xl bg-red-500/15 py-2 text-small font-bold text-red-400 ring-1 ring-red-400/30 transition hover:bg-red-500/25 dark:text-red-600"
+      >
+        {me === party.hostProfileId ? "End party" : "Leave party"}
+      </button>
     </div>
   );
 }

@@ -91,7 +91,7 @@ async function refreshAccessToken(): Promise<string | null> {
  * silent refresh. This is what makes sessions survive the 15-minute access
  * token TTL — the refresh token (30 days, sliding) does the rest.
  */
-async function ensureAccessToken(): Promise<string | null> {
+export async function ensureAccessToken(): Promise<string | null> {
   const token = getAccessToken();
   if (!token) return null;
   const remaining = tokenExpiresInMs(token);

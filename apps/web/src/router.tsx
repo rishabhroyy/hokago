@@ -5,6 +5,7 @@ export type Route =
   | { view: "library"; libraryId: string }
   | { view: "detail"; itemId: string }
   | { view: "player"; mediaFileId: string; mediaItemId: string; profileId: string; audioStreamIndex: number | null }
+  | { view: "party"; code: string | null }
   | { view: "prefs" }
   | { view: "search"; q: string | null }
   | { view: "admin" }
@@ -19,6 +20,8 @@ function parse(pathname: string, search: string): Route {
   if (parts[0] === "admin") return { view: "admin" };
   if (parts[0] === "prefs") return { view: "prefs" };
   if (parts[0] === "search") return { view: "search", q: q.get("q") };
+  if (parts[0] === "party" && !parts[1]) return { view: "party", code: null };
+  if (parts[0] === "party" && parts[1]) return { view: "party", code: parts[1] };
   if (parts[0] === "library" && parts[1]) return { view: "library", libraryId: parts[1] };
   if (parts[0] === "title" && parts[1]) return { view: "detail", itemId: parts[1] };
   if (parts[0] === "watch" && parts[1]) {
@@ -43,10 +46,11 @@ export const paths = {
   search: (query?: string) => (query ? `/search?q=${encodeURIComponent(query)}` : "/search"),
   library: (id: string) => `/library/${id}`,
   detail: (id: string) => `/title/${id}`,
-  player: (mediaFileId: string, mediaItemId: string, profileId: string, audioStreamIndex?: number | null) =>
+  party: (code?: string | null) => (code ? `/party/${encodeURIComponent(code)}` : "/party"),
+  player: (mediaFileId: string, mediaItemId: string, profileId: string, audioStreamIndex?: number | null, partyId?: string | null) =>
     `/watch/${mediaFileId}?mediaItemId=${mediaItemId}&profileId=${profileId}${
       audioStreamIndex != null ? `&audio=${audioStreamIndex}` : ""
-    }`,
+    }${partyId ? `&party=${partyId}` : ""}`,
 };
 
 const RouterCtx = createContext<{ route: Route; navigate: (path: string) => void } | null>(null);

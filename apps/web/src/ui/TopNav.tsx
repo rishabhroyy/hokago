@@ -107,6 +107,18 @@ export function TopNav() {
         </button>
         <button
           className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
+            route.view === "party"
+              ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
+              : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
+          }`}
+          title="Watch party"
+          aria-label="Join a watch party"
+          onClick={(e) => go(paths.party(), e)}
+        >
+          <Icon name="users" className="h-[17px] w-[17px]" />
+        </button>
+        <button
+          className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
             route.view === "search"
               ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
               : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"

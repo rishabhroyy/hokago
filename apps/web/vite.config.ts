@@ -26,6 +26,7 @@ const API_PATHS = [
   "/home",
   "/external-artwork",
   "/watch-state",
+  "/parties",
   "/admin/queues",
   "/admin-api",
 ];

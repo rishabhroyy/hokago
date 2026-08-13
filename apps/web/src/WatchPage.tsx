@@ -502,6 +502,17 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     }
   }, [activeTextTrack, subtitleSelection]);
   const trackDefaultId = subtitleSelection === undefined ? defaultSubtitleId : subtitleSelection;
+  // vidstack re-creates a <Track> (unregister + re-register, new object
+  // identity, list reorder) whenever ANY of its props change — flipping
+  // `default` on selection changes therefore nukes the active selection and
+  // shuffles the caption menu. Snapshot the default per player mount instead;
+  // remounts (keyNonce) re-snapshot the live selection, mid-mount switches go
+  // through the menu's own changeTextTrackMode and never touch `default`.
+  const mountDefaultId = useMemo(
+    () => trackDefaultId,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [keyNonce],
+  );
 
   useEffect(() => {
     if (!mediaItemId) return;
@@ -1549,7 +1560,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                 // The live selection (which may diverge from the remembered
                 // pref) is what a fresh player mount re-activates — a manual
                 // subtitle choice survives method-changing remounts.
-                default={t.id === trackDefaultId}
+                default={t.id === mountDefaultId}
               />
             ))}
           </MediaProvider>

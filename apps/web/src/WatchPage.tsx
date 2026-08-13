@@ -446,6 +446,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   );
   const userInteractedRef = useRef(false);
   const userPausedRef = useRef(false);
+  const autoplayUnmuteArmedRef = useRef(false);
   const [title, setTitle] = useState<string | null>(null);
   // Subtitle worker/track failures surface a dismissible banner — not the
   // full recovery card — because they don't take the stream down.
@@ -1203,14 +1204,79 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const max = Number.isFinite(player.duration) ? player.duration : Infinity;
       player.currentTime = Math.max(0, Math.min(pending.targetSec, max));
     }
-    // Autoplay: navigating into /watch carries the user activation from the
-    // detail-page click (same-document navigation), so play() normally
-    // succeeds; when the browser blocks it (NotAllowedError) the big play
-    // button is the fallback. A deliberate user pause silences this for
-    // later restarts — src reloads (seek/quality switches) fire canPlay
-    // again and must not fight the paused state.
-    if (!userPausedRef.current) {
-      player.play().catch(() => {});
+      // Autoplay: navigating into /watch carries the user activation from the
+      // detail-page click (same-document navigation) — but by the time canplay
+      // arrives (transcode start + HLS buffering, or any restart long after the
+      // last click) the 5s activation window is gone, and an unmuted play()
+      // rejects NotAllowedError — a silent black screen. Muted playback is
+      // always permitted: try the unmuted play() first (fast starts like the
+      // initial REMUX land inside the activation window and keep their sound),
+      // and on NotAllowedError fall back to a muted start.
+      //
+      // Clearing `muted` afterwards is itself subject to the autoplay gate:
+      // the browser pauses a muted-started element (a trusted pause, no JS
+      // involved) when unmuted without a fresh user gesture — even after the
+      // play() promise resolved and playback was under way. Volume is only
+      // restored on the next real interaction (pointer/key), which makes the
+      // unmute legal; until then the video plays silently and the Mute button
+      // shows the muted state.
+      if (!userPausedRef.current) {
+      const video = playerRef.current?.el?.querySelector("video") as HTMLVideoElement | null;
+      if (!video || video.paused === false) return;
+      if (video.muted) {
+        // User muted the video themselves — play() on a muted element is
+        // always permitted, and their mute must not be touched.
+        player.play().catch(() => {});
+        return;
+      }
+      const armUnmuteOnGesture = () => {
+        if (autoplayUnmuteArmedRef.current) return;
+        autoplayUnmuteArmedRef.current = true;
+        const unlock = () => {
+          // Only a real user gesture can legally unmute: synthetic input
+          // (CDP, programmatic dispatchEvent) carries no user activation, and
+          // unmuting on it makes the browser pause playback (a trusted pause,
+          // per the autoplay policy). Stay armed in that case.
+          if (!navigator.userActivation?.isActive) return;
+          window.removeEventListener("pointerdown", unlock, true);
+          window.removeEventListener("keydown", unlock, true);
+          const v = playerRef.current?.el?.querySelector("video") as HTMLVideoElement | null;
+          if (v?.muted) v.muted = false;
+        };
+        window.addEventListener("pointerdown", unlock, true);
+        window.addEventListener("keydown", unlock, true);
+      };
+      const startMuted = (retries = 1) => {
+        if (video.paused === false || userPausedRef.current) return;
+        video.muted = true;
+        player
+          .play()
+          .then(() => {
+            if (!video.paused && video.muted) armUnmuteOnGesture();
+          })
+          .catch((e: unknown) => {
+            // vidstack's canPlayQueue can still serve a stale muted=false
+            // after this handler, unmuting the element before hls.js's
+            // deferred play() lands — retry once, after which the mute sticks
+            // (the queue item is served once per element load).
+            if (
+              retries > 0 &&
+              !userPausedRef.current &&
+              e instanceof DOMException &&
+              (e.name === "NotAllowedError" || e.name === "AbortError")
+            ) {
+              startMuted(retries - 1);
+            }
+          });
+      };
+      // Fast start with a live activation window (initial REMUX): plain
+      // unmuted play() succeeds and keeps its sound. Slow starts (transcode,
+      // restarts) reject NotAllowedError once the activation expires.
+      player
+        .play()
+        .catch((e: unknown) => {
+          if (e instanceof DOMException && e.name === "NotAllowedError") startMuted();
+        });
     }
   }, []);
 

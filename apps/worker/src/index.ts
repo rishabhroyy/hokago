@@ -9,15 +9,18 @@ import {
   JOB_FAILURE_THRESHOLD,
   scanJobId,
   artworkJobId,
+  trickplayJobId,
   metadataJobId,
   type ScanJobData,
   type ArtworkJobData,
+  type TrickplayJobData,
   type MetadataJobData,
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
 import { probeFile } from "@hokago/scanner/probe";
+import { generateTrickplaySheets } from "@hokago/scanner/trickplay";
 import { killTrackedChildren, trackedPidCount } from "@hokago/scanner/child-registry";
 import { AniListProvider, JikanProvider, TvMazeProvider, WikidataBridge } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
@@ -41,6 +44,21 @@ const artworkQueue = new Queue<ArtworkJobData>(QUEUE_NAMES.ARTWORK, {
     // Same deterministic-jobId argument as scan above: without this, a
     // completed artwork job stays in Redis and artworkJobId(mediaItemId)
     // silently refuses to re-enqueue after the first success.
+    removeOnComplete: true,
+    removeOnFail: true,
+  },
+});
+// Trickplay sheet generation decodes the whole file — one of the heaviest
+// jobs in the system — so it gets its own queue/concurrency cap too; the
+// enqueue gate below (sourceHash vs MediaFile.hash) keeps it from ever
+// re-running for an unchanged file.
+const trickplayQueue = new Queue<TrickplayJobData>(QUEUE_NAMES.TRICKPLAY, {
+  connection,
+  defaultJobOptions: {
+    attempts: JOB_FAILURE_THRESHOLD,
+    backoff: { type: "exponential", delay: 2000 },
+    // Same deterministic-jobId argument as artwork above: a kept completed
+    // trickplay job would permanently block re-enqueue for a changed file.
     removeOnComplete: true,
     removeOnFail: true,
   },
@@ -117,6 +135,25 @@ async function enqueueArtwork(job: ArtworkJobData): Promise<void> {
   }
 }
 
+// Regeneration gate: the sheet set is keyed on the source file's content hash
+// (MediaFile.hash — "the idempotency key for all derived work"). When a row
+// already exists for this file AND was generated from the same hash, the work
+// is done — skip the enqueue. Anything else (no row, stale hash, hash missing)
+// enqueues; a deterministic jobId + removeOnComplete makes re-enqueueing
+// already-queued work a no-op.
+async function enqueueTrickplay(job: TrickplayJobData): Promise<void> {
+  try {
+    const file = await db.mediaFile.findUnique({
+      where: { id: job.mediaFileId },
+      select: { hash: true, trickplay: { select: { sourceHash: true } } },
+    });
+    if (file?.trickplay && file.trickplay.sourceHash === file.hash) return;
+    await trickplayQueue.add(QUEUE_NAMES.TRICKPLAY, job, { jobId: trickplayJobId(job.mediaFileId) });
+  } catch (err) {
+    console.error(`enqueueTrickplay failed for ${job.mediaFileId}, will be re-derived on next reconcile:`, err);
+  }
+}
+
 async function enqueueMetadata(providerName: string, job: MetadataJobData): Promise<void> {
   const queue = metadataQueues[providerName];
   if (!queue) return;
@@ -138,6 +175,7 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
       await db.library.update({ where: { id: library.id }, data: { scanCursor: dir } });
     },
     onArtworkNeeded: enqueueArtwork,
+    onTrickplayNeeded: enqueueTrickplay,
     onMetadataNeeded: async (job) => {
       const chain = buildProviderChain(job.kind, library.contentProfile, library.providerOrder);
       const first = chain[0];
@@ -185,6 +223,57 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
   }
 }
 
+async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
+  const { mediaItemId, mediaFileId, filePath, durationMs } = job.data;
+  try {
+    // Re-probe rather than trust anything carried across the queue boundary
+    // (re-derive, don't accumulate) — no probe result, or a file the probe
+    // couldn't read, means "no sheets", not a poisoned item.
+    const probe = await probeFile(filePath);
+    const duration = durationMs ?? probe?.durationMs ?? null;
+    const mediaFile = await db.mediaFile.findUnique({ where: { id: mediaFileId } });
+    if (duration === null || !mediaFile) {
+      await db.jobFailure.deleteMany({ where: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } });
+      return;
+    }
+
+    const result = await generateTrickplaySheets(filePath, duration, mediaFileId);
+    await db.trickplay.upsert({
+      where: { mediaFileId },
+      create: {
+        mediaFileId,
+        tileWidth: result.tileWidth,
+        tileHeight: result.tileHeight,
+        intervalMs: result.intervalMs,
+        tilesPerSheet: result.tilesPerSheet,
+        sheetPaths: result.sheetPaths,
+        sourceHash: mediaFile.hash,
+      },
+      update: {
+        tileWidth: result.tileWidth,
+        tileHeight: result.tileHeight,
+        intervalMs: result.intervalMs,
+        tilesPerSheet: result.tilesPerSheet,
+        sheetPaths: result.sheetPaths,
+        sourceHash: mediaFile.hash,
+        generatedAt: new Date(),
+      },
+    });
+    await db.jobFailure.deleteMany({ where: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } });
+  } catch (err) {
+    const failure = await db.jobFailure.upsert({
+      where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } },
+      create: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY, attempts: 1, lastError: String(err) },
+      update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
+    });
+    if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
+      // Poison pill: stop retrying, stay playable, surface to admins.
+      await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } });
+      return; // swallow — no rethrow, so BullMQ won't keep retrying a dead job
+    }
+    throw err; // let BullMQ retry with backoff until the threshold is hit
+  }
+}
 /**
  * Same degrade-never-error/poison-pill shape as processArtwork. `providerName`
  * is baked in per-queue (one handler instance per provider) — a miss doesn't
@@ -246,6 +335,14 @@ const artworkWorker = new Worker<ArtworkJobData>(QUEUE_NAMES.ARTWORK, processArt
   connection,
   concurrency: artworkConcurrency, // backpressure : bounded ffmpeg concurrency
 });
+// Trickplay decodes the whole file per job — the heaviest ffmpeg work in the
+// system. Each job extracts one sheet at a time (sequential ffmpeg inside the
+// job); HOKAGO_TRICKPLAY_CONCURRENCY (default 2) bounds concurrent decodes.
+const trickplayConcurrency = Math.max(1, Number(process.env.HOKAGO_TRICKPLAY_CONCURRENCY ?? 2));
+const trickplayWorker = new Worker<TrickplayJobData>(QUEUE_NAMES.TRICKPLAY, processTrickplay, {
+  connection,
+  concurrency: trickplayConcurrency,
+});
 
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.
@@ -297,6 +394,38 @@ async function reconcile(): Promise<void> {
     });
   }
 
+  // Trickplay leg one: files that never got sheets. The enqueue gate inside
+  // enqueueTrickplay makes the hash comparison, so no need to repeat it here.
+  const needingTrickplay = await db.mediaFile.findMany({
+    where: {
+      durationMs: { not: null },
+      probeFailed: false,
+      trickplay: null,
+      mediaItem: { state: "OK", jobFailures: { none: { jobType: QUEUE_NAMES.TRICKPLAY, attempts: { gte: JOB_FAILURE_THRESHOLD } } } },
+    },
+  });
+  for (const file of needingTrickplay) {
+    await enqueueTrickplay({
+      mediaItemId: file.mediaItemId,
+      mediaFileId: file.id,
+      filePath: file.path,
+      durationMs: file.durationMs,
+    });
+  }
+
+  // Trickplay leg two: the file changed (content hash differs from the hash
+  // the current sheets were generated from) — stale sheets, regenerate.
+  const staleTrickplay = await db.trickplay.findMany({ include: { mediaFile: true } });
+  for (const row of staleTrickplay) {
+    if (row.sourceHash === row.mediaFile.hash) continue;
+    await enqueueTrickplay({
+      mediaItemId: row.mediaFile.mediaItemId,
+      mediaFileId: row.mediaFile.id,
+      filePath: row.mediaFile.path,
+      durationMs: row.mediaFile.durationMs,
+    });
+  }
+
   // A MOVIE/SERIES missing an ExternalId for every provider in its own
   // chain has never been successfully resolved (or its match was lost) —
   // re-enqueue against the first provider, same as a fresh onMetadataNeeded.
@@ -330,7 +459,9 @@ async function reconcile(): Promise<void> {
 
   console.log(
     `reconciler: ${libraries.length} librar${libraries.length === 1 ? "y" : "ies"} re-enqueued, ` +
-      `${needingArtwork.length} artwork job(s) re-derived, ${metadataReDerived} metadata job(s) re-derived`,
+      `${needingArtwork.length} artwork job(s) re-derived, ` +
+      `${needingTrickplay.length + staleTrickplay.length} trickplay job(s) re-derived, ` +
+      `${metadataReDerived} metadata job(s) re-derived`,
   );
 }
 
@@ -346,7 +477,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`${signal}: closing workers (tracked children: ${trackedPidCount()})...`);
 
   await Promise.race([
-    Promise.all([scanWorker.close(), artworkWorker.close(), ...Object.values(metadataWorkers).map((w) => w.close())]),
+    Promise.all([scanWorker.close(), artworkWorker.close(), trickplayWorker.close(), ...Object.values(metadataWorkers).map((w) => w.close())]),
     new Promise((resolve) => setTimeout(resolve, 10_000)),
   ]);
 
@@ -355,6 +486,7 @@ async function shutdown(signal: string): Promise<void> {
   await Promise.all([
     scanQueue.close(),
     artworkQueue.close(),
+    trickplayQueue.close(),
     ...Object.values(metadataQueues).map((q) => q.close()),
     connection.quit(),
   ]);

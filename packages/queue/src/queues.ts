@@ -1,6 +1,7 @@
 export const QUEUE_NAMES = {
   SCAN: "scan",
   ARTWORK: "artwork",
+  TRICKPLAY: "trickplay",
   METADATA_TVMAZE: "metadata-tvmaze",
   METADATA_ANILIST: "metadata-anilist",
   METADATA_MAL: "metadata-mal",
@@ -19,6 +20,13 @@ export interface ArtworkJobData {
   durationMs: number | null;
 }
 
+export interface TrickplayJobData {
+  mediaItemId: string;
+  mediaFileId: string;
+  filePath: string;
+  durationMs: number | null;
+}
+
 export interface MetadataJobData {
   mediaItemId: string;
   libraryId: string;
@@ -30,6 +38,7 @@ export interface MetadataJobData {
 /** Deterministic BullMQ jobIds so re-enqueueing already-queued work is a no-op (/). */
 export const scanJobId = (libraryId: string): string => libraryId;
 export const artworkJobId = (mediaItemId: string): string => `artwork-${mediaItemId}`;
+export const trickplayJobId = (mediaFileId: string): string => `trickplay-${mediaFileId}`;
 export const metadataJobId = (provider: string, mediaItemId: string): string => `metadata-${provider}-${mediaItemId}`;
 
 /** After this many failures, poison-pill: stop retrying, flip MediaItem.state . */

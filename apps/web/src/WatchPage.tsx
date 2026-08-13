@@ -26,7 +26,7 @@ import type {
   StartPlaybackResponse as PlaybackStart,
   AudioTrackSwitchBody,
 } from "@hokago/contract/playback";
-import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo } from "@hokago/contract/media-files";
+import type { SubtitleTrackInfo, AudioTrackInfo, FontDescriptor as FontInfo, MediaFileTrickplayResponse as TrickplayIndex } from "@hokago/contract/media-files";
 import { api } from "./api-client";
 import { BROWSER_DEVICE_PROFILE } from "./device-profile";
 import { getPrimaryProfile } from "./profile";
@@ -100,11 +100,13 @@ function AbsoluteTimeSlider({
   offsetMs,
   absoluteDurationMs,
   onScrub,
+  trickplay,
 }: {
   playerRef: RefObject<MediaPlayerInstance | null>;
   offsetMs: number;
   absoluteDurationMs: number;
   onScrub: (mediaTimeMs: number) => void;
+  trickplay: TrickplayIndex | null;
 }) {
   const remote = useMediaRemote(playerRef);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -138,6 +140,33 @@ function AbsoluteTimeSlider({
     const rect = el.getBoundingClientRect();
     return rect.width > 0 ? Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100)) : 0;
   };
+
+  // The tile under the hover position. Sheet generation is grid-aligned to
+  // the absolute 10s grid (tile N of sheet M = (M*tilesPerSheet + N) *
+  // intervalMs of media time), so this is pure arithmetic — no VTT needed.
+  // object-position cropping: pct = tile/(tiles-1) along each axis (guarded
+  // for 1-column/1-row sheets where the division is undefined).
+  const hoverTile = useMemo(() => {
+    if (!trickplay || pointerPct === null) return null;
+    const mediaSec = (pointerPct / 100) * endSec;
+    const tileIndex = Math.floor((mediaSec * 1000) / trickplay.intervalMs);
+    const totalTiles = trickplay.sheets.reduce((sum, s) => sum + s.tiles, 0);
+    if (totalTiles === 0) return null;
+    const i = Math.min(tileIndex, totalTiles - 1);
+    const sheetIndex = Math.floor(i / trickplay.tilesPerSheet);
+    const sheet = trickplay.sheets[sheetIndex];
+    if (!sheet) return null;
+    const inSheet = i % trickplay.tilesPerSheet;
+    const col = inSheet % trickplay.cols;
+    const rows = Math.ceil(sheet.tiles / trickplay.cols);
+    const row = Math.floor(inSheet / trickplay.cols);
+    return {
+      sheet,
+      col,
+      row,
+      position: `${(trickplay.cols > 1 ? col / (trickplay.cols - 1) : 0) * 100}% ${(rows > 1 ? row / (rows - 1) : 0) * 100}%`,
+    };
+  }, [trickplay, pointerPct, endSec]);
 
   const seekToPct = useCallback(
     (p: number) => {
@@ -244,6 +273,24 @@ function AbsoluteTimeSlider({
         data-visible={pointerPct !== null || undefined}
         style={{ position: "absolute", bottom: "calc(100% + 8px)", left: "var(--slider-pointer)", transform: "translateX(-50%)" }}
       >
+        {hoverTile && trickplay && (
+          <img
+            src={hoverTile.sheet.url}
+            alt=""
+            draggable={false}
+            // Sprite crop via object-fit:none: the sheet renders at its
+            // intrinsic 5xN grid, object-position slides the tile into view.
+            // Displayed at half the tile's native size (sharp on retina).
+            style={{
+              width: Math.round(trickplay.tileWidth / 2),
+              height: Math.round(trickplay.tileHeight / 2),
+              objectFit: "none",
+              objectPosition: hoverTile.position,
+              borderRadius: 6,
+              pointerEvents: "none",
+            }}
+          />
+        )}
         <span className="vds-slider-value">{formatClock((shownPct / 100) * endSec)}</span>
       </div>
     </div>
@@ -330,6 +377,9 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // on a state value the commit callback might close over stale.
   const srcNonceRef = useRef(0);
   const [fonts, setFonts] = useState<FontInfo[]>([]);
+  // Scrubber-preview index; null until fetched/absent (no sheets generated
+  // yet) — the slider just shows the clock until this arrives.
+  const [trickplay, setTrickplay] = useState<TrickplayIndex | null>(null);
   const playerRef = useRef<MediaPlayerInstance>(null);
   // Client-side seek applied on the next canplay after a restart. Tagged with
   // the src nonce the seek was issued for: two restarts committed before the
@@ -506,6 +556,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       .GET("/media-files/{id}/fonts", { params: { path: { id: mediaFileId } } })
       .then(({ data }) => {
         if (!cancelled && data) setFonts(data);
+      })
+      .catch(() => {});
+    api
+      .GET("/media-files/{id}/trickplay", { params: { path: { id: mediaFileId } } })
+      .then(({ data }) => {
+        if (!cancelled && data) setTrickplay(data);
       })
       .catch(() => {});
     return () => {
@@ -1282,6 +1338,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                   offsetMs={timelineOffsetMs}
                   absoluteDurationMs={absoluteDurationMs}
                   onScrub={commitSeek}
+                  trickplay={trickplay}
                 />
               ),
               settingsMenuItemsEnd: (

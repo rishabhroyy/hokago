@@ -4,10 +4,12 @@ export {
   JOB_FAILURE_THRESHOLD,
   scanJobId,
   artworkJobId,
+  trickplayJobId,
   metadataJobId,
   type QueueName,
   type ScanJobData,
   type ArtworkJobData,
+  type TrickplayJobData,
   type MetadataJobData,
 } from "./queues.js";
 export { Queue, Worker, QueueEvents } from "bullmq";

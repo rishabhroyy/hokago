@@ -28,7 +28,8 @@ export interface ArtworkDescriptor {
  * made `storeBytes` write artwork into e.g. `packages/scanner/data/config`,
  * and the stored relative `bytesPath` then 404'd from the API's own cwd.
  */
-function configDir(): string {
+/** Config root for derived stores (artwork, trickplay cache) — always absolute. */
+export function configDir(): string {
   return process.env.HOKAGO_CONFIG_DIR ? path.resolve(process.env.HOKAGO_CONFIG_DIR) : defaultConfigDir();
 }
 

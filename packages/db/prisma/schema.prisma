@@ -803,6 +803,8 @@ model Trickplay {
   tilesPerSheet Int
  /// Sprite sheet paths under /config/cache — disposable, regenerable .
   sheetPaths   String[]
+ /// MediaFile.hash the sheets were generated from — mismatch means regenerate .
+  sourceHash   String?
   generatedAt  DateTime  @default(now())
 
   @@map("trickplay")

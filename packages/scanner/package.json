@@ -7,7 +7,8 @@
     "./ingest": "./dist/ingest.js",
     "./metadata": "./dist/metadata.js",
     "./probe": "./dist/probe.js",
-    "./child-registry": "./dist/child-registry.js"
+    "./child-registry": "./dist/child-registry.js",
+    "./trickplay": "./dist/trickplay.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

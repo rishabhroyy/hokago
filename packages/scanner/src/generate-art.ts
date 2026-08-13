@@ -10,9 +10,9 @@ const POSTER_HEIGHT = 1500; // 2:3
 const CANDIDATE_COUNT = 5;
 
 /** Registers the child's PID so a worker's SIGTERM handler can reap it . */
-async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
+export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = execFile("ffmpeg", args, { maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const child = execFile("ffmpeg", args, { maxBuffer: 32 * 1024 * 1024, timeout: opts?.timeoutMs }, (err, stdout, stderr) => {
       untrackPid(child.pid);
       if (err) reject(err);
       else resolve({ stdout, stderr });

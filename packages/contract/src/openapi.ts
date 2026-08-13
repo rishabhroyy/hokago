@@ -91,6 +91,7 @@ import {
   MediaFileParams,
   MediaFileFontsResponse,
   MediaFileTracksResponse,
+  MediaFileTrickplayResponse,
   ErrorResponse as MediaFileErrorResponse,
 } from "./media-files.js";
 import { HomeQuery, HomeResponse } from "./home.js";
@@ -571,6 +572,16 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: {
       200: { description: "OK", ...json(MediaFileTracksResponse) },
       404: { description: "Media file not found", ...json(MediaFileErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/media-files/{id}/trickplay",
+    summary: "Scrubber-preview (trickplay) sheet index for a media file",
+    request: { params: MediaFileParams },
+    responses: {
+      200: { description: "OK", ...json(MediaFileTrickplayResponse) },
+      404: { description: "Media file or trickplay sheets not found", ...json(MediaFileErrorResponse) },
     },
   });
 

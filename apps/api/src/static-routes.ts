@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import { PrismaClient } from "@hokago/db";
-import { MediaFileParams, MediaFileFontsResponse, MediaFileTracksResponse, ErrorResponse } from "@hokago/contract/media-files";
-import { resolveConfigFilePath } from "./config.js";
+import { MediaFileParams, MediaFileFontsResponse, MediaFileTracksResponse, MediaFileTrickplayResponse, ErrorResponse } from "@hokago/contract/media-files";
+import { resolveConfigFilePath, configDir } from "./config.js";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
@@ -55,6 +55,19 @@ async function subtitleRelativeIndex(mediaFileId: string, absoluteStreamIndex: n
     where: { mediaFileId, type: "SUBTITLE", streamIndex: { lt: absoluteStreamIndex } },
   });
   return preceding;
+}
+
+// Trickplay sheets are generated with a fixed 5-wide grid (tile filter
+// `tile=5x5` in packages/scanner/src/trickplay.ts); the client needs the
+// column count to crop a single tile out of a sheet.
+const TRICKPLAY_COLS = 5;
+
+// Sheet paths are stored relative to the config dir ("cache/trickplay/{id}/…")
+// but host-run tools may have recorded host-absolute paths — accept both.
+function resolveTrickplaySheetPath(stored: string): string | null {
+  if (existsSync(stored)) return stored;
+  const fallback = path.join(configDir(), stored);
+  return existsSync(fallback) ? fallback : null;
 }
 
 /**
@@ -181,7 +194,59 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     },
   );
 
- // Subtitle text for client-side rendering — external sidecars are
+  // Scrubber-preview (trickplay) sheet index — the JSON side of the cache
+  // under /config/cache/trickplay. 404 (not "empty") when a file has no
+  // sheets yet: the player treats that as "no previews", the same way it
+  // treats a missing file.
+  app.get(
+    "/media-files/:id/trickplay",
+    {
+      preHandler: app.authenticate,
+      schema: { params: MediaFileParams, response: { 200: MediaFileTrickplayResponse, 404: ErrorResponse } },
+    },
+    async (req, reply) => {
+      const mediaFile = await db.mediaFile.findUnique({ where: { id: req.params.id } });
+      const row = await db.trickplay.findUnique({ where: { mediaFileId: req.params.id } });
+      if (!mediaFile || !row || row.sheetPaths.length === 0) {
+        return reply.code(404).send({ error: "trickplay not generated" });
+      }
+      // Tiles are exactly floor(duration / interval) + 1: one per 10s
+      // boundary (0, 10, 20…). The last sheet holds the remainder.
+      const totalTiles = Math.max(1, Math.ceil((mediaFile.durationMs ?? 0) / row.intervalMs));
+      return {
+        tileWidth: row.tileWidth,
+        tileHeight: row.tileHeight,
+        intervalMs: row.intervalMs,
+        tilesPerSheet: row.tilesPerSheet,
+        cols: TRICKPLAY_COLS,
+        sheets: row.sheetPaths.map((_, index) => ({
+          index,
+          url: `/media-files/${req.params.id}/trickplay/sheets/${index}`,
+          tiles: Math.min(row.tilesPerSheet, totalTiles - index * row.tilesPerSheet),
+        })),
+      };
+    },
+  );
+
+  // Trickplay sheet bytes — content-addressed by (mediaFile, index), so the
+  // response is safe to cache forever. Same COOP/COEP dance as artwork.
+  app.get<{ Params: { id: string; index: string } }>(
+    "/media-files/:id/trickplay/sheets/:index",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
+      const row = await db.trickplay.findUnique({ where: { mediaFileId: req.params.id } });
+      const index = Number.parseInt(req.params.index, 10);
+      const sheetPath = row && Number.isInteger(index) && index >= 0 && index < row.sheetPaths.length ? resolveTrickplaySheetPath(row.sheetPaths[index]!) : null;
+      if (!sheetPath) return reply.code(404).send({ error: "trickplay sheet not found" });
+
+      reply.header("Cross-Origin-Resource-Policy", "cross-origin");
+      reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      reply.type("image/jpeg");
+      return reply.send(createReadStream(sheetPath));
+    },
+  );
+
+  // Subtitle text for client-side rendering — external sidecars are
   // read straight off disk; embedded tracks are extracted on demand (no eager
   // extraction step exists for subtitle *text* itself, only for the fonts an
  // ASS track references — — so this has to happen at request time).

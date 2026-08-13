@@ -39,4 +39,24 @@ export const MediaFileTracksResponse = z.object({
   subtitles: z.array(SubtitleTrackInfo),
 });
 
+/** One sprite sheet of the file's scrubber-preview index; `url` serves the JPG bytes. */
+export const TrickplaySheet = z.object({
+  index: z.number(),
+  url: z.string(),
+  /** How many tiles this sheet actually holds — only the last sheet can hold fewer than tilesPerSheet. */
+  tiles: z.number(),
+});
+export type TrickplaySheet = z.infer<typeof TrickplaySheet>;
+
+/** Scrubber-preview (trickplay) index: tile N = sheets[floor(N / tilesPerSheet)] at col (N % tilesPerSheet) % cols, row floor(N % tilesPerSheet / cols). */
+export const MediaFileTrickplayResponse = z.object({
+  tileWidth: z.number(),
+  tileHeight: z.number(),
+  intervalMs: z.number(),
+  tilesPerSheet: z.number(),
+  cols: z.number(),
+  sheets: z.array(TrickplaySheet),
+});
+export type MediaFileTrickplayResponse = z.infer<typeof MediaFileTrickplayResponse>;
+
 export const ErrorResponse = z.object({ error: z.string() });

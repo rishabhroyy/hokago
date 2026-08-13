@@ -99,6 +99,14 @@ export interface ArtworkNeeded {
   durationMs: number | null;
 }
 
+/** Per-file scrubber-preview sheets (trickplay) — queued, not inline. */
+export interface TrickplayNeeded {
+  mediaItemId: string;
+  mediaFileId: string;
+  filePath: string;
+  durationMs: number | null;
+}
+
 /** A MOVIE or SERIES item whose network-provider metadata (Step 6) hasn't been resolved yet. */
 export interface MetadataNeeded {
   mediaItemId: string;
@@ -112,6 +120,7 @@ interface LeafResult {
   mediaItemId: string;
   artworkStored: number;
   needsArtwork: ArtworkNeeded | null;
+  trickplayNeeded: TrickplayNeeded | null;
   title: string;
   year: number | null;
 }
@@ -124,6 +133,7 @@ async function ingestLeafItem(
   parentId: string | null,
   seasonNumber: number | null,
   deferArtwork: boolean,
+  deferTrickplay: boolean,
   profile: ContentProfile,
 ): Promise<LeafResult> {
   const { file, dir, probe } = ctx;
@@ -262,13 +272,16 @@ async function ingestLeafItem(
       mediaItemId,
       artworkStored: 0,
       needsArtwork: { mediaItemId, filePath: file.path, dir, durationMs: probe?.durationMs ?? null },
+      trickplayNeeded: deferTrickplay
+        ? { mediaItemId, mediaFileId, filePath: file.path, durationMs: probe?.durationMs ?? null }
+        : null,
       title,
       year: parsed.year,
     };
   }
 
   const artworkStored = await storeArtwork(db, mediaItemId, dir, file.path, probe?.attachedPics ?? [], probe?.durationMs ?? null);
-  return { mediaItemId, artworkStored, needsArtwork: null, title, year: parsed.year };
+  return { mediaItemId, artworkStored, needsArtwork: null, trickplayNeeded: null, title, year: parsed.year };
 }
 
 /** Resolves and upserts artwork for one media item — shared by inline (CLI) and queued (worker) paths. */
@@ -296,6 +309,8 @@ export interface IngestOptions {
   onDirectoryComplete?: (dir: string) => Promise<void>;
   /** When set, artwork is not resolved inline — each file needing it is handed to this callback instead (queued). */
   onArtworkNeeded?: (job: ArtworkNeeded) => Promise<void>;
+  /** When set, trickplay sheets are not generated inline — handed to this callback instead (queued). */
+  onTrickplayNeeded?: (job: TrickplayNeeded) => Promise<void>;
  /** Called for every MOVIE/SERIES item so network-provider metadata (Step 6) can be queued. */
   onMetadataNeeded?: (job: MetadataNeeded) => Promise<void>;
  /** Forks the parser registry . Defaults to the library's own profile when omitted. */
@@ -312,6 +327,7 @@ export async function ingestLibrary(
   const files = await walkVideoFiles(rootPath);
   const byDir = groupByDirectory(files);
   const deferArtwork = opts.onArtworkNeeded !== undefined;
+  const deferTrickplay = opts.onTrickplayNeeded !== undefined;
 
   const summary: IngestSummary = {
     directoriesScanned: byDir.size,
@@ -387,9 +403,11 @@ export async function ingestLibrary(
           null,
           null,
           deferArtwork,
+          deferTrickplay,
           profile,
         );
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
+        if (result.trickplayNeeded) await opts.onTrickplayNeeded?.(result.trickplayNeeded);
         await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
         return result;
       });
@@ -431,12 +449,13 @@ export async function ingestLibrary(
       const isMain = main.includes(file.path);
       let result: LeafResult | null = null;
       if (isOutlier) {
-        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null, deferArtwork, profile);
+        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null, deferArtwork, deferTrickplay, profile);
       } else if (isMain) {
-        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber, deferArtwork, profile);
+        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber, deferArtwork, deferTrickplay, profile);
       }
       if (result) {
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
+        if (result.trickplayNeeded) await opts.onTrickplayNeeded?.(result.trickplayNeeded);
         // Outliers are movies (the Mugen Train shape) — tries the
         // anime provider chain for these regardless of the library's profile.
         if (isOutlier) {

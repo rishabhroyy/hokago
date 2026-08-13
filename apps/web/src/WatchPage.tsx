@@ -1204,23 +1204,37 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const max = Number.isFinite(player.duration) ? player.duration : Infinity;
       player.currentTime = Math.max(0, Math.min(pending.targetSec, max));
     }
-      // Autoplay: navigating into /watch carries the user activation from the
-      // detail-page click (same-document navigation) — but by the time canplay
-      // arrives (transcode start + HLS buffering, or any restart long after the
-      // last click) the 5s activation window is gone, and an unmuted play()
-      // rejects NotAllowedError — a silent black screen. Muted playback is
-      // always permitted: try the unmuted play() first (fast starts like the
-      // initial REMUX land inside the activation window and keep their sound),
-      // and on NotAllowedError fall back to a muted start.
-      //
-      // Clearing `muted` afterwards is itself subject to the autoplay gate:
-      // the browser pauses a muted-started element (a trusted pause, no JS
-      // involved) when unmuted without a fresh user gesture — even after the
-      // play() promise resolved and playback was under way. Volume is only
-      // restored on the next real interaction (pointer/key), which makes the
-      // unmute legal; until then the video plays silently and the Mute button
-      // shows the muted state.
-      if (!userPausedRef.current) {
+    // The host of a live party re-anchors the room at the actual resume
+    // point. The party anchor is wall-clock-extrapolated (positionMs +
+    // elapsed since issuedAt) and is only re-issued on seeks/play-pause —
+    // a position-preserving restart (quality or audio-track switch) that
+    // lands here after a 15-30s re-encode gap would otherwise leave the
+    // guests that far AHEAD (the anchor kept advancing while the host's
+    // new stream buffered), with nothing pulling them back until the next
+    // host gesture. Re-issuing here (not at the click: the clock would run
+    // through the gap either way) snaps the room onto the host's stream.
+    const partyAnchor = partyLiveRef.current;
+    if (partyIdRef.current && partyIsHostRef.current && partyAnchor) {
+      const anchorMs = Math.round((player.currentTime || 0) * 1000 + timelineOffsetRef.current);
+      party.control(partyAnchor.state, anchorMs);
+    }
+    // Autoplay: navigating into /watch carries the user activation from the
+    // detail-page click (same-document navigation) — but by the time canplay
+    // arrives (transcode start + HLS buffering, or any restart long after the
+    // last click) the 5s activation window is gone, and an unmuted play()
+    // rejects NotAllowedError — a silent black screen. Muted playback is
+    // always permitted: try the unmuted play() first (fast starts like the
+    // initial REMUX land inside the activation window and keep their sound),
+    // and on NotAllowedError fall back to a muted start.
+    //
+    // Clearing `muted` afterwards is itself subject to the autoplay gate:
+    // the browser pauses a muted-started element (a trusted pause, no JS
+    // involved) when unmuted without a fresh user gesture — even after the
+    // play() promise resolved and playback was under way. Volume is only
+    // restored on the next real interaction (pointer/key), which makes the
+    // unmute legal; until then the video plays silently and the Mute button
+    // shows the muted state.
+    if (!userPausedRef.current) {
       const video = playerRef.current?.el?.querySelector("video") as HTMLVideoElement | null;
       if (!video || video.paused === false) return;
       if (video.muted) {
@@ -1278,7 +1292,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           if (e instanceof DOMException && e.name === "NotAllowedError") startMuted();
         });
     }
-  }, []);
+  }, [party.control]);
 
   // Quality switch — restarts the server-side encode at new caps (the server
   // decides REMUX vs TRANSCODE for the new resolution) and swaps src on the

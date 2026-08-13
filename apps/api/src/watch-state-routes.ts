@@ -1,5 +1,6 @@
 import { PrismaClient } from "@hokago/db";
 import { broadcastPresence } from "./presence.js";
+import { broadcastParty } from "./party-events.js";
 import { stopSession } from "./playback-routes.js";
 import { loadContinueWatching } from "./continue-watching.js";
 import {
@@ -51,7 +52,12 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       },
     },
     async (req, reply) => {
-      const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
+      // partyMember included so a party member's heartbeats flow straight
+      // into the party (position + liveness) in the same transaction.
+      const session = await db.playbackSession.findUnique({
+        where: { id: req.params.sessionId },
+        include: { partyMember: true },
+      });
       if (!session) return reply.code(404).send({ error: "session not found" });
 
       const { positionMs, durationMs } = req.body;
@@ -130,9 +136,20 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
             ...(completed ? { completions: { increment: 1 } } : {}),
           },
         }),
+        ...(session.partyMember
+          ? [
+              db.partyMember.update({
+                where: {
+                  partyId_profileId: { partyId: session.partyMember.partyId, profileId: session.profileId },
+                },
+                data: { positionMs, reportedAt: now },
+              }),
+            ]
+          : []),
       ]);
 
       await broadcastPresence();
+      if (session.partyMember) await broadcastParty(db, session.partyMember.partyId);
       return { ok: true, watched };
     },
   );
@@ -144,12 +161,27 @@ export async function registerWatchStateRoutes(app: ZodFastifyInstance): Promise
       schema: { params: PlaybackSessionParams, response: { 200: StopResponse, 404: ErrorResponse } },
     },
     async (req, reply) => {
-      const session = await db.playbackSession.findUnique({ where: { id: req.params.sessionId } });
+      const session = await db.playbackSession.findUnique({
+        where: { id: req.params.sessionId },
+        include: { partyMember: true },
+      });
       if (!session) return reply.code(404).send({ error: "session not found" });
 
       // Kills the session's ffmpeg child (if any) and frees its transcode
       // slot — without this every stopped playback leaves ffmpeg running.
       await stopSession(session.id);
+
+      // Unlink the party membership so the member list stops showing this
+      // session; the member itself stays until their own /leave or the reaper.
+      if (session.partyMember) {
+        await db.partyMember.update({
+          where: {
+            partyId_profileId: { partyId: session.partyMember.partyId, profileId: session.profileId },
+          },
+          data: { sessionId: null, reportedAt: new Date() },
+        });
+        await broadcastParty(db, session.partyMember.partyId);
+      }
       await broadcastPresence();
       return { ok: true };
     },

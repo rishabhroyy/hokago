@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import websocketPlugin from "@fastify/websocket";
 import type { WebSocket } from "ws";
 import { PrismaClient } from "@hokago/db";
 import type { AccessTokenPayload } from "./auth.js";
@@ -14,8 +13,6 @@ const sockets = new Set<WebSocket>();
  * so the token travels as a query param instead.
  */
 export async function registerPresence(app: FastifyInstance): Promise<void> {
-  await app.register(websocketPlugin);
-
   app.get<{ Querystring: { token?: string } }>(
     "/ws/presence",
     {

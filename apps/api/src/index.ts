@@ -1,5 +1,9 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
+// Imported for the type augmentation (@fastify/websocket augments fastify's
+// route shorthands with `websocket: true`) as much as for the plugin itself —
+// without the import in the program, presence/party WS routes lose their types.
+import websocketPlugin from "@fastify/websocket";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -19,6 +23,7 @@ import { registerAvatarRoutes } from "./avatar-routes.js";
 import { registerBrowseRoutes } from "./browse-routes.js";
 import { registerHomeRoutes } from "./home-routes.js";
 import { registerWatchStateRoutes } from "./watch-state-routes.js";
+import { registerWatchPartyRoutes, reapStalePartyMembers } from "./watch-party-routes.js";
 import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
@@ -35,6 +40,9 @@ app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_re
 // reply.sendFile() since media/font/artwork paths live wherever the operator's
 // library roots are, not under one shared static directory.
 await app.register(fastifyStatic, { serve: false });
+// The WS layer (presence + party sockets). Registered once at the root —
+// @fastify/websocket is a fastify-plugin, a second registration throws.
+await app.register(websocketPlugin);
 
 app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () => ({
   status: "ok" as const,
@@ -55,6 +63,7 @@ await registerBrowseRoutes(app);
 await registerHomeRoutes(app);
 await registerPlaybackRoutes(app);
 await registerWatchStateRoutes(app);
+await registerWatchPartyRoutes(app);
 await registerStaticRoutes(app);
 // Last: the SPA catch-all — everything the API doesn't own is the web app.
 await registerWebRoutes(app);
@@ -109,11 +118,17 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 
 // Idle reaper: closes playback sessions whose client stopped heartbeating
 // (closed tab, crashed player) — kills their ffmpeg child and frees the
-// transcode slot, so abandoned playback can't accumulate processes.
+// transcode slot, so abandoned playback can't accumulate processes. The same
+// sweep drops stale watch-party members and old ended parties.
 setInterval(() => {
   reapStaleSessions()
     .then((reaped) => {
       if (reaped > 0) app.log.info(`reaped ${reaped} stale playback session(s)`);
     })
     .catch((err) => app.log.error({ err }, "stale session reap failed"));
+  reapStalePartyMembers()
+    .then((reaped) => {
+      if (reaped > 0) app.log.info(`reaped ${reaped} stale watch-party member(s)/party(ies)`);
+    })
+    .catch((err) => app.log.error({ err }, "stale party reap failed"));
 }, 60_000);

@@ -481,90 +481,98 @@ async function restartTranscode(
     releaseTranscodeSlot();
     return { cancelled: true };
   }
-
-  const profile = overrides?.profile ?? live.deviceProfile;
-  // The live entry's *method* is the source of truth; the quality route
-  // forces method via overrides (REMUX→TRANSCODE→REMUX round trips leave
-  // live.remux null from the TRANSCODE leg — consulting it here would
-  // silently start a transcode and report REMUX).
-  const isRemux = (overrides?.method ?? live.method) === "REMUX";
-  // The stream origin must equal the client's reported offset exactly, or
-  // sub/clock sync drifts. REMUX fast-seeks and can only start at the probed
-  // keyframe; TRANSCODE accurate-seeks, so its origin is the raw target.
-  const startMs = isRemux ? await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
-  const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
-  // Resume via a piped stub (header + tail from the exact keyframe cluster):
-  // the container seek table lies (Cue → different keyframe than the bitstream
-  // probe), so -ss on mkv would start at a different media time than startMs
-  // and subs drift. Falls back to the legacy -ss remux when probing fails.
-  const resumeInput = isRemux ? await buildResumeInput(live.mediaFile.path, startMs) : null;
-  const args = isRemux
-    ? buildRemuxArgs({
-        inputPath: live.mediaFile.path,
-        // Derive from outDir, not live.remux.outFile: the audio-track route
-        // restarts into a fresh per-track outDir (spread sets live.outDir,
-        // leaving remux.outFile pointing at the previous track's dir), and
-        // writing the new stream there means it lands on the disk the stream
-        // route then serves. Seek-restarts keep outDir unchanged, so this is
-        // the same file either way.
-        outputPath: path.join(live.outDir, "stream.mp4"),
-        startMs,
-        durationMs: live.mediaFile.durationMs,
-        audioStreamIndex: live.audioStreamIndex,
-        audioCodec: live.audioCodec,
-        videoCodec: live.mediaFile.videoCodec,
-        pipedInput: resumeInput !== null,
-      })
-    : buildFfmpegArgs({
-        inputPath: live.mediaFile.path,
-        outputDir: live.outDir,
-        startSegment: segmentFrom,
-        segmentSeconds: HLS_SEGMENT_SECONDS,
-        // -ss targets the stream origin exactly — the reported startMs — so
-        // the browser timeline origin matches the client offset.
-        seekMs: startMs,
-        videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
-        audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
-        audioStreamIndex: live.audioStreamIndex,
-        maxWidth: profile.maxWidth,
-        maxHeight: profile.maxHeight,
-        maxVideoBitrateKbps: profile.maxVideoBitrateKbps,
-        toneMap: live.toneMap,
-        subtitleBurnIn: live.subtitleBurnIn,
-      });
-
-  const job = await db.transcodeJob.create({
-    data: {
-      sessionId,
-      mediaFileId: (await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } })).mediaFileId,
-      method: isRemux ? "REMUX" : "TRANSCODE",
-      deviceProfile: profile as object,
-      state: "RUNNING",
-      segmentFrom,
-      startedAt: new Date(),
-    },
-  });
-
-  const transcode = spawnFfmpeg(args, (result) => {
+  // The slot is released by the new child's exit callback — until one is
+  // spawned, any failure below must release it or the slot leaks forever
+  // (a phantom: the wakeup logic in spawnTeardown can't recover what never
+  // had a process).
+  try {
+    const profile = overrides?.profile ?? live.deviceProfile;
+    // The live entry's *method* is the source of truth; the quality route
+    // forces method via overrides (REMUX→TRANSCODE→REMUX round trips leave
+    // live.remux null from the TRANSCODE leg — consulting it here would
+    // silently start a transcode and report REMUX).
+    const isRemux = (overrides?.method ?? live.method) === "REMUX";
+    // The stream origin must equal the client's reported offset exactly, or
+    // sub/clock sync drifts. REMUX fast-seeks and can only start at the probed
+    // keyframe; TRANSCODE accurate-seeks, so its origin is the raw target.
+    const startMs = isRemux ? await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
+    const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+    // Resume via a piped stub (header + tail from the exact keyframe cluster):
+    // the container seek table lies (Cue → different keyframe than the bitstream
+    // probe), so -ss on mkv would start at a different media time than startMs
+    // and subs drift. Falls back to the legacy -ss remux when probing fails.
+    const resumeInput = isRemux ? await buildResumeInput(live.mediaFile.path, startMs) : null;
+    const args = isRemux
+      ? buildRemuxArgs({
+          inputPath: live.mediaFile.path,
+          // Derive from outDir, not live.remux.outFile: the audio-track route
+          // restarts into a fresh per-track outDir (spread sets live.outDir,
+          // leaving remux.outFile pointing at the previous track's dir), and
+          // writing the new stream there means it lands on the disk the stream
+          // route then serves. Seek-restarts keep outDir unchanged, so this is
+          // the same file either way.
+          outputPath: path.join(live.outDir, "stream.mp4"),
+          startMs,
+          durationMs: live.mediaFile.durationMs,
+          audioStreamIndex: live.audioStreamIndex,
+          audioCodec: live.audioCodec,
+          videoCodec: live.mediaFile.videoCodec,
+          pipedInput: resumeInput !== null,
+        })
+      : buildFfmpegArgs({
+          inputPath: live.mediaFile.path,
+          outputDir: live.outDir,
+          startSegment: segmentFrom,
+          segmentSeconds: HLS_SEGMENT_SECONDS,
+          // -ss targets the stream origin exactly — the reported startMs — so
+          // the browser timeline origin matches the client offset.
+          seekMs: startMs,
+          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
+          audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
+          audioStreamIndex: live.audioStreamIndex,
+          maxWidth: profile.maxWidth,
+          maxHeight: profile.maxHeight,
+          maxVideoBitrateKbps: profile.maxVideoBitrateKbps,
+          toneMap: live.toneMap,
+          subtitleBurnIn: live.subtitleBurnIn,
+        });
+  
+    const job = await db.transcodeJob.create({
+      data: {
+        sessionId,
+        mediaFileId: (await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } })).mediaFileId,
+        method: isRemux ? "REMUX" : "TRANSCODE",
+        deviceProfile: profile as object,
+        state: "RUNNING",
+        segmentFrom,
+        startedAt: new Date(),
+      },
+    });
+  
+    const transcode = spawnFfmpeg(args, (result) => {
+      releaseTranscodeSlot();
+      // Never overwrite a deliberate CANCELLED (stop/restart already marked
+      // it) — the exit callback races the cancel path and would otherwise
+      // clobber the real reason with a spurious FAILED. A freshly killed
+      // child's SIGKILL (signalCode, exitCode null) stays DONE-eligible via
+      // the code===0 check below; that's intentional — killed-for-restart is
+      // not a failure.
+      void setTranscodeJobTerminal(
+        job.id,
+        result.code === 0 ? "DONE" : "FAILED",
+        result.code === 0 ? null : result.stderr.slice(0, 2000),
+      ).catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
+      // Truthful playlist for the *session's current* outDir — the caller's
+      // spread object (fresh per-track/per-quality dir) is what's live.
+      void truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
+    }, resumeInput?.input);
+    await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
+  
+    return { transcode, jobId: job.id, startMs, segmentFrom };
+  } catch (e) {
     releaseTranscodeSlot();
-    // Never overwrite a deliberate CANCELLED (stop/restart already marked
-    // it) — the exit callback races the cancel path and would otherwise
-    // clobber the real reason with a spurious FAILED. A freshly killed
-    // child's SIGKILL (signalCode, exitCode null) stays DONE-eligible via
-    // the code===0 check below; that's intentional — killed-for-restart is
-    // not a failure.
-    void setTranscodeJobTerminal(
-      job.id,
-      result.code === 0 ? "DONE" : "FAILED",
-      result.code === 0 ? null : result.stderr.slice(0, 2000),
-    ).catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
-    // Truthful playlist for the *session's current* outDir — the caller's
-    // spread object (fresh per-track/per-quality dir) is what's live.
-    void truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
-  }, resumeInput?.input);
-  await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
-
-  return { transcode, jobId: job.id, startMs, segmentFrom };
+    throw e;
+  }
 }
 
 /**
@@ -683,17 +691,28 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     // DIRECT_PLAY returned early above; the decider never emits DIRECT_STREAM,
     // so this is always a real encode or copy.
     const encodeMethod: "REMUX" | "TRANSCODE" = decision.method === "REMUX" ? "REMUX" : "TRANSCODE";
-    const { transcode, jobId } = await spawnTranscodeJob(
-      session.id,
-      mediaFileId,
-      encodeMethod,
-      profile,
-      args,
-      segmentFrom,
-      outDir,
-      candidate.durationMs,
-      resumeInput?.input,
-    );
+    // The slot is released by the child's exit callback — any failure before
+    // a child exists would otherwise leak it (a phantom slot that bricks the
+    // transcode cap until the API restarts — matches the wedged-counter
+    // stalls seen in practice).
+    let spawned: Awaited<ReturnType<typeof spawnTranscodeJob>>;
+    try {
+      spawned = await spawnTranscodeJob(
+        session.id,
+        mediaFileId,
+        encodeMethod,
+        profile,
+        args,
+        segmentFrom,
+        outDir,
+        candidate.durationMs,
+        resumeInput?.input,
+      );
+    } catch (e) {
+      releaseTranscodeSlot();
+      throw e;
+    }
+    const { transcode, jobId } = spawned;
 
     let playlistUrl: string | null = null;
     if (!isRemux) {

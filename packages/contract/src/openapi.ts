@@ -95,6 +95,17 @@ import {
   ErrorResponse as MediaFileErrorResponse,
 } from "./media-files.js";
 import { HomeQuery, HomeResponse } from "./home.js";
+import {
+  WatchPartyResponse,
+  CreatePartyBody,
+  JoinPartyBody,
+  PartyParams,
+  ControlPartyBody,
+  ReadyPartyBody,
+  LinkSessionBody,
+  PartyOkResponse,
+  ErrorResponse as PartyErrorResponse,
+} from "./watch-party.js";
 
 const json = (schema: z.ZodTypeAny) => ({ content: { "application/json": { schema } } });
 
@@ -345,6 +356,80 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: {
       200: { description: "OK", ...json(SetWatchedResponse) },
       404: { description: "Media item not found", ...json(PlaybackErrorResponse) },
+    },
+  });
+
+ // Watch parties
+  registry.registerPath({
+    method: "post",
+    path: "/parties",
+    summary: "Create a watch party for a media item (creator is host)",
+    request: { body: json(CreatePartyBody) },
+    responses: {
+      201: { description: "Created", ...json(WatchPartyResponse) },
+      404: { description: "Media item or profile not found", ...json(PartyErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/parties/{partyId}",
+    summary: "Watch party state (host or member only)",
+    request: { params: PartyParams },
+    responses: {
+      200: { description: "OK", ...json(WatchPartyResponse) },
+      404: { description: "Party not found", ...json(PartyErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/parties/join",
+    summary: "Join a watch party by invite code",
+    request: { body: json(JoinPartyBody) },
+    responses: {
+      200: { description: "OK — party state", ...json(WatchPartyResponse) },
+      404: { description: "Party or profile not found", ...json(PartyErrorResponse) },
+      409: { description: "Party ended — cannot join", ...json(PartyErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/parties/{partyId}/leave",
+    summary: "Leave a watch party (host leaving ends the party)",
+    request: { params: PartyParams },
+    responses: {
+      200: { description: "OK", ...json(PartyOkResponse) },
+      404: { description: "Party not found", ...json(PartyErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/parties/{partyId}/control",
+    summary: "Host command: set party state and media position (timekeeper)",
+    request: { params: PartyParams, body: json(ControlPartyBody) },
+    responses: {
+      200: { description: "OK — updated party state", ...json(WatchPartyResponse) },
+      403: { description: "Host only", ...json(PartyErrorResponse) },
+      404: { description: "Party not found", ...json(PartyErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/parties/{partyId}/ready",
+    summary: "Toggle a member's ready flag (waiting room signalling)",
+    request: { params: PartyParams, body: json(ReadyPartyBody) },
+    responses: {
+      200: { description: "OK — updated party state", ...json(WatchPartyResponse) },
+      404: { description: "Party not found", ...json(PartyErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/parties/{partyId}/session",
+    summary: "Link a playback session to the member's party membership",
+    request: { params: PartyParams, body: json(LinkSessionBody) },
+    responses: {
+      200: { description: "OK — updated party state", ...json(WatchPartyResponse) },
+      404: { description: "Party or session not found", ...json(PartyErrorResponse) },
     },
   });
 

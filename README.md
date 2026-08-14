@@ -44,32 +44,36 @@
 
 ## get it running
 
-it's one compose file. the image is pre-built and published, so there's nothing to compile:
+it's one compose file — the image is pre-built and published, so there's nothing to compile. three little steps:
+
+**1. grab the compose file**
 
 ```sh
+mkdir hokago && cd hokago
 curl -O https://raw.githubusercontent.com/rishabhroyy/hokago/main/docker-compose.yml
-docker compose up -d
 ```
 
-then open **http://localhost:3000** and the setup wizard will walk you through making your admin account and pointing at your media folders. the whole thing takes about two minutes.
+**2. tell it where your shows live**
 
-edit the compose file to tell it where your stuff lives:
+open `docker-compose.yml` in any editor and find the `volumes:` sections (there are two — one for `hokago`, one for `hokago-worker`). change the left side of each media line to your real folders, keeping the right side exactly as-is:
 
 ```yaml
-# one read-only mount per library — the wizard remembers these container paths
-- /mnt/storage/movies:/media/movies:ro
+- /mnt/storage/movies:/media/movies:ro   # ← your folder : the container path (don't touch)
 - /mnt/storage/tv:/media/tv:ro
 - /mnt/storage/anime:/media/anime:ro
 ```
 
-got a gpu? hardware transcoding is one extra flag, no rebuild:
+(skip this and it uses `./data/media/*` next to the compose file — fine for a test drive.)
+
+**3. wake it up**
 
 ```sh
-# intel / amd
-docker compose -f docker-compose.yml -f infra/hwaccel.transcoding.yml up -d
-# nvidia
-docker compose -f docker-compose.yml -f infra/hwaccel.nvenc.yml up -d
+docker compose up -d
 ```
+
+then open **http://localhost:3000** — the setup wizard walks you through your admin account and libraries (pick the `/media/...` paths from step 2). about two minutes, start to finish.
+
+got a gpu? hardware transcoding is already baked into the image and auto-detected — just uncomment two lines in the compose file to hand hokago your gpu (`/dev/dri` for intel/amd, `gpus: all` for nvidia). no extra files, no rebuild, and a missing or grumpy gpu quietly falls back to cpu.
 
 updates are `docker compose pull && docker compose up -d`. hokago snapshots your database before every migration, so an update is never a one-way door.
 
@@ -80,10 +84,6 @@ updates are `docker compose pull && docker compose up -d`. hokago snapshots your
 - **backups in one command** — database plus every poster and font, into one folder.
 - **an admin console** that shows you exactly what the worker bees are doing, queue by queue.
 - **lowercase everything**, as is tradition.
-
-## what's next
-
-intro/outro skip, native phone and tv apps (the server side is already waiting for them), and more. hokago grows slowly and carefully — nothing ships until it's cute *and* correct.
 
 ## contributing
 

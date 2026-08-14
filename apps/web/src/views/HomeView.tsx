@@ -106,6 +106,17 @@ export function HomeView() {
 
   const onTileMenu = (item: TileItem, x: number, y: number) => setTileMenu({ x, y, item });
 
+  // Memoized so the array reference is stable across unrelated re-renders
+  // (right-click menu open/close) — otherwise the row's entrance-stagger
+  // re-animates and the posters "bounce" every time. Hoisted above the
+  // empty-shelf early return: a conditional return in the middle of the
+  // component must never split the hook order (the empty-state render would
+  // then render fewer hooks than expected and React unmounts the whole tree).
+  const continueWatchingTiles = useMemo(
+    () => (home?.continueWatching ?? []).map(continueWatchingToTile),
+    [home?.continueWatching],
+  );
+
   const nothingOnShelf =
     loaded && home && home.continueWatching.length === 0 && home.slides.length === 0 && home.rows.length === 0;
 
@@ -131,11 +142,6 @@ export function HomeView() {
   // Memoized so the array reference is stable across unrelated re-renders
   // (right-click menu open/close) — otherwise the row's entrance-stagger
   // re-animates and the posters "bounce" every time.
-  const continueWatchingTiles = useMemo(
-    () => (home?.continueWatching ?? []).map(continueWatchingToTile),
-    [home?.continueWatching],
-  );
-
   return (
     <div className="pb-6 pt-[86px]">
       {slides.length > 0 && (

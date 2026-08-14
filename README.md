@@ -75,6 +75,8 @@ then open **http://localhost:3000** — the setup wizard walks you through your 
 
 got a gpu? hardware transcoding is already baked into the image and auto-detected — just uncomment two lines in the compose file to hand hokago your gpu (`/dev/dri` for intel/amd, `gpus: all` for nvidia). no extra files, no rebuild, and a missing or grumpy gpu quietly falls back to cpu.
 
+behind nginx, caddy, or another reverse proxy? set `HOKAGO_TRUST_PROXY=true` (in the compose env or `.env`) so login rate-limiting sees real client IPs instead of your proxy's. proxies must forward websocket `Upgrade` headers for watch parties and keep `Range` + `COOP`/`COEP` headers for streaming — caddy does both by default, nginx needs a couple of `proxy_set_header` lines (see [`AGENTS.md`](AGENTS.md)).
+
 updates are `docker compose pull && docker compose up -d`. hokago snapshots your database before every migration, so an update is never a one-way door.
 
 ## the little things

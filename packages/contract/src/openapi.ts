@@ -131,6 +131,12 @@ import {
   PartyOkResponse,
   ErrorResponse as PartyErrorResponse,
 } from "./watch-party.js";
+import {
+  SetupState,
+  SetupCompleteBody,
+  SetupCompleteResponse,
+  ErrorResponse as SetupErrorResponse,
+} from "./setup.js";
 
 const json = (schema: z.ZodTypeAny) => ({ content: { "application/json": { schema } } });
 
@@ -319,6 +325,27 @@ export function buildOpenApiDocument(): OpenAPIObject {
     responses: {
       200: { description: "OK", ...json(RevokedResponse) },
       404: { description: "Device not found", ...json(AuthErrorResponse) },
+    },
+  });
+
+  // First-run setup — the fresh-install wizard. Public by design: there is
+  // no account yet, so nothing can be authenticated.
+  registry.registerPath({
+    method: "get",
+    path: "/setup/state",
+    summary: "Whether the first-run setup wizard must run (no account exists yet)",
+    responses: { 200: { description: "OK", ...json(SetupState) } },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/setup/complete",
+    summary: "Create the first admin account and stamp setup as complete",
+    request: { body: json(SetupCompleteBody) },
+    responses: {
+      201: { description: "Admin account created", ...json(SetupCompleteResponse) },
+      400: { description: "Invalid username or password", ...json(SetupErrorResponse) },
+      409: { description: "Setup already complete", ...json(SetupErrorResponse) },
+      429: { description: "Rate limited", ...json(SetupErrorResponse) },
     },
   });
 

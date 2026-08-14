@@ -19,6 +19,7 @@ const API_PATHS = [
   "/avatars",
   "/health",
   "/auth",
+  "/setup",
   "/profiles",
   "/continue-watching",
   "/libraries",

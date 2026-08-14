@@ -5,6 +5,7 @@ import { HomeView } from "./views/HomeView";
 import { LibraryView } from "./views/LibraryView";
 import { DetailView } from "./views/DetailView";
 import { LoginView } from "./views/LoginView";
+import { SetupView } from "./views/SetupView";
 import { PrefsView } from "./views/PrefsView";
 import { PairView } from "./views/PairView";
 import { SearchView } from "./views/SearchView";
@@ -12,12 +13,20 @@ import { PartyView } from "./views/PartyView";
 import { NotFoundView } from "./views/NotFoundView";
 import { WatchPage } from "./WatchPage";
 import { AdminView } from "./admin/AdminView";
+import { getSetupState } from "./setup-state";
 
 function Shell() {
   const { route } = useRouter();
   // Admin is a full-screen console with its own sidebar — no top pill nav.
   if (route.view === "admin") return <AdminView />;
-  if (route.view === "login") return <LoginView />;
+  // Fresh install with no accounts: /login is a dead end (register needs an
+  // invite, invites need an admin) — bounce it to the first-run wizard.
+  if (route.view === "login") return getSetupState().setupRequired ? <SetupView /> : <LoginView />;
+  if (route.view === "setup") return getSetupState().setupRequired ? <SetupView /> : <HomeView />;
+  // Fresh install — no accounts yet, so register/invite/login is a dead end
+  // (register needs an invite, invites need an admin). Route everywhere to
+  // the first-run wizard until the first admin account exists.
+  if (getSetupState().setupRequired) return <SetupView />;
   // Anonymous session — don't render views that will just 401 into a blank page.
   if (!localStorage.getItem("hokago_access_token")) return <LoginView />;
   switch (route.view) {

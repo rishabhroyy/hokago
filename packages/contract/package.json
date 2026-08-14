@@ -8,6 +8,7 @@
     "./browse": "./dist/browse.js",
     "./profiles": "./dist/profiles.js",
     "./auth": "./dist/auth.js",
+    "./setup": "./dist/setup.js",
     "./playback": "./dist/playback.js",
     "./home": "./dist/home.js",
     "./admin": "./dist/admin.js",

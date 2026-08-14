@@ -30,7 +30,11 @@ export function LoginView() {
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(() =>
+    new URLSearchParams(location.search).get("setup") === "done"
+      ? "setup complete — sign in with your new admin account"
+      : null,
+  );
   const [busy, setBusy] = useState(false);
 
   const submit = async (e: React.FormEvent) => {

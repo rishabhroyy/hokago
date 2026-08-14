@@ -11,6 +11,7 @@ export type Route =
   | { view: "search"; q: string | null }
   | { view: "admin" }
   | { view: "login" }
+  | { view: "setup" }
   | { view: "notfound" };
 
 function parse(pathname: string, search: string): Route {
@@ -18,6 +19,7 @@ function parse(pathname: string, search: string): Route {
   const q = new URLSearchParams(search);
 
   if (parts[0] === "login") return { view: "login" };
+  if (parts[0] === "setup") return { view: "setup" };
   if (parts[0] === "admin") return { view: "admin" };
   if (parts[0] === "prefs") return { view: "prefs" };
   if (parts[0] === "pair") return { view: "pair" };
@@ -43,6 +45,7 @@ function parse(pathname: string, search: string): Route {
 export const paths = {
   home: () => "/",
   login: () => "/login",
+  setup: () => "/setup",
   admin: () => "/admin",
   prefs: () => "/prefs",
   pair: () => "/pair",

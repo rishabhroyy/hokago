@@ -83,7 +83,7 @@ Everything below is implemented and working; build on it, don't replace it.
 - **Login/pairing rate limiting**: in-memory sliding window, per real client IP and per username (`HOKAGO_LOGIN_RATE_LIMIT_IP`, `HOKAGO_LOGIN_RATE_LIMIT_USERNAME`).
 
 ### Network topology support
-- **Real client IP**: `clientIp()` (`apps/api/src/rate-limit.ts`) prefers `CF-Connecting-IP` (always trusted — Cloudflare), then `X-Forwarded-For` **only** when `HOKAGO_TRUST_PROXY=true` (opt-in: `trustProxy`). Set that env when behind nginx/caddy/CF Tunnel.
+- **Real client IP**: `clientIp()` (`apps/api/src/rate-limit.ts`) prefers `CF-Connecting-IP` (always trusted — Cloudflare), otherwise the resolvers on Fastify `req.ip` backed by `trustProxy` configured from `HOKAGO_TRUST_PROXY` — `true`, a hop count (`1`/`2`), or a comma-separated proxy IP list (opts in; a mis-set trust flag lets anyone forge their rate-limit bucket). Set it when behind nginx/caddy/CF Tunnel.
 - **Proxy-friendly URLs**: the API only ever emits origin-relative paths; proxies at any prefix that preserves paths work. **Sub-path hosting** (`/hokago/...`) is deliberately out of scope — a host should own its root (subdomain per service), and the app is not base-path aware. Never add `HOKAGO_BASE_PATH`/`basePath` plumbing.
 - **WebSockets** (watch party `/ws/party/*`, presence `/ws/presence`) authenticate via JWT query param; reverse proxies must forward the `Upgrade`/`Connection` headers (Cloudflare Tunnel does; nginx needs `proxy_set_header Upgrade $http_upgrade;`).
 - **Streaming through proxies**: preserve `Range`/206, do not buffer long responses, set generous timeouts (HLS segments are on-demand ffmpeg; REMUX blocks until the remux completes). COOP/COEP headers (set by `web-routes.ts`) must pass through or JASSUB offline fonts break.
@@ -119,7 +119,7 @@ All new routes are in the OpenAPI doc; binary routes (direct file, subtitle text
 - **Tailscale**: works with no special handling — the client just needs a base URL (`http://<tailscale-host>:3000` or a tailnet HTTPS hostname).
 - **Cloudflare Tunnel**: enable WebSockets (on by default in `cloudflared`); rate limiting uses `CF-Connecting-IP` automatically.
 - **Cloudflare Zero Trust (Access) in front**: interactive SSO can't run inside a native app, and hokago has its own auth. The recommended setup: a Cloudflare Access policy that does **not** require identity for the hokago hostname (IP/tunnel-allow only), leaving hokago's JWT auth as the single auth layer. If policy-level auth is required, use an Access **service token** (client-id/secret headers) baked into the native client — but hokago's API is not Access-aware and won't consume Access headers itself.
-- **nginx/caddy/other**: `HOKAGO_TRUST_PROXY=true` + forward `X-Forwarded-For`/`X-Forwarded-Proto`; forward WebSocket `Upgrade`; keep `Range` + COOP/COEP headers; raise buffering/timeouts for streaming.
+- **nginx/caddy/other**: `HOKAGO_TRUST_PROXY` (`true` for a single proxy hop, a hop count for chains, or a comma-separated proxy IP list) + forward `X-Forwarded-For`/`X-Forwarded-Proto`; forward WebSocket `Upgrade`; keep `Range` + COOP/COEP headers; raise buffering/timeouts for streaming.
 - **With or without a proxy**: the API binds `0.0.0.0:3000` and serves the SPA itself. No proxy config is ever required; everything is origin-relative so subdomain-proxying works out of the box.
 
 ## Seams in the web app to refactor (when building the shell)

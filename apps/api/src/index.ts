@@ -19,6 +19,7 @@ import { registerPlaybackRoutes } from "./playback-routes.js";
 import { registerStaticRoutes } from "./static-routes.js";
 import { registerAuth } from "./auth.js";
 import { registerAuthRoutes } from "./auth-routes.js";
+import { registerSetupRoutes } from "./setup-routes.js";
 import { registerProfileRoutes } from "./profile-routes.js";
 import { registerAvatarRoutes } from "./avatar-routes.js";
 import { registerBrowseRoutes } from "./browse-routes.js";
@@ -31,13 +32,24 @@ import { registerDownloadRoutes, closeDownloadQueue } from "./download-routes.js
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
 
-// trustProxy is opt-in (HOKAGO_TRUST_PROXY=true): req.ip then honors
+// trustProxy is opt-in (HOKAGO_TRUST_PROXY): req.ip then honors
 // X-Forwarded-For so rate limiting / logging see the real client behind a
-// reverse proxy (nginx/caddy). Cloudflare's CF-Connecting-IP is always
-// honored by the clientIp helper regardless — see rate-limit.ts.
+// reverse proxy (nginx/caddy). Accepted forms: "true" (trust every hop —
+// leftmost XFF entry), a hop count ("1"/"2" — trust that many proxied hops),
+// or a comma-separated list of trusted proxy IPs. Cloudflare's
+// CF-Connecting-IP is always honored by the clientIp helper regardless —
+// see rate-limit.ts.
+function trustProxySetting(): boolean | number | string[] {
+  const raw = process.env.HOKAGO_TRUST_PROXY;
+  if (!raw || raw === "false") return false;
+  if (raw === "true") return true;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 const app = Fastify({
   logger: true,
-  trustProxy: process.env.HOKAGO_TRUST_PROXY === "true",
+  trustProxy: trustProxySetting(),
 }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
@@ -82,6 +94,7 @@ await registerPresence(app);
 await registerAdminRoutes(app);
 await registerAdminMgmtRoutes(app);
 await registerAuthRoutes(app);
+await registerSetupRoutes(app);
 await registerProfileRoutes(app);
 await registerAvatarRoutes(app);
 await registerBrowseRoutes(app);

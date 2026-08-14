@@ -19,6 +19,7 @@ import {
 import { buildM3u8, buildTruncatedM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
 import { buildRemuxArgs, buildResumeInput, patchRemuxMehd } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
+import { getHwaccel, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { broadcastPresence } from "./presence.js";
 import { acquireTranscodeSlot, releaseTranscodeSlot } from "./transcode-slot.js";
 import { configDir } from "./config.js";
@@ -63,6 +64,13 @@ interface LiveSession {
   audioCodec: string | null;
   /** REMUX only: the live fragmented-MP4 output + where its timeline starts. */
   remux: { outFile: string; startMs: number; patched: boolean } | null;
+  /**
+   * Hardware acceleration state this session's transcode was (or is) running
+   * with. Undefined = CPU. The object is the process-cached one — a runtime
+   * failure mutates it to "none", so every later arg build (seeks, quality
+   * switches) automatically stays on CPU without extra bookkeeping.
+   */
+  hwaccel?: HwaccelState;
 }
 
 // Each audio selection gets its own segment subdirectory — switching tracks
@@ -377,6 +385,21 @@ async function setTranscodeJobTerminal(
  * exited pid is still this session's live child — a restart's old child
  * exiting after its successor started must not clobber the new playlist.
  */
+/** Highest segment index a session's outDir has on disk (mirrors what the
+ *  segment muxer promises: segment-N.ts files). -1 when nothing was written. */
+async function lastWrittenSegment(outDir: string): Promise<number> {
+  let last = -1;
+  try {
+    for (const entry of await readdir(outDir)) {
+      const m = /^segment-(\d+)\.ts$/.exec(entry);
+      if (m) last = Math.max(last, Number(m[1]));
+    }
+  } catch {
+    return -1; // dir already cleaned (stopSession) — nothing to enumerate
+  }
+  return last;
+}
+
 async function truncatePlaylistOnExit(
   sessionId: string,
   pid: number,
@@ -386,17 +409,51 @@ async function truncatePlaylistOnExit(
 ): Promise<void> {
   const live = liveSessions.get(sessionId);
   if (!live || live.method === "REMUX" || live.restarting || live.transcode.pid !== pid) return;
-  let lastSegment = -1;
-  try {
-    for (const entry of await readdir(outDir)) {
-      const m = /^segment-(\d+)\.ts$/.exec(entry);
-      if (m) lastSegment = Math.max(lastSegment, Number(m[1]));
-    }
-  } catch {
-    return; // dir already cleaned (stopSession) — nothing to rewrite
-  }
+  const lastSegment = await lastWrittenSegment(outDir);
+  // lastSegment -1 → buildTruncatedM3u8 emits an empty playlist (ENDLIST
+  // only) so the player errors out loudly instead of wedging on missing
+  // segments — the hw fallback below rewrites the full promise before the
+  // client ever refetches, so this only bites a genuinely dead session.
   const body = buildTruncatedM3u8(durationMs, HLS_SEGMENT_SECONDS, startSegment, lastSegment);
   await writePlaylistAtomically(outDir, body).catch(() => {});
+}
+
+/**
+ * Immich-style fail-soft: when a transcode that was running with hardware
+ * acceleration dies non-zero, disable hw for the process and respawn the
+ * session's encoder on CPU, continuing from the last written segment — the
+ * client's already-fetched VOD playlist keeps promising the same segment
+ * numbers, so playback resumes seamlessly (no client involvement, no reload).
+ * Fires only for genuine failures (exit code ≠ 0 — kills are signalled and
+ * skipped), only once per session (the shared hw state is now "none", and
+ * the session entry's hwaccel is cleared), and only for TRANSCODE (REMUX
+ * never touches the GPU). Nothing written yet resumes at segment 0.
+ */
+async function attemptHwFallback(sessionId: string, outDir: string): Promise<void> {
+  const live = liveSessions.get(sessionId);
+  if (!live || live.restarting || live.method !== "TRANSCODE" || !live.hwaccel || live.hwaccel.method === "none") return;
+  reportHwFailure(live.hwaccel.method, `transcode for session ${sessionId} exited non-zero`);
+
+  const lastSegment = await lastWrittenSegment(outDir);
+  const targetMs = (lastSegment + 1) * HLS_SEGMENT_SECONDS * 1000;
+  const restarted = await restartTranscode(sessionId, live, targetMs);
+  if ("cancelled" in restarted) return;
+  const { transcode, jobId, startMs, segmentFrom } = restarted;
+
+  // Undo the truncate that just ran: the respawned encoder continues the
+  // original full-VOD promise from the new anchor segment.
+  const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
+  await writePlaylistAtomically(outDir, playlist).catch(() => {});
+
+  liveSessions.set(sessionId, {
+    ...live,
+    transcode,
+    currentSegmentFrom: segmentFrom,
+    playlistStartSegment: segmentFrom,
+    currentTranscodeJobId: jobId,
+    hwaccel: undefined,
+  });
+  console.warn(`hwaccel: session ${sessionId} fell back to CPU transcode from segment ${segmentFrom} (startMs ${startMs})`);
 }
 
 /**
@@ -416,6 +473,7 @@ async function spawnTranscodeJob(
   outDir: string,
   durationMs: number,
   input?: Readable,
+  hwaccel?: HwaccelState,
 ): Promise<{ transcode: RunningTranscode; jobId: string }> {
   const job = await db.transcodeJob.create({
     data: {
@@ -437,7 +495,12 @@ async function spawnTranscodeJob(
     releaseTranscodeSlot();
     void setTranscodeJobTerminal(job.id, result.code === 0 ? "DONE" : "FAILED", result.code === 0 ? null : result.stderr.slice(0, 2000))
       .catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
-    void truncatePlaylistOnExit(sessionId, transcode.pid, outDir, durationMs, segmentFrom);
+    void (async () => {
+      await truncatePlaylistOnExit(sessionId, transcode.pid, outDir, durationMs, segmentFrom);
+      // A real (non-signalled) hw-transcode failure gets one CPU retry —
+      // after this the session either runs software or dies for real.
+      if (result.code !== 0 && hwaccel) await attemptHwFallback(sessionId, outDir);
+    })();
   }, input);
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
   return { transcode, jobId: job.id };
@@ -527,7 +590,10 @@ async function restartTranscode(
           // -ss targets the stream origin exactly — the reported startMs — so
           // the browser timeline origin matches the client offset.
           seekMs: startMs,
-          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
+          // live.hwaccel is the process-cached state: mutated to "none" by a
+          // prior runtime failure, so seek restarts stay on CPU automatically.
+          hwaccel: live.hwaccel,
+          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, live.hwaccel),
           audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
           audioStreamIndex: live.audioStreamIndex,
           maxWidth: profile.maxWidth,
@@ -564,7 +630,10 @@ async function restartTranscode(
       ).catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
       // Truthful playlist for the *session's current* outDir — the caller's
       // spread object (fresh per-track/per-quality dir) is what's live.
-      void truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
+      void (async () => {
+        await truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
+        if (result.code !== 0 && live.hwaccel) await attemptHwFallback(sessionId, live.outDir);
+      })();
     }, resumeInput?.input);
     await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
   
@@ -640,6 +709,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       };
     }
 
+    // Hardware acceleration resolution (process-cached after the first call) —
+    // only real encodes need it, so resolve after the DIRECT_PLAY early-out.
+    const hwaccel = await getHwaccel();
+
     // Bounded ffmpeg concurrency: wait for a slot instead of stacking
     // transcodes on the box. 503 tells the client to retry shortly.
     if (!(await acquireTranscodeSlot())) {
@@ -678,7 +751,8 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           // -ss targets the stream origin exactly — the reported startMs —
           // so the browser timeline origin matches the client offset.
           seekMs: startMs,
-          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs),
+          hwaccel,
+          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, hwaccel),
           audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
           audioStreamIndex: audioIndex,
           maxWidth: profile.maxWidth,
@@ -707,6 +781,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         outDir,
         candidate.durationMs,
         resumeInput?.input,
+        hwaccel,
       );
     } catch (e) {
       releaseTranscodeSlot();
@@ -742,6 +817,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       audioStreamIndex: audioIndex,
       audioCodec: candidate.input.audioCodec,
       remux: isRemux ? { outFile, startMs, patched: false } : null,
+      hwaccel,
     });
 
     return {
@@ -1221,6 +1297,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // first ffmpeg (mirror of /start's spawn block; the shared helper keeps
       // the job recording identical).
       if (!live) {
+        const hwaccel = await getHwaccel();
         if (!(await acquireTranscodeSlot())) {
           return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
         }
@@ -1262,7 +1339,8 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
                 // -ss targets the stream origin exactly — the reported
                 // startMs.
                 seekMs: startMs,
-                videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs),
+                hwaccel,
+                videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs, hwaccel),
                 audioCodec: pickAudioEncoder(newProfile.supportedAudioCodecs),
                 audioStreamIndex: candidate.relativeAudioIndex,
                 maxWidth: newProfile.maxWidth,
@@ -1287,6 +1365,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           newOutDir,
           candidate.durationMs,
           resumeInput?.input,
+          hwaccel,
         );
 
         liveSessions.set(req.params.sessionId, {
@@ -1308,6 +1387,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           audioStreamIndex: candidate.relativeAudioIndex,
           audioCodec: candidate.input.audioCodec,
           remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
+          hwaccel,
         });
 
         await db.playbackSession.update({

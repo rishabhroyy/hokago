@@ -19,9 +19,11 @@ import {
   ServerSettings,
   ServerSettingsUpdateBody,
   AttentionItem,
+  AdminHwaccelStatus,
   ErrorResponse,
 } from "@hokago/contract/admin";
 import { CreateInviteBody, InviteResponse, RevokedResponse } from "@hokago/contract/auth";
+import { getHwaccel, hwaccelStatus } from "@hokago/ffmpeg/hwaccel";
 import { hashPassword, generateOpaqueToken } from "./auth.js";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 import { queueSummaries } from "./admin-routes.js";
@@ -331,6 +333,11 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
       return settings;
     },
   );
+
+  // ── Hardware acceleration status (read-only — config lives in env/compose) ──
+  app.get("/admin-api/hwaccel", { ...gate, schema: { response: { 200: AdminHwaccelStatus } } }, async () => {
+    return hwaccelStatus(await getHwaccel());
+  });
 
   // ── Attention ──────────────────────────────────────────────────────────────
   app.get("/admin-api/attention", { ...gate, schema: { response: { 200: AttentionItem.array() } } }, async () => {

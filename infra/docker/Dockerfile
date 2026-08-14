@@ -80,7 +80,7 @@ RUN git clone --depth 1 --branch release-3.0.6 https://github.com/sekrit-twc/zim
 # Ubuntu). Header-only; ffmpeg links the driver's .so's at runtime via the
 # nvidia-container-toolkit, so nothing extra is needed at runtime.
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
-      git clone --depth 1 --branch n12.2 https://github.com/FFmpeg/nv-codec-headers.git \
+      git clone --depth 1 --branch sdk/12.2 https://github.com/FFmpeg/nv-codec-headers.git \
       && cd nv-codec-headers && make install; \
     fi
 

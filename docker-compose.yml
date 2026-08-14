@@ -4,7 +4,9 @@
 # local/self-built images use the compose.build.yml overlay:
 #   docker compose -f docker-compose.yml -f compose.build.yml up -d --build
 #
-# Configuration lives in .env (copy .env.example → .env and edit):
+# Configuration: every value below is an inline ${VAR:-default} — edit this
+# file directly to customize. A `.env` next to the file optionally overrides
+# any of them (compose standard), but nothing requires one:
 #   - HOKAGO_CONFIG_DIR     host dir for /config (db, artwork, fonts, cache)
 #   - MEDIA_MOVIES_PATH/TV_PATH/ANIME_PATH   host dirs mounted read-only into
 #     the fixed container paths /media/movies, /media/tv, /media/anime —
@@ -13,8 +15,8 @@
 #     the matching target path in the wizard.
 #   - HOKAGO_PORT           published HTTP port (default 3000)
 #   - HOKAGO_VERSION        image tag to run (default latest)
-#   - HOKAGO_JWT_SECRET     optional — unset boots with an auto-generated,
-#     DB-persisted signing secret, zero setup (env only overrides it)
+#   - HOKAGO_JWT_SECRET     optional — the API auto-generates and persists a
+#     random signing secret on first boot (env only overrides it)
 #   - PUID/PGID             declared for future file-permission work; not
 #     enforced yet (build-order wizard step) — bind mounts are owned by the
 #     UID that created them

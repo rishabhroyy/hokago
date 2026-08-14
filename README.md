@@ -16,7 +16,8 @@
   <a href="#features">Features</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#hardware-acceleration">Hardware acceleration</a> ·
-  <a href="#data--backup">Data & backup</a>
+  <a href="#data--backup">Data & backup</a> ·
+  <a href="#contributors">Contributors</a>
 </p>
 
 > [!NOTE]
@@ -31,14 +32,14 @@
 
 ## Quick Start
 
-No env file required — the compose template pulls a published multi-arch image, and every configurable value has a default:
+No env file required — everything lives in the compose template itself, with a visible default on every value:
 
 ```bash
 wget -O docker-compose.yml https://raw.githubusercontent.com/rishabhroyy/hokago/main/docker-compose.yml
 docker compose up -d
 ```
 
-Open `http://localhost:3000` and run the one-minute setup wizard: admin account, then point hokago at your media. Want custom paths or a port? Also fetch [.env.example](https://raw.githubusercontent.com/rishabhroyy/hokago/main/.env.example), copy it to `.env` and edit.
+Open `http://localhost:3000` and run the one-minute setup wizard: admin account, then point hokago at your media. Want different paths or a port? Edit them right in `docker-compose.yml` — each value reads `<NAME>: ${VAR:-default}`, so the defaults are right there in the file.
 
 > [!TIP]
 > Library roots are the fixed container paths `/media/movies`, `/media/tv`, `/media/anime` — the wizard records those, whatever host folders the `MEDIA_*_PATH` envs bind there. More than three libraries? Add a mount line like the ones in the template and enter its target path in the wizard.
@@ -69,7 +70,7 @@ The API snapshots the database before every migration, so any upgrade is reversi
 
 ## Configuration
 
-All values live in the compose template, override them in `.env`:
+Every value is an inline `${VAR:-default}` in `docker-compose.yml` — edit the file directly. The keys at a glance:
 
 | Variable | Purpose | Default |
 | :---------------------- | :------------------------------------------------ | :---------------------- |
@@ -119,3 +120,18 @@ Everything persistent lives in the config dir — **bind mounts only, zero docke
 ```
 
 Done with it? `docker compose down` stops everything; delete the config dir and it's a clean slate — your media is untouched either way.
+
+## Star history
+
+<a href="https://star-history.com/#rishabhroyy/hokago&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=rishabhroyy/hokago&type=Date&theme=dark" />
+    <img alt="Star history chart" src="https://api.star-history.com/svg?repos=rishabhroyy/hokago&type=Date" />
+  </picture>
+</a>
+
+## Contributors
+
+<a href="https://github.com/rishabhroyy/hokago/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=rishabhroyy/hokago" width="480" alt="hokago contributors" />
+</a>

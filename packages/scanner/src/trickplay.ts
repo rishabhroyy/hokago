@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
+import { hwDecodeArgs, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { configDir } from "./artwork.js";
 import { runFfmpeg } from "./generate-art.js";
 
@@ -44,8 +45,15 @@ export interface TrickplayResult {
  *  one media file. Idempotent per file: crash-anywhere is safe, a re-run just
  *  rewrites the same directory. Throws on a failed sheet — a partial sheet set
  *  would desync the client's tile math, so a permanently broken sheet is a
- *  job failure (poison-pill), not a silently short index. */
-export async function generateTrickplaySheets(filePath: string, durationMs: number, mediaFileId: string): Promise<TrickplayResult> {
+ *  job failure (poison-pill), not a silently short index. `hwaccel` enables
+ *  hardware decode for the whole-file window decodes (the heaviest ffmpeg
+ *  work in the system). */
+export async function generateTrickplaySheets(
+  filePath: string,
+  durationMs: number,
+  mediaFileId: string,
+  hwaccel?: HwaccelState,
+): Promise<TrickplayResult> {
   const totalTiles = Math.ceil(durationMs / TRICKPLAY_INTERVAL_MS);
   const dir = path.join(configDir(), "cache", "trickplay", mediaFileId);
 
@@ -75,6 +83,7 @@ export async function generateTrickplaySheets(filePath: string, durationMs: numb
     await runFfmpeg(
       [
         "-y",
+        ...(hwaccel ? hwDecodeArgs(hwaccel) : []),
         "-ss",
         String(startSec),
         "-i",

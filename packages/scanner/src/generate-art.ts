@@ -3,16 +3,29 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { hwDecodeArgs, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { trackPid, untrackPid } from "./child-registry.js";
 
 const POSTER_WIDTH = 1000;
 const POSTER_HEIGHT = 1500; // 2:3
 const CANDIDATE_COUNT = 5;
 
+// Artwork extraction is decode-heavy on big files (cropdetect, candidate
+// scans). Hardware decode args are process-set by the worker at boot and
+// prepended to every pass; a runtime failure retires them (reportHwFailure
+// mutates the shared state to "none", so hwDecodeArgs goes empty on its own).
+let hwState: HwaccelState | null = null;
+
+/** Called once at worker boot with the resolved hwaccel state (null/undefined → CPU). */
+export function setArtworkHwaccel(state: HwaccelState | null): void {
+  hwState = state;
+}
+
 /** Registers the child's PID so a worker's SIGTERM handler can reap it . */
 export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
+  const effective = hwState ? [...hwDecodeArgs(hwState), ...args] : args;
   return new Promise((resolve, reject) => {
-    const child = execFile("ffmpeg", args, { maxBuffer: 32 * 1024 * 1024, timeout: opts?.timeoutMs }, (err, stdout, stderr) => {
+    const child = execFile("ffmpeg", effective, { maxBuffer: 32 * 1024 * 1024, timeout: opts?.timeoutMs }, (err, stdout, stderr) => {
       untrackPid(child.pid);
       if (err) reject(err);
       else resolve({ stdout, stderr });

@@ -8,6 +8,7 @@
     "./metadata": "./dist/metadata.js",
     "./probe": "./dist/probe.js",
     "./child-registry": "./dist/child-registry.js",
+    "./generate-art": "./dist/generate-art.js",
     "./trickplay": "./dist/trickplay.js",
     "./artwork": "./dist/artwork.js"
   },
@@ -20,6 +21,7 @@
   },
   "dependencies": {
     "@hokago/db": "workspace:*",
+    "@hokago/ffmpeg": "workspace:*",
     "@hokago/metadata": "workspace:*",
     "@hokago/providers": "workspace:*",
     "anitomy": "^0.0.35",

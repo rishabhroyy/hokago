@@ -1,0 +1,38 @@
+# hokago — hardware acceleration overlay for Intel/AMD GPUs (VAAPI/QSV).
+#
+# Use: docker compose -f docker-compose.yml -f infra/hwaccel.transcoding.yml up -d
+#      (or add "-f infra/hwaccel.transcoding.yml" to the docker:up command in package.json)
+#
+# What this does:
+#   - mounts the host's render nodes (/dev/dri) into BOTH ffmpeg-running
+#     services (the API transcodes live streams, the worker runs art/trickplay/
+#     download jobs) — without the mount, detection finds no device and
+#     everything runs CPU (same binary, same image, no change needed)
+#   - HOKAGO_HWACCEL=auto resolves the best method automatically:
+#     Intel iGPU → qsv (falls back to vaapi), AMD iGPU/dGPU → vaapi. Explicit
+#     choices: HOKAGO_HWACCEL=vaapi|qsv|none (see packages/ffmpeg/src/hwaccel.ts)
+#   - HOKAGO_HWACCEL_DEVICE=/dev/dri/renderD129 overrides the render node when
+#     the iGPU isn't the default renderD128
+#
+# No rebuilds, no image changes — this overlay alone flips the stack to
+# hardware decode+encode. The runtime image already contains the userspace
+# drivers (intel-media-va-driver, mesa-va-drivers, libvpl2). Hardware failure
+# at runtime falls back to CPU automatically (see reportHwFailure).
+#
+# For NVIDIA GPUs use infra/hwaccel.nvenc.yml instead (needs the
+# nvidia-container-toolkit on the host).
+
+services:
+  hokago:
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      HOKAGO_HWACCEL: ${HOKAGO_HWACCEL:-auto}
+      HOKAGO_HWACCEL_DEVICE: ${HOKAGO_HWACCEL_DEVICE:-}
+
+  hokago-worker:
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      HOKAGO_HWACCEL: ${HOKAGO_HWACCEL:-auto}
+      HOKAGO_HWACCEL_DEVICE: ${HOKAGO_HWACCEL_DEVICE:-}

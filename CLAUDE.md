@@ -96,7 +96,7 @@ Rejected, don't relitigate: Go backend, NestJS, s6-overlay single container, Pos
 apps/api      apps/worker      apps/web
 packages/     contract  db  metadata  parser  ffmpeg  fonts
 packages-optional/     ← AGPL/non-commercial, runtime-fetched, never vendored
-infra/docker  (hwaccel = commented `devices:`/`gpus:` blocks in docker-compose.yml)
+infra/docker  (hwaccel = `/dev/dri` mounted unconditionally; NVIDIA `gpus: all` commented)
 ```
 
 ---

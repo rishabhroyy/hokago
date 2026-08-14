@@ -51,19 +51,26 @@ it's one compose file — the image is pre-built and published, so there's nothi
 ```sh
 mkdir hokago && cd hokago
 curl -O https://raw.githubusercontent.com/rishabhroyy/hokago/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/rishabhroyy/hokago/main/example.env
 ```
 
 **2. tell it where your shows live**
 
-open `docker-compose.yml` in any editor and find the `volumes:` sections (there are two — one for `hokago`, one for `hokago-worker`). change the left side of each media line to your real folders, keeping the right side exactly as-is:
+the compose file reads everything from `.env`, so copy the example into place — plain `KEY=value` lines with comments, no yaml in sight. (this step is required — `docker compose up` refuses to start without the file):
 
-```yaml
-- /mnt/storage/movies:/media/movies:ro   # ← your folder : the container path (don't touch)
-- /mnt/storage/tv:/media/tv:ro
-- /mnt/storage/anime:/media/anime:ro
+```sh
+cp example.env .env
 ```
 
-(skip this and it uses `./data/media/*` next to the compose file — fine for a test drive.)
+find the three `MEDIA_*` lines and point them at your real folders:
+
+```env
+MEDIA_MOVIES_PATH=/mnt/storage/movies
+MEDIA_TV_PATH=/mnt/storage/tv
+MEDIA_ANIME_PATH=/mnt/storage/anime
+```
+
+every other line can stay as-is — port, config dir, gpu and proxy knobs are all in there with short explanations. (skip the edits entirely and it runs on `./data/media/*` next to the compose file — fine for a test drive.) want more than three libraries, or know your way around compose? you can also edit `docker-compose.yml` itself — the yaml just turns the `.env` lines into real mounts and settings.
 
 **3. wake it up**
 
@@ -73,9 +80,9 @@ docker compose up -d
 
 then open **http://localhost:3000** — the setup wizard walks you through your admin account and libraries (pick the `/media/...` paths from step 2). about two minutes, start to finish.
 
-got a gpu? hardware transcoding is already baked into the image and auto-detected — just uncomment two lines in the compose file to hand hokago your gpu (`/dev/dri` for intel/amd, `gpus: all` for nvidia). no extra files, no rebuild, and a missing or grumpy gpu quietly falls back to cpu.
+got a gpu? **intel/amd: nothing to do** — the containers already get `/dev/dri` and auto-detect it at boot. nvidia: install `nvidia-container-toolkit` on the host, then uncomment the `gpus: all` line in both services of the compose file. no extra files, no rebuild, and a missing or grumpy gpu quietly falls back to cpu.
 
-behind nginx, caddy, or another reverse proxy? set `HOKAGO_TRUST_PROXY=true` (in the compose env or `.env`) so login rate-limiting sees real client IPs instead of your proxy's. proxies must forward websocket `Upgrade` headers for watch parties and keep `Range` + `COOP`/`COEP` headers for streaming — caddy does both by default, nginx needs a couple of `proxy_set_header` lines (see [`AGENTS.md`](AGENTS.md)).
+behind nginx, caddy, or another reverse proxy? add `HOKAGO_TRUST_PROXY=true` to your `.env` (it's in `example.env`, commented out) so login rate-limiting sees real client IPs instead of your proxy's. proxies must forward websocket `Upgrade` headers for watch parties and keep `Range` + `COOP`/`COEP` headers for streaming — caddy does both by default, nginx needs a couple of `proxy_set_header` lines (see [`AGENTS.md`](AGENTS.md)).
 
 updates are `docker compose pull && docker compose up -d`. hokago snapshots your database before every migration, so an update is never a one-way door.
 

@@ -4,27 +4,27 @@
 # local/self-built images use the compose.build.yml overlay:
 #   docker compose -f docker-compose.yml -f compose.build.yml up -d --build
 #
-# Configuration: every value below is an inline ${VAR:-default} — edit this
-# file directly to customize. A `.env` next to the file optionally overrides
-# any of them (compose standard), but nothing requires one:
-#   - HOKAGO_CONFIG_DIR     host dir for /config (db, artwork, fonts, cache)
+# Configuration lives in `.env` (this file loads it via `env_file` and uses
+# its values everywhere, so it is REQUIRED — docker compose refuses to start
+# without it). Copy `example.env` to `.env` and edit the plain KEY=value
+# lines there — no yaml knowledge needed. What each value means:
 #   - MEDIA_MOVIES_PATH/TV_PATH/ANIME_PATH   host dirs mounted read-only into
 #     the fixed container paths /media/movies, /media/tv, /media/anime —
 #     the setup wizard records those container-side paths as library roots.
 #     Want more libraries? Add a mount line like the three below and enter
 #     the matching target path in the wizard.
+#   - HOKAGO_CONFIG_DIR     host dir for /config (db, artwork, fonts, cache)
+#   - POSTGRES_PASSWORD     local postgres password (not published by default)
 #   - HOKAGO_PORT           published HTTP port (default 3000)
 #   - HOKAGO_VERSION        image tag to run (default latest)
-#   - HOKAGO_JWT_SECRET     optional — the API auto-generates and persists a
-#     random signing secret on first boot (env only overrides it)
-#   - PUID/PGID             declared for future file-permission work; not
-#     enforced yet (build-order wizard step) — bind mounts are owned by the
-#     UID that created them
+#   - everything else is optional — see the comments in example.env
 #
-# Hardware acceleration needs no extra files: the image ships the drivers and
-# auto-detects whatever GPU it can see (HOKAGO_HWACCEL=auto) — you only grant
-# the container access by uncommenting a block on the hokago/hokago-worker
-# services below (Intel/AMD: devices /dev/dri; NVIDIA: gpus + host toolkit).
+# Hardware acceleration: AMD/Intel GPUs work out of the box — /dev/dri is
+# mounted unconditionally below, the image ships the drivers, and boot-time
+# auto-detection (HOKAGO_HWACCEL=auto) picks the best method; a host with no
+# GPU just sees an empty /dev/dri and falls back to CPU. NVIDIA (NVENC) needs
+# nvidia-container-toolkit on the host — uncomment the `gpus: all` line on
+# both services below; nothing else.
 #
 # Bind mounts only. No named docker volumes anywhere, including Postgres —
 # except Postgres's own internal UID (see the postgres service below).
@@ -35,7 +35,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: hokago
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hokago}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: hokago
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
@@ -48,7 +48,7 @@ services:
       # (typically 999) and chowns this path itself on first boot. Fighting
       # that with PUID/PGID recreates the exact permission hell those
       # variables exist to prevent (documented deliberate exception).
-      - ${HOKAGO_CONFIG_DIR:-./data/config}/db:/var/lib/postgresql/data
+      - ${HOKAGO_CONFIG_DIR}/db:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hokago"]
       interval: 5s
@@ -64,7 +64,7 @@ services:
       # remove for a locked-down deploy, same rationale as postgres above.
       - "${VALKEY_PORT:-6379}:6379"
     volumes:
-      - ${HOKAGO_CONFIG_DIR:-./data/config}/cache/valkey:/data
+      - ${HOKAGO_CONFIG_DIR}/cache/valkey:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -73,6 +73,12 @@ services:
 
   hokago:
     image: ghcr.io/rishabhroyy/hokago:${HOKAGO_VERSION:-latest}
+    # Every HOKAGO_*/MEDIA_*/PUID/PGID/TZ value comes from here — the app
+    # services need the same .env the rest of this file interpolates from.
+    # Missing .env = hard error, so the first thing a host does is
+    # `cp example.env .env`.
+    env_file:
+      - .env
     # Migrations before boot — a fresh postgres has no tables and the API
     # would crash into a restart loop. prisma migrate deploy is idempotent.
     # First, snapshot the pre-migration DB to /config/db-backups/ so every
@@ -80,7 +86,7 @@ services:
     # dumps to an empty file that's deleted. `exec` replaces sh so SIGTERM
     # reaches node directly (graceful shutdown kills ffmpeg children and
     # closes WS sessions).
-    command: ["sh", "-c", "mkdir -p /config/db-backups && f=/config/db-backups/pre-migrate-$(date +%Y%m%d-%H%M%S).sql.gz && pg_dump --no-owner \"postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago\" | gzip > \"$$f\"; [ \"$$(wc -c < \"$$f\")\" -gt 100 ] || rm -f \"$$f\"; find /config/db-backups -name 'pre-migrate-*.sql.gz' -mtime +14 -delete; pnpm --filter @hokago/db run migrate:deploy && exec node apps/api/dist/index.js"]
+    command: ["sh", "-c", "mkdir -p /config/db-backups && f=/config/db-backups/pre-migrate-$(date +%Y%m%d-%H%M%S).sql.gz && pg_dump --no-owner \"postgresql://hokago:${POSTGRES_PASSWORD}@postgres:5432/hokago\" | gzip > \"$$f\"; [ \"$$(wc -c < \"$$f\")\" -gt 100 ] || rm -f \"$$f\"; find /config/db-backups -name 'pre-migrate-*.sql.gz' -mtime +14 -delete; pnpm --filter @hokago/db run migrate:deploy && exec node apps/api/dist/index.js"]
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
@@ -90,36 +96,23 @@ services:
       valkey:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
+      DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD}@postgres:5432/hokago
       VALKEY_URL: redis://valkey:6379
-      # The bind mount below is the config dir. Code defaults to ./data/config
-      # (cwd-relative) — without this the API reads/writes an empty overlay
-      # dir inside the container and every artwork/avatar/font 404s.
+      # Pinned to the bind mount below — code defaults to ./data/config
+      # (cwd-relative), which inside a container is an empty overlay dir and
+      # every artwork/avatar/font 404s. .env only supplies the host side.
       HOKAGO_CONFIG_DIR: /config
       # The SPA ships inside this image (infra/docker/Dockerfile runtime
       # stage) — when set, the API serves it and COOP/COEP become same-origin.
       HOKAGO_WEB_ROOT: /app/web
       PORT: 3000
-      # Optional override: leave unset and the API auto-generates a random
-      # signing secret on first boot and persists it (server_settings).
-      # Pin it here only for multi-replica setups that must sign identically.
-      HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-}
-      # Hardware accel: "auto" detects whatever GPU is granted below (nvenc >
-      # qsv > vaapi), "none" forces CPU. HOKAGO_HWACCEL_DEVICE picks a
-      # non-default render node (/dev/dri/renderD129) or CUDA card index.
-      HOKAGO_HWACCEL: ${HOKAGO_HWACCEL:-auto}
-      HOKAGO_HWACCEL_DEVICE: ${HOKAGO_HWACCEL_DEVICE:-}
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
-      TZ: ${TZ:-UTC}
-    # Hardware transcoding: uncomment ONE block (here and on hokago-worker)
-    # to hand the containers your GPU. Same image, no rebuild; a broken or
-    # absent GPU falls back to CPU automatically, playback always works.
-    #   Intel/AMD (VAAPI/QSV):
-    # devices:
-    #   - /dev/dri:/dev/dri
-    #   NVIDIA (NVENC, host needs nvidia-container-toolkit):
-    # gpus: all
+    devices:
+      # AMD/Intel GPU — mounted always, so hardware transcode is zero-config.
+      # On a host without /dev/dri this just becomes an empty dir inside the
+      # container and boot detection falls back to CPU (playback still works).
+      - /dev/dri:/dev/dri
+      # NVIDIA: needs nvidia-container-toolkit on the host, then uncomment:
+      # gpus: all
     ports:
       - "${HOKAGO_PORT:-3000}:3000"
     healthcheck:
@@ -131,17 +124,19 @@ services:
       retries: 10
       start_period: 20s
     volumes:
-      - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
+      - ${HOKAGO_CONFIG_DIR}:/config
       # Media roots are first-class and plural — one line per Library, bound
       # at the fixed container path the Library's rootPath records (both API
-      # and worker read media files). Sources are env-driven: point each at
-      # your host folders in .env, or accept the ./data/media/* defaults.
-      - ${MEDIA_MOVIES_PATH:-./data/media/movies}:/media/movies:ro
-      - ${MEDIA_TV_PATH:-./data/media/tv}:/media/tv:ro
-      - ${MEDIA_ANIME_PATH:-./data/media/anime}:/media/anime:ro
+      # and worker read media files). Sources come from .env; example.env
+      # prefills ./data/media/* for a test drive.
+      - ${MEDIA_MOVIES_PATH}:/media/movies:ro
+      - ${MEDIA_TV_PATH}:/media/tv:ro
+      - ${MEDIA_ANIME_PATH}:/media/anime:ro
 
   hokago-worker:
     image: ghcr.io/rishabhroyy/hokago:${HOKAGO_VERSION:-latest}
+    env_file:
+      - .env
     command: ["sh", "-c", "exec node apps/worker/dist/index.js"]
     restart: unless-stopped
     init: true
@@ -156,27 +151,19 @@ services:
       hokago:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD:-hokago}@postgres:5432/hokago
+      DATABASE_URL: postgresql://hokago:${POSTGRES_PASSWORD}@postgres:5432/hokago
       VALKEY_URL: redis://valkey:6379
       # Same as the API: artwork/fonts are written here and must land in the
       # shared bind mount, not the container overlay.
       HOKAGO_CONFIG_DIR: /config
-      # Same accel story as the API — the worker's ffmpeg jobs (art, trickplay,
-      # downloads) use whatever GPU the block below grants.
-      HOKAGO_HWACCEL: ${HOKAGO_HWACCEL:-auto}
-      HOKAGO_HWACCEL_DEVICE: ${HOKAGO_HWACCEL_DEVICE:-}
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
-      TZ: ${TZ:-UTC}
-    # Hardware transcoding for worker jobs — mirror the choice made on the
-    # hokago service above:
-    #   Intel/AMD (VAAPI/QSV):
-    # devices:
-    #   - /dev/dri:/dev/dri
-    #   NVIDIA (NVENC, host needs nvidia-container-toolkit):
-    # gpus: all
+    devices:
+      # Mirror of the API's grant — the worker's ffmpeg jobs (art, trickplay,
+      # downloads) use the same GPU.
+      - /dev/dri:/dev/dri
+      # NVIDIA: uncomment here too:
+      # gpus: all
     volumes:
-      - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
-      - ${MEDIA_MOVIES_PATH:-./data/media/movies}:/media/movies:ro
-      - ${MEDIA_TV_PATH:-./data/media/tv}:/media/tv:ro
-      - ${MEDIA_ANIME_PATH:-./data/media/anime}:/media/anime:ro
+      - ${HOKAGO_CONFIG_DIR}:/config
+      - ${MEDIA_MOVIES_PATH}:/media/movies:ro
+      - ${MEDIA_TV_PATH}:/media/tv:ro
+      - ${MEDIA_ANIME_PATH}:/media/anime:ro

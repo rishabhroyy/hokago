@@ -13,6 +13,7 @@ import {
   type MediaPlayerInstance,
   type MediaProviderAdapter,
   type MediaTextTrackChangeEvent,
+  type MediaVolumeChange,
   type TextTrack,
 } from "@vidstack/react";
 import {
@@ -34,7 +35,7 @@ import { getPrimaryProfile } from "./profile";
 import { clearDetailCache, fetchMediaItemDetail } from "./browse-api";
 import { paths, useRouter } from "./router";
 import { Icon } from "./ui/icons";
-import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveQualityPref, saveSubtitlePref, type TrackPrefs } from "./track-prefs";
+import { loadTrackPrefs, matchAudioPref, matchSubtitlePref, saveAudioPref, saveQualityPref, saveSubtitlePref, saveVolumePref, type TrackPrefs } from "./track-prefs";
 import { audioTrackLabel } from "./language-names";
 import { useJassubRenderer } from "./useJassubRenderer";
 import { useParty, type PartyCommand } from "./useParty";
@@ -443,6 +444,29 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // re-render the moment the pref changes, and the frozen `prefs` memo can't.
   const [qualitySelection, setQualitySelection] = useState<TrackPrefs["quality"] | undefined>(
     () => loadTrackPrefs().quality ?? undefined,
+  );
+  // Remembered volume level — fed to the `volume` prop, which vidstack applies
+  // at every media load, so a mid-session adjustment carries across restarts.
+  const [volume, setVolume] = useState<number>(() => loadTrackPrefs().volume ?? 1);
+  // Slider drags fire volume-change per tick; coalesce through rAF so a drag
+  // doesn't re-render the player subtree at 60Hz. The flush is the single
+  // persist + state commit, so the prop vidstack reads at the next load is
+  // always the last value.
+  const volumeRafRef = useRef(0);
+  const handleVolumeChange = useCallback((detail: MediaVolumeChange) => {
+    const next = detail.volume;
+    if (volumeRafRef.current) cancelAnimationFrame(volumeRafRef.current);
+    volumeRafRef.current = requestAnimationFrame(() => {
+      volumeRafRef.current = 0;
+      saveVolumePref(next);
+      setVolume(next);
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      if (volumeRafRef.current) cancelAnimationFrame(volumeRafRef.current);
+    },
+    [],
   );
   const userInteractedRef = useRef(false);
   const userPausedRef = useRef(false);
@@ -1557,6 +1581,8 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
               src={src}
               playsInline
               title={title ?? "hokago"}
+              volume={volume}
+              onVolumeChange={handleVolumeChange}
               onProviderChange={handleProviderChange}
               onCanPlay={handleCanPlay}
               onError={handleMediaError}

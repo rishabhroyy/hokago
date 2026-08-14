@@ -29,6 +29,8 @@ export interface TrackPrefs {
   subtitle: SubtitlePref | null | undefined;
   /** undefined = unset (the device profile's default caps apply). */
   quality: QualityPref | null | undefined;
+  /** null = unset (the browser default, 1). Volume level 0–1. */
+  volume: number | null;
 }
 
 /** Encode caps for a quality selection — merged into the device profile on /start and sent to /quality on change. Null caps = "Original" (no forced caps, the decider picks the easiest tier). */
@@ -42,7 +44,7 @@ export interface QualityPref {
 export function loadTrackPrefs(): TrackPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { audio: null, subtitle: undefined, quality: undefined };
+    if (!raw) return { audio: null, subtitle: undefined, quality: undefined, volume: null };
     const parsed = JSON.parse(raw) as Partial<TrackPrefs>;
     return {
       audio: parsed.audio ?? null,
@@ -50,9 +52,10 @@ export function loadTrackPrefs(): TrackPrefs {
       // (stored null) so a fresh user still gets the file's default subtitle.
       subtitle: parsed.subtitle === undefined ? undefined : parsed.subtitle,
       quality: parsed.quality === undefined ? undefined : parsed.quality,
+      volume: typeof parsed.volume === "number" ? parsed.volume : null,
     };
   } catch {
-    return { audio: null, subtitle: undefined, quality: undefined };
+    return { audio: null, subtitle: undefined, quality: undefined, volume: null };
   }
 }
 
@@ -79,6 +82,12 @@ export function saveSubtitlePref(pref: SubtitlePref | null): void {
 export function saveQualityPref(pref: QualityPref): void {
   const prefs = loadTrackPrefs();
   prefs.quality = pref;
+  persist(prefs);
+}
+
+export function saveVolumePref(volume: number): void {
+  const prefs = loadTrackPrefs();
+  prefs.volume = volume;
   persist(prefs);
 }
 

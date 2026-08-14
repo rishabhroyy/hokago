@@ -28,13 +28,28 @@ import { probeFile } from "@hokago/scanner/probe";
 import { generateTrickplaySheets } from "@hokago/scanner/trickplay";
 import { killTrackedChildren, trackedPidCount, trackPid, untrackPid } from "@hokago/scanner/child-registry";
 import { configDir } from "@hokago/scanner/artwork";
+import { setArtworkHwaccel } from "@hokago/scanner/generate-art";
 import { buildDownloadArgs } from "@hokago/ffmpeg/download";
+import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
 import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
+import { getHwaccel, hwActive, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { AniListProvider, JikanProvider, TvMazeProvider, WikidataBridge } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
 const connection = getConnection();
+
+// Hardware acceleration, resolved once at boot (one `ffmpeg -encoders` exec +
+// device probe — the same cached state the API resolves). Mutated to "none"
+// by reportHwFailure on the first runtime failure, which also retires the
+// scanner's decode args (setArtworkHwaccel holds the same reference).
+const hwaccel: HwaccelState = await getHwaccel();
+const hwInUse = () => hwActive(hwaccel);
+setArtworkHwaccel(hwaccel);
+/** Worker jobs' fail-soft: report a hw runtime failure (disables hw process-wide). */
+function reportJobHwFailure(where: string, err: unknown): void {
+  if (hwaccel.method !== "none") reportHwFailure(hwaccel.method, `${where}: ${String(err).slice(0, 200)}`);
+}
 
 const scanQueue = new Queue<ScanJobData>(QUEUE_NAMES.SCAN, {
   connection,
@@ -229,6 +244,9 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
     await storeArtwork(db, mediaItemId, dir, filePath, probe?.attachedPics ?? [], durationMs ?? probe?.durationMs ?? null);
     await db.jobFailure.deleteMany({ where: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK } });
   } catch (err) {
+    // Fail-soft: a hw-decode failure retires hw (the setter holds the same
+    // mutated state) and the BullMQ retry re-runs the job on CPU.
+    reportJobHwFailure("artwork", err);
     const failure = await db.jobFailure.upsert({
       where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK } },
       create: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK, attempts: 1, lastError: String(err) },
@@ -257,7 +275,7 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
       return;
     }
 
-    const result = await generateTrickplaySheets(filePath, duration, mediaFileId);
+    const result = await generateTrickplaySheets(filePath, duration, mediaFileId, hwaccel);
     await db.trickplay.upsert({
       where: { mediaFileId },
       create: {
@@ -281,6 +299,9 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
     });
     await db.jobFailure.deleteMany({ where: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } });
   } catch (err) {
+    // Fail-soft: a hw-decode failure retires hw (the state generateTrickplaySheets
+    // holds is the same mutated object) and the BullMQ retry re-runs on CPU.
+    reportJobHwFailure("trickplay", err);
     const failure = await db.jobFailure.upsert({
       where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } },
       create: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY, attempts: 1, lastError: String(err) },
@@ -377,7 +398,7 @@ async function processDownload(job: Job<DownloadJobData>): Promise<void> {
         .map((id) => mediaFile.subtitleTracks.find((t) => t.id === id))
         .find((t): t is NonNullable<typeof t> => !!t?.requiresBurnIn);
       const outputPath = path.join(tmpDir, "media.mp4");
-      await runFfmpegToCompletion(
+      const encode = (hw: HwaccelState | undefined) =>
         buildDownloadArgs({
           inputPath: mediaFile.path,
           outputPath,
@@ -386,8 +407,23 @@ async function processDownload(job: Job<DownloadJobData>): Promise<void> {
           subtitleBurnIn: burnTrack
             ? { streamIndex: burnTrack.streamIndex ?? 0, bitmap: true }
             : undefined,
-        }),
-      );
+          hwaccel: hw,
+          videoCodec: pickVideoEncoder(["h264"], hw),
+        });
+      try {
+        // Offline encodes are quality-first: same encoder selection as live
+        // transcoding, so a hw failure here falls back the same way (one
+        // CPU re-encode inside the job, then the queue's own retries).
+        const useHw = hwaccel.method !== "none";
+        await runFfmpegToCompletion(encode(useHw ? hwaccel : undefined));
+      } catch (err) {
+        if (hwaccel.method !== "none") {
+          reportHwFailure(hwaccel.method, `download ${downloadId}: ${String(err).slice(0, 200)}`);
+          await runFfmpegToCompletion(encode(undefined));
+        } else {
+          throw err;
+        }
+      }
       mediaFilename = "media.mp4";
     }
 

@@ -29,6 +29,16 @@ export function AdminView() {
   const [page, setPage] = useState<Page>("dashboard");
   const [toasts, setToasts] = useState<{ msg: string; err?: boolean; id: number }[]>([]);
   const toastId = useRef(0);
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Unauthenticated on purpose — /health is the version probe native
+    // clients use too; the sidebar chip just reads the same endpoint.
+    fetch("/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h: { version?: string } | null) => setServerVersion(h?.version ?? null))
+      .catch(() => setServerVersion(null));
+  }, []);
 
   const toast = useCallback((msg: string, err?: boolean) => {
     const id = ++toastId.current;
@@ -92,6 +102,11 @@ export function AdminView() {
             <Icon name="back" className="h-[14px] w-[14px] shrink-0" />
             <span className="max-[860px]:hidden">back to hokago</span>
           </button>
+          {serverVersion && (
+            <p className="mt-1.5 px-3 font-mono text-kicker font-bold uppercase tracking-[0.1em] text-ink-3 max-[860px]:text-center">
+              {serverVersion}
+            </p>
+          )}
         </div>
       </aside>
 

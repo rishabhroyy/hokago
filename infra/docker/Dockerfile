@@ -8,6 +8,11 @@
 # Ubuntu-universe amd64 packages. Node comes from the official tarball in the
 # runtime stage; the node-builder stage keeps the official node image.
 
+# Build-time release version (git tag, e.g. v0.1.0). Injected by CI; the
+# runtime stage exports it as HOKAGO_VERSION so /health and the admin UI can
+# report what's actually running. Dev/local builds default to "dev".
+ARG HOKAGO_VERSION=dev
+
 # ── Stage: ffmpeg-builder — CPU + hardware accel (vaapi/qsv/nvenc) ──
 # --enable-chromaprint is non-negotiable. hwaccel support is gated on
 # TARGETARCH=amd64 (the x86 stack: libva/oneVPL/nv-codec-headers); arm64
@@ -135,6 +140,8 @@ FROM ubuntu:noble AS runtime
 ARG TARGETARCH
 # Keep in step with the node:22 images the node-builder stage uses.
 ARG NODE_VERSION=22.23.2
+ARG HOKAGO_VERSION
+ENV HOKAGO_VERSION=${HOKAGO_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssl ca-certificates curl xz-utils gnupg \

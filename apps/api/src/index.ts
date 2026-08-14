@@ -47,6 +47,13 @@ function trustProxySetting(): boolean | number | string[] {
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+// Runtime image version, baked at build time (infra/docker/Dockerfile
+// HOKAGO_VERSION ARG → ENV; CI injects the git tag). Host-side dev runs
+// (vite dev server, CLI scripts) see "dev" — the containers always report
+// what tag they run. /health is unauthenticated on purpose: native clients
+// probe it to decide feature compatibility, like immich's /api/server/version.
+const HOKAGO_VERSION = process.env.HOKAGO_VERSION || "dev";
+
 const app = Fastify({
   logger: true,
   trustProxy: trustProxySetting(),
@@ -67,7 +74,7 @@ await app.register(websocketPlugin);
 
 app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () => ({
   status: "ok" as const,
-  version: "0.0.0",
+  version: HOKAGO_VERSION,
 }));
 
 // Config-dir probe: artwork/fonts/avatars/downloads live under

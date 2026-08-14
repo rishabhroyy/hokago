@@ -218,3 +218,31 @@ export const AttentionItem = z.object({
   failures: z.array(AttentionFailure),
 });
 export type AttentionItem = z.infer<typeof AttentionItem>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hardware acceleration status (read-only — config is env/compose, Immich-style)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const HwaccelMethod = z.enum(["none", "vaapi", "qsv", "nvenc"]);
+export const HwaccelRequest = z.enum(["auto", "none", "vaapi", "qsv", "nvenc"]);
+
+export const AdminHwaccelStatus = z.object({
+  /** what HOKAGO_HWACCEL asked for ("auto" = detect at boot) */
+  requested: HwaccelRequest,
+  /** what is actually active — "none" = CPU (no device, disabled, or explicit) */
+  method: HwaccelMethod,
+  /** device path in use (renderD* node or CUDA index; null when CPU) */
+  device: z.string().nullable(),
+  /** everything detection found usable on this host */
+  available: z.array(
+    z.object({
+      method: z.enum(["vaapi", "qsv", "nvenc"]),
+      device: z.string().nullable(),
+    }),
+  ),
+  /** true when a runtime failure flipped this process to CPU */
+  disabledAfterFailure: z.boolean(),
+  /** why the resolved method was chosen */
+  note: z.string().nullable(),
+});
+export type AdminHwaccelStatus = z.infer<typeof AdminHwaccelStatus>;

@@ -109,6 +109,7 @@ import {
   ServerSettings,
   ServerSettingsUpdateBody,
   AttentionItem,
+  AdminHwaccelStatus,
   ErrorResponse as AdminErrorResponse,
 } from "./admin.js";
 import {
@@ -737,6 +738,12 @@ export function buildOpenApiDocument(): OpenAPIObject {
     path: "/admin-api/attention",
     summary: "Items needing attention",
     responses: { 200: { description: "OK", ...json(z.array(AttentionItem)) } },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/admin-api/hwaccel",
+    summary: "Hardware acceleration status (detected, read-only)",
+    responses: { 200: { description: "OK", ...json(AdminHwaccelStatus) } },
   });
 
  // Media files

@@ -41,6 +41,9 @@ importers:
       '@hokago/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@hokago/scanner':
+        specifier: workspace:*
+        version: link:../../packages/scanner
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
@@ -190,6 +193,9 @@ importers:
       '@hokago/db':
         specifier: workspace:*
         version: link:../db
+      '@hokago/ffmpeg':
+        specifier: workspace:*
+        version: link:../ffmpeg
       '@hokago/metadata':
         specifier: workspace:*
         version: link:../metadata

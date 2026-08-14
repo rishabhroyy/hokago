@@ -16,7 +16,8 @@
     "docker:dev:rebuild": "docker compose -f docker-compose.yml -f compose.dev.yml up -d --build --force-recreate",
     "docker:logs": "docker compose logs -f",
     "docker:ps": "docker compose ps",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "backup": "sh ./scripts/backup.sh"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

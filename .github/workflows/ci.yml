@@ -1,0 +1,35 @@
+# hokago — CI gate: codegen → build → typecheck for every push/PR.
+# No docker build here (that's release.yml, tags only) — catches TS/contract
+# breakage in ~1-2 minutes without burning an hour of ffmpeg compilation.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Same order as the Dockerfile's node-builder stage: codegen is
+      # mandatory and deterministic, then build (which typecheck depends on
+      # for generated dist output), then the verification gate itself.
+      - run: pnpm --filter @hokago/contract generate
+      - run: pnpm --filter @hokago/db generate
+      - run: pnpm --filter @hokago/fonts build
+      - run: pnpm -r build
+      - run: pnpm -r typecheck

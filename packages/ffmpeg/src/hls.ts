@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { hwDecodeArgs, hwEncodeFilterTail, hwEncodeInitArgs, hwEncodeQualityArgs, type HwaccelState } from "./hwaccel.js";
+
 /**
  * Full VOD playlist generated upfront — the client sees the whole
  * video as ready-to-seek immediately, even though most segment files don't
@@ -106,6 +108,15 @@ export interface SegmentJobInput {
    * text formats (ASS/SSA/SRT/VTT): rendered via libass's `subtitles` filter.
    */
   subtitleBurnIn?: { streamIndex: number; bitmap: boolean };
+  /**
+   * Resolved hardware acceleration state — when active, the decode runs on
+   * the GPU, frames are downloaded to system memory (the CPU filter chain
+   * below is untouched), and vaapi/qsv upload back to the encoder. Omit for
+   * a pure software encode. Callers must NOT hand over a state that was
+   * already disabled by reportHwFailure — pickVideoEncoder handles the
+   * encoder, this only affects flags.
+   */
+  hwaccel?: HwaccelState;
 }
 
 // — naive PQ/Rec.2020 -> SDR reads grey and foggy. Convert to
@@ -145,6 +156,9 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
+  // hw init devices first (the named device the upload filters reference),
+  // then the hw decode flags that also carry the -i argument.
+  if (input.hwaccel) args.push(...hwEncodeInitArgs(input.hwaccel), ...hwDecodeArgs(input.hwaccel));
   args.push("-i", input.inputPath);
   // Accurate seek. A 100ms trim on a fresh start (seekMs absent → segment
   // grid ~0) drops the source pre-roll (leading keyframe lands ~1.4s in
@@ -162,13 +176,17 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // pix_fmt, so a 10-bit source (HEVC Main 10) would come out as h264 High
   // 10 and every MSE append would be rejected. Force 8-bit 4:2:0.
   videoFilters.push("format=yuv420p");
+  // hw encoders take hw-frames (vaapi/qsv): upload the filtered CPU frames
+  // at the end of the chain. nvenc accepts system frames — no tail.
+  const hwTail = input.hwaccel ? hwEncodeFilterTail(input.hwaccel) : [];
+  if (hwTail.length > 0) videoFilters.push(...hwTail);
 
   if (input.subtitleBurnIn) {
     const { streamIndex, bitmap } = input.subtitleBurnIn;
     const preChain = videoFilters.length > 0 ? videoFilters.join(",") : "null";
     const graph = bitmap
-      ? `[0:v]${preChain}[vpre];[vpre][0:s:${streamIndex}]overlay[vout]`
-      : `[0:v]${preChain},subtitles=${escapeFilterPath(input.inputPath)}:si=${streamIndex}[vout]`;
+      ? `[0:v]${preChain}[vpre];[vpre][0:s:${streamIndex}]overlay${hwTail.length > 0 ? "," + hwTail.join(",") : ""}[vout]`
+      : `[0:v]${preChain},subtitles=${escapeFilterPath(input.inputPath)}:si=${streamIndex}${hwTail.length > 0 ? "," + hwTail.join(",") : ""}[vout]`;
     args.push("-filter_complex", graph, "-map", "[vout]", "-map", audioMap);
   } else {
     args.push("-map", "0:v:0", "-map", audioMap);
@@ -179,8 +197,12 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // Live transcoding is a realtime-serving path, not a one-off rip —
   // veryfast + CRF 23 keeps the first segment on screen in seconds. The
   // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
-  // the speed/quality tradeoff instead.
-  args.push("-preset", "veryfast", "-crf", "23");
+  // the speed/quality tradeoff instead. Hardware encoders get their own
+  // equivalent options (hwEncodeQualityArgs) — libx264's preset/crf set is
+  // rejected by vaapi/qsv/nvenc outright.
+  const hwQuality = input.hwaccel ? hwEncodeQualityArgs(input.hwaccel, input.maxVideoBitrateKbps) : null;
+  if (hwQuality) args.push(...hwQuality);
+  else args.push("-preset", "veryfast", "-crf", "23");
   // No B-frames: the B-frame reorder puts a pts/dts skew on every keyframe,
   // which the mpegts muxer propagates as a small lead on every segment. With
   // dts == pts the segments stay exactly flush (6.006s spacing, no lead).

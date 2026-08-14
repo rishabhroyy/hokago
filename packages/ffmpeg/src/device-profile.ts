@@ -1,3 +1,5 @@
+import { hwEncoderFor, type HwaccelState } from "./hwaccel.js";
+
 // /. Fixed segment length so the upfront .m3u8 can enumerate every
 // segment before any of them exist on disk ("generate the full .m3u8
 // immediately"). 6s balances seek granularity against segment-boundary overhead;
@@ -67,9 +69,17 @@ const AUDIO_ENCODERS: Record<string, string> = {
   flac: "flac",
 };
 
-/** First profile-supported video codec we have an encoder for; falls back to libx264 if the profile lists none we recognize. */
-export function pickVideoEncoder(supportedVideoCodecs: string[]): string {
+/**
+ * First profile-supported video codec we have an encoder for; falls back to
+ * libx264 if the profile lists none we recognize. With a resolved hwaccel
+ * state the matching hardware encoder wins (when compiled in) — software
+ * remains the per-codec fallback, so a hardware op missing for one codec
+ * (e.g. vp9_vaapi on an old iGPU) degrades per-codec, not per-method.
+ */
+export function pickVideoEncoder(supportedVideoCodecs: string[], hw?: HwaccelState): string {
   for (const codec of supportedVideoCodecs) {
+    const hardware = hw ? hwEncoderFor(hw, codec) : null;
+    if (hardware) return hardware;
     const encoder = VIDEO_ENCODERS[codec];
     if (encoder) return encoder;
   }

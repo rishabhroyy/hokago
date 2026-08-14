@@ -9,6 +9,7 @@
     "./hls": "./dist/hls.js",
     "./remux": "./dist/remux.js",
     "./download": "./dist/download.js",
+    "./hwaccel": "./dist/hwaccel.js",
     "./spawn": "./dist/spawn.js",
     "./child-registry": "./dist/child-registry.js"
   },

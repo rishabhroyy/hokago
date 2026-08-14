@@ -11,6 +11,7 @@ async function unwrap<T>(p: Promise<{ data?: T | undefined }>): Promise<T> {
 export const adminApi = {
   summary: () => unwrap(api.GET("/admin-api/summary")),
   attention: () => unwrap(api.GET("/admin-api/attention")),
+  hwaccel: () => unwrap(api.GET("/admin-api/hwaccel")),
   libraries: () => unwrap(api.GET("/admin-api/libraries")),
   createLibrary: (body: Record<string, unknown>) => unwrap(api.POST("/admin-api/libraries", { body } as never)),
   updateLibrary: (id: string, body: Record<string, unknown>) => unwrap(api.PATCH("/admin-api/libraries/{id}", { params: { path: { id } }, body } as never)),

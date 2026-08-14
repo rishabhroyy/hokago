@@ -5,16 +5,19 @@ import { Badge, Card, Empty, Stat, Table, Td } from "./ui";
 
 type Summary = Awaited<ReturnType<typeof adminApi.summary>>;
 type Attention = Awaited<ReturnType<typeof adminApi.attention>>;
+type Hwaccel = Awaited<ReturnType<typeof adminApi.hwaccel>>;
 
 export function DashboardPage() {
   const { navigate } = useRouter();
   const [s, setS] = useState<Summary | null>(null);
   const [attention, setAttention] = useState<Attention>([]);
+  const [hw, setHw] = useState<Hwaccel | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     adminApi.summary().then((d) => !cancelled && setS(d)).catch(() => !cancelled && setS(null));
     adminApi.attention().then((d) => !cancelled && setAttention(d)).catch(() => {});
+    adminApi.hwaccel().then((d) => !cancelled && setHw(d)).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -32,6 +35,23 @@ export function DashboardPage() {
         <Stat icon="tv" tone="green" value={fmtNum(s.activeSessions)} label="watching now" sub={`${fmtNum(s.runningTranscodes)} transcoding`} />
         <Stat icon="alert" tone={s.needsAttention > 0 ? "red" : "gold"} value={fmtNum(s.needsAttention)} label="needs attention" sub={s.needsAttention > 0 ? "poison-pill or failed jobs" : "all clear"} />
       </div>
+
+      {hw && (
+        <Card
+          head="Hardware acceleration"
+          hint="detected at boot — set HOKAGO_HWACCEL / mount /dev/dri to change"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={hw.method === "none" ? "gold" : "green"}>{hw.method}</Badge>
+            {hw.device && <span className="font-mono text-small text-ink-2">{hw.device}</span>}
+            {hw.disabledAfterFailure && <Badge tone="red">cpu fallback active</Badge>}
+            <span className="text-small text-ink-3">
+              available: {hw.available.length > 0 ? hw.available.map((a) => a.method).join(" · ") : "none (CPU)"}
+            </span>
+          </div>
+          {hw.note && <p className="mt-1.5 text-small text-ink-3">{hw.note}</p>}
+        </Card>
+      )}
 
       <Card head="Queues" hint="pause/resume and retries on the Jobs page">
         <Table headers={["queue", "state", "waiting", "active", "delayed", "failed", "completed"]}>

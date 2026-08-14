@@ -1,6 +1,7 @@
 # hokago — hardware acceleration overlay for NVIDIA GPUs (NVENC).
 #
 # Use: docker compose -f docker-compose.yml -f infra/hwaccel.nvenc.yml up -d
+#      (or `pnpm docker:up:nvenc`)
 #
 # Prereqs on the host: NVIDIA driver + nvidia-container-toolkit (the `gpus:`
 # compose key needs the toolkit's default runtime registered with Docker).

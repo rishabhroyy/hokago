@@ -1,7 +1,7 @@
 # hokago — hardware acceleration overlay for Intel/AMD GPUs (VAAPI/QSV).
 #
 # Use: docker compose -f docker-compose.yml -f infra/hwaccel.transcoding.yml up -d
-#      (or add "-f infra/hwaccel.transcoding.yml" to the docker:up command in package.json)
+#      (or `pnpm docker:up:vaapi`)
 #
 # What this does:
 #   - mounts the host's render nodes (/dev/dri) into BOTH ffmpeg-running

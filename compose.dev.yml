@@ -1,6 +1,9 @@
 # hokago — dev overlay (Immich-style: source mounts + hot reload in containers).
 #
-# Use: pnpm docker:dev   (or: docker compose -f docker-compose.yml -f compose.dev.yml up -d)
+# Use: pnpm docker:dev   (or: docker compose -f docker-compose.yml -f compose.build.yml -f compose.dev.yml up -d)
+#
+# compose.build.yml is required because the base compose is image-only
+# (drop-in template) — the dev overlay never pulls, it builds locally.
 #
 # What this changes vs. docker-compose.yml:
 #   - apps/api and apps/worker source is bind-mounted and run under `tsx watch`

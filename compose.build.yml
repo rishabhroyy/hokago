@@ -1,0 +1,19 @@
+# hokago — build overlay: build the image locally instead of pulling the
+# published GHCR tag. Used by the dev loop and local rebuilds:
+#
+#   docker compose -f docker-compose.yml -f compose.build.yml up -d --build
+#
+# (pnpm docker:dev / docker:rebuild add this file automatically; the base
+# docker-compose.yml stays a pure drop-in template with no build blocks.)
+
+services:
+  hokago:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+
+  hokago-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+      target: runtime

@@ -1,14 +1,30 @@
-# hokago — deployment compose.
+# hokago — deployment compose template (drop-in).
+#
+# Pulls the published image from GHCR, Immich-style. No build blocks here —
+# local/self-built images use the compose.build.yml overlay:
+#   docker compose -f docker-compose.yml -f compose.build.yml up -d --build
+#
+# Configuration lives in .env (copy .env.example → .env and edit):
+#   - HOKAGO_CONFIG_DIR     host dir for /config (db, artwork, fonts, cache)
+#   - MEDIA_MOVIES_PATH/TV_PATH/ANIME_PATH   host dirs mounted read-only into
+#     the fixed container paths /media/movies, /media/tv, /media/anime —
+#     the setup wizard records those container-side paths as library roots.
+#     Want more libraries? Add a mount line like the three below and enter
+#     the matching target path in the wizard.
+#   - HOKAGO_PORT           published HTTP port (default 3000)
+#   - HOKAGO_VERSION        image tag to run (default latest)
+#   - HOKAGO_JWT_SECRET     optional — unset boots with an auto-generated,
+#     DB-persisted signing secret, zero setup (env only overrides it)
+#   - PUID/PGID             declared for future file-permission work; not
+#     enforced yet (build-order wizard step) — bind mounts are owned by the
+#     UID that created them
+#
+# Hardware acceleration = one extra -f overlay, no rebuild:
+#   Intel/AMD (VAAPI/QSV): infra/hwaccel.transcoding.yml
+#   NVIDIA (NVENC):        infra/hwaccel.nvenc.yml  (needs nvidia-container-toolkit)
 #
 # Bind mounts only. No named docker volumes anywhere, including Postgres —
 # except Postgres's own internal UID (see the postgres service below).
-#
-# One server container: the API serves the built SPA itself (HOKAGO_WEB_ROOT,
-# Immich-style) — no nginx service, no proxy config to keep in sync with the
-# vite dev proxy. hwaccel is a later overlay (build order step 14) — this
-# file is CPU-only. PUID/PGID enforcement on the app/worker containers is
-# also a later step (build order step 14); the env vars are declared here so
-# compose doesn't need reshaping when that lands.
 
 services:
   postgres:
@@ -53,9 +69,7 @@ services:
       retries: 10
 
   hokago:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
+    image: ghcr.io/rishabhroyy/hokago:${HOKAGO_VERSION:-latest}
     # Migrations before boot — a fresh postgres has no tables and the API
     # would crash into a restart loop. prisma migrate deploy is idempotent.
     # First, snapshot the pre-migration DB to /config/db-backups/ so every
@@ -83,7 +97,10 @@ services:
       # stage) — when set, the API serves it and COOP/COEP become same-origin.
       HOKAGO_WEB_ROOT: /app/web
       PORT: 3000
-      HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-dev-only-insecure-default}
+      # Optional override: leave unset and the API auto-generates a random
+      # signing secret on first boot and persists it (server_settings).
+      # Pin it here only for multi-replica setups that must sign identically.
+      HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
@@ -99,14 +116,16 @@ services:
       start_period: 20s
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
-      - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
-      - ${TC_TEST_LIBRARY_PATH:-/tmp/hokago-tc-test}:/tmp/hokago-tc-test:ro
+      # Media roots are first-class and plural — one line per Library, bound
+      # at the fixed container path the Library's rootPath records (both API
+      # and worker read media files). Sources are env-driven: point each at
+      # your host folders in .env, or accept the ./data/media/* defaults.
+      - ${MEDIA_MOVIES_PATH:-./data/media/movies}:/media/movies:ro
+      - ${MEDIA_TV_PATH:-./data/media/tv}:/media/tv:ro
+      - ${MEDIA_ANIME_PATH:-./data/media/anime}:/media/anime:ro
 
   hokago-worker:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
-      target: runtime
+    image: ghcr.io/rishabhroyy/hokago:${HOKAGO_VERSION:-latest}
     command: ["sh", "-c", "exec node apps/worker/dist/index.js"]
     restart: unless-stopped
     init: true
@@ -131,9 +150,6 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
-      # Media roots are first-class and plural — one line per Library, bound
-      # at the path the Library's rootPath records (both API and worker read
-      # media files). Source = the Docker-visible path (Docker Desktop on
-      # macOS shares /Users, not /users); target = the DB-recorded path.
-      - ${ANIME_LIBRARY_PATH:-/Users/rishabh/Downloads/Anime}:/users/rishabh/Downloads/Anime:ro
-      - ${TC_TEST_LIBRARY_PATH:-/tmp/hokago-tc-test}:/tmp/hokago-tc-test:ro
+      - ${MEDIA_MOVIES_PATH:-./data/media/movies}:/media/movies:ro
+      - ${MEDIA_TV_PATH:-./data/media/tv}:/media/tv:ro
+      - ${MEDIA_ANIME_PATH:-./data/media/anime}:/media/anime:ro

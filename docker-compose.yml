@@ -21,9 +21,10 @@
 #     enforced yet (build-order wizard step) — bind mounts are owned by the
 #     UID that created them
 #
-# Hardware acceleration = one extra -f overlay, no rebuild:
-#   Intel/AMD (VAAPI/QSV): infra/hwaccel.transcoding.yml
-#   NVIDIA (NVENC):        infra/hwaccel.nvenc.yml  (needs nvidia-container-toolkit)
+# Hardware acceleration needs no extra files: the image ships the drivers and
+# auto-detects whatever GPU it can see (HOKAGO_HWACCEL=auto) — you only grant
+# the container access by uncommenting a block on the hokago/hokago-worker
+# services below (Intel/AMD: devices /dev/dri; NVIDIA: gpus + host toolkit).
 #
 # Bind mounts only. No named docker volumes anywhere, including Postgres —
 # except Postgres's own internal UID (see the postgres service below).
@@ -103,9 +104,22 @@ services:
       # signing secret on first boot and persists it (server_settings).
       # Pin it here only for multi-replica setups that must sign identically.
       HOKAGO_JWT_SECRET: ${HOKAGO_JWT_SECRET:-}
+      # Hardware accel: "auto" detects whatever GPU is granted below (nvenc >
+      # qsv > vaapi), "none" forces CPU. HOKAGO_HWACCEL_DEVICE picks a
+      # non-default render node (/dev/dri/renderD129) or CUDA card index.
+      HOKAGO_HWACCEL: ${HOKAGO_HWACCEL:-auto}
+      HOKAGO_HWACCEL_DEVICE: ${HOKAGO_HWACCEL_DEVICE:-}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
+    # Hardware transcoding: uncomment ONE block (here and on hokago-worker)
+    # to hand the containers your GPU. Same image, no rebuild; a broken or
+    # absent GPU falls back to CPU automatically, playback always works.
+    #   Intel/AMD (VAAPI/QSV):
+    # devices:
+    #   - /dev/dri:/dev/dri
+    #   NVIDIA (NVENC, host needs nvidia-container-toolkit):
+    # gpus: all
     ports:
       - "${HOKAGO_PORT:-3000}:3000"
     healthcheck:
@@ -147,9 +161,20 @@ services:
       # Same as the API: artwork/fonts are written here and must land in the
       # shared bind mount, not the container overlay.
       HOKAGO_CONFIG_DIR: /config
+      # Same accel story as the API — the worker's ffmpeg jobs (art, trickplay,
+      # downloads) use whatever GPU the block below grants.
+      HOKAGO_HWACCEL: ${HOKAGO_HWACCEL:-auto}
+      HOKAGO_HWACCEL_DEVICE: ${HOKAGO_HWACCEL_DEVICE:-}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
+    # Hardware transcoding for worker jobs — mirror the choice made on the
+    # hokago service above:
+    #   Intel/AMD (VAAPI/QSV):
+    # devices:
+    #   - /dev/dri:/dev/dri
+    #   NVIDIA (NVENC, host needs nvidia-container-toolkit):
+    # gpus: all
     volumes:
       - ${HOKAGO_CONFIG_DIR:-./data/config}:/config
       - ${MEDIA_MOVIES_PATH:-./data/media/movies}:/media/movies:ro

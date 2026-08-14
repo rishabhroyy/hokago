@@ -17,9 +17,10 @@ ARG HOKAGO_VERSION=dev
 # --enable-chromaprint is non-negotiable. hwaccel support is gated on
 # TARGETARCH=amd64 (the x86 stack: libva/oneVPL/nv-codec-headers); arm64
 # builds stay CPU-only — detection at boot then falls back to CPU, which is
-# the always-works floor. The GPU itself is only reachable via the compose
-# overlay (infra/hwaccel.*.yml) that mounts /dev/dri (or the nvidia runtime) —
-# absent that mount, detection finds no device and the pipeline stays CPU.
+# the always-works floor. The GPU itself is only reachable when the operator
+# uncomments the devices/gpus block in docker-compose.yml to mount /dev/dri
+# (or the nvidia runtime) — absent that grant, detection finds no device and
+# the pipeline stays CPU.
 FROM ubuntu:noble AS ffmpeg-builder
 ARG TARGETARCH
 
@@ -84,7 +85,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     fi
 
 # ffmpeg itself — CPU always works; vaapi/qsv/nvenc are compile-time support
-# that the runtime stage's driver libs + the compose overlay make usable.
+# that the runtime stage's driver libs + the compose device grant make usable.
 # rkmpp is intentionally absent (no Rockchip target yet).
 RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
     && cd ffmpeg && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure \

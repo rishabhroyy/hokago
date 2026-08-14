@@ -104,7 +104,9 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
          --enable-libopus \
          --enable-libzimg \
          $(if [ "$TARGETARCH" = "amd64" ]; then \
-           echo "--enable-vaapi --enable-qsv --enable-libvpl --enable-nvenc --enable-ffnvcodec"; \
+           # qsv needs no own flag since FFmpeg 7 — the qsv encoders build in via
+            # --enable-vaapi + --enable-libvpl (libvpl runtime dispatch).
+            echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec"; \
          fi) \
     && make -j"$(nproc)" && make install
 

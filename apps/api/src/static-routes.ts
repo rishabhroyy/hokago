@@ -101,17 +101,23 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
   });
 
   // Chrome fonts — one font stack, so this is just every vendored font,
-  // unconditionally, no per-theme lookup.
-  app.get("/fonts", { preHandler: app.authenticate }, async () => {
+  // unconditionally, no per-theme lookup. Public on purpose: fonts are
+  // hash-addressed presentation chrome from our own origin (like the SPA
+  // shell itself), and keeping them authed meant every boot-time fetch
+  // depended on the access-token cookie — after the 15-minute token TTL the
+  // cookie is gone, so any reload past it 401'd and the app silently fell
+  // back to system fonts. The login/setup pages are unauthenticated by
+  // definition and were permanently stuck on fallback fonts.
+  app.get("/fonts", async () => {
     const fonts = await db.font.findMany({ where: { source: "VENDORED" } });
     return fonts.map((f) => ({ hash: f.hash, family: f.family, weight: f.weight, style: f.style, url: `/fonts/${f.hash}` }));
   });
 
- // Font store — hash-keyed, so the response is safe to cache
+  // Font store — hash-keyed, so the response is safe to cache
   // forever regardless of which of the four sources produced it.
+  // Public for the same reason as the list above.
   app.get<{ Params: { hash: string } }>(
     "/fonts/:hash",
-    { preHandler: app.authenticate },
     async (req, reply) => {
     const font = await db.font.findUnique({ where: { hash: req.params.hash } });
     const fontPath = font && resolveConfigFilePath(font.path, "fonts");

@@ -137,7 +137,7 @@ ARG TARGETARCH
 ARG NODE_VERSION=22.23.2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      openssl ca-certificates curl xz-utils \
+      openssl ca-certificates curl xz-utils gnupg \
       # hwaccel user-space drivers: libva + iHD (Intel) / radeonsi (AMD) for
       # vaapi/qsv, libvpl2 for the qsv dispatcher. nvenc needs no package —
       # the nvidia-container-toolkit mounts the driver .so's at container
@@ -146,6 +146,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && if [ "$TARGETARCH" = "amd64" ]; then \
          apt-get install -y --no-install-recommends libvpl2 intel-media-va-driver; \
        fi \
+    # postgresql-client matching the postgres:17 compose image — Ubuntu
+    # noble's own client is 16 and pg_dump hard-aborts on a server version
+    # mismatch (the API's pre-migration snapshot depends on it). From the
+    # official PGDG apt repo; keep in step with docker-compose.yml.
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+         https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
     && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${TARGETARCH}.tar.xz" -o /tmp/node.tar.xz \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \

@@ -10,6 +10,7 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import { HealthResponse } from "@hokago/contract/health";
+import { probeConfigDir } from "@hokago/scanner/artwork";
 import { killTrackedChildren, trackedPidCount } from "@hokago/ffmpeg/child-registry";
 import { PrismaClient } from "@hokago/db";
 import { registerAdminRoutes } from "./admin-routes.js";
@@ -56,6 +57,22 @@ app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () =
   status: "ok" as const,
   version: "0.0.0",
 }));
+
+// Config-dir probe: artwork/fonts/avatars/downloads live under
+// HOKAGO_CONFIG_DIR (/config in compose). Missing env or mount = silent
+// overlay fallback and every derived artifact 404s while playback still
+// works — log loudly at boot instead of shipping a broken box.
+const cfg = probeConfigDir();
+if (!cfg.ok) {
+  app.log.warn(
+    { dir: cfg.dir, error: cfg.reason },
+    "config dir unusable — artwork, fonts, avatars and downloads will 404 while playback keeps working. Set HOKAGO_CONFIG_DIR to the bind-mounted config dir (compose default: /config).",
+  );
+} else if (!cfg.explicit) {
+  app.log.warn({ dir: cfg.dir }, "config dir is the cwd-derived default (HOKAGO_CONFIG_DIR unset) — run under compose with /config");
+} else {
+  app.log.info({ dir: cfg.dir }, "config dir");
+}
 
 const db = new PrismaClient();
 await seedVendoredFonts(db);

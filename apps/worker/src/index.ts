@@ -27,7 +27,7 @@ import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadat
 import { probeFile } from "@hokago/scanner/probe";
 import { generateTrickplaySheets } from "@hokago/scanner/trickplay";
 import { killTrackedChildren, trackedPidCount, trackPid, untrackPid } from "@hokago/scanner/child-registry";
-import { configDir } from "@hokago/scanner/artwork";
+import { configDir, probeConfigDir } from "@hokago/scanner/artwork";
 import { setArtworkHwaccel } from "@hokago/scanner/generate-art";
 import { buildDownloadArgs } from "@hokago/ffmpeg/download";
 import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
@@ -38,6 +38,17 @@ import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
 const connection = getConnection();
+
+// Same boot probe as the API — worker jobs also write artwork/fonts/downloads
+// under HOKAGO_CONFIG_DIR (/config); a silent overlay fallback 404s artifacts.
+const cfg = probeConfigDir();
+if (!cfg.ok) {
+  console.warn(`config dir unusable (${cfg.dir}): ${cfg.reason} — artwork, fonts and downloads will fail while playback keeps working. Set HOKAGO_CONFIG_DIR (compose default: /config).`);
+} else if (!cfg.explicit) {
+  console.warn(`config dir is the cwd-derived default (${cfg.dir}) — HOKAGO_CONFIG_DIR unset; run under compose with /config`);
+} else {
+  console.log(`config dir: ${cfg.dir}`);
+}
 
 // Hardware acceleration, resolved once at boot (one `ffmpeg -encoders` exec +
 // device probe — the same cached state the API resolves). Mutated to "none"

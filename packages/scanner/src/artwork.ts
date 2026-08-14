@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -31,6 +31,33 @@ export interface ArtworkDescriptor {
 /** Config root for derived stores (artwork, trickplay cache) — always absolute. */
 export function configDir(): string {
   return process.env.HOKAGO_CONFIG_DIR ? path.resolve(process.env.HOKAGO_CONFIG_DIR) : defaultConfigDir();
+}
+
+export interface ConfigDirStatus {
+  dir: string;
+  explicit: boolean;
+  ok: boolean;
+  reason: string;
+}
+
+/**
+ * Boot probe: is the config dir usable? Composes run with HOKAGO_CONFIG_DIR=/config
+ * (bind mount) — when that env var is dropped or the mount is missing, the API
+ * silently falls back to an overlay dir and every artwork/font/avatar/download
+ * 404s while playback still works. Callers must log loudly on !ok.
+ */
+export function probeConfigDir(): ConfigDirStatus {
+  const explicit = !!process.env.HOKAGO_CONFIG_DIR;
+  const dir = configDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, ".hokago-write-probe");
+    writeFileSync(probe, "");
+    rmSync(probe);
+    return { dir, explicit, ok: true, reason: "" };
+  } catch (err) {
+    return { dir, explicit, ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** Walk up to the monorepo root (pnpm-workspace.yaml) — works from src/, dist/, and scripts/. */

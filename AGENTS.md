@@ -70,12 +70,32 @@ Work top to bottom; don't skip ahead. Ordering principle: build the thing that a
 
 The full intent doc is `docs/native-clients.md` — read it before any native-client work. TL;DR: `apps/web` is the single UI source; native apps are webview shells + native bridges (player/downloads/secure-storage/base-URL). The backend is already wired: devices + TV pairing (`Device`/`PairingCode`), `HOKAGO_TRUST_PROXY` + `CF-Connecting-IP` for real-client-IP rate limiting, downloads (`Download` + `download` BullMQ queue, artifacts under `/config/downloads/<id>`), and offline watch-state sync.
 
+## Backup & restore
+
+- `pnpm backup` (or `./scripts/backup.sh [outdir]`) — host-side snapshot of postgres (pg_dump inside the postgres container, no host client) + the whole config dir (artwork/fonts/avatars/downloads) into `./data/backups/` (or the given dir). Restore story below.
+- The API additionally snapshots the DB to `/config/db-backups/pre-migrate-<ts>.sql.gz` **before every `prisma migrate deploy`** at container boot (empty dumps — fresh DB — are deleted; 14 days kept), so any migration is reversible in-place.
+
+### Restore
+
+```sh
+# 1. stop the app so nothing writes during the restore
+docker compose stop hokago hokago-worker
+# 2. DB — drop, recreate, load the dump
+docker compose exec -T postgres psql -U hokago -d postgres -c 'DROP DATABASE IF EXISTS hokago WITH (FORCE)'
+docker compose exec -T postgres psql -U hokago -d postgres -c 'CREATE DATABASE hokago OWNER hokago'
+gunzip -c data/backups/hokago-db-<stamp>.sql.gz | docker compose exec -T postgres psql -U hokago -d hokago
+# 3. config dir — wipe and unpack (bind mount is ./data/config by default)
+rm -rf ./data/config && tar -xzf data/backups/hokago-config-<stamp>.tar.gz -C ./data
+# 4. bring it back; the API re-runs migrate deploy (idempotent, no-op on a restored schema)
+docker compose start hokago hokago-worker
+```
+
 ## Gotchas
 
 - API/worker/web run in containers. `pnpm docker:dev` recreates the dev containers; `pnpm docker:dev:rebuild` rebuilds images first (contract/schema/`packages/*` changes — their `dist/`/generated output is baked in). A running container never sees source edits outside the mounted `src/` dirs.
 - `:3000` is the container API (and the prod web origin). If anything host-side claims it, the API container crash-loops on EADDRINUSE (logs show it as a startup failure). Vice versa: the containers claim `:3000`, and `:5173` belongs to the web dev server.
 - The web dev server and host CLI scripts import package `dist/` output — after a contract/schema change you must run the host codegen + build (see Dev workflow) or the web app fails typecheck/dev with stale types.
-- Never drop `HOKAGO_CONFIG_DIR=/config` from the compose env — the API/worker silently fall back to an overlay dir and every artwork/font/avatar 404s while playback still works. Same for download artifacts (`/config/downloads/<id>`).
+- Never drop `HOKAGO_CONFIG_DIR=/config` from the compose env — the API/worker silently fall back to an overlay dir and every artwork/font/avatar 404s while playback still works. Same for download artifacts (`/config/downloads/<id>`). Both services probe the config dir at boot: a usable dir logs `config dir: <path>`, a broken one logs a loud warning naming exactly what will 404.
 - Behind a reverse proxy (nginx/caddy)? Set `HOKAGO_TRUST_PROXY=true` so login rate limiting sees real client IPs via `X-Forwarded-For` (Cloudflare's `CF-Connecting-IP` is always honored). Forward WebSocket `Upgrade` headers for watch parties; keep `Range` + COOP/COEP headers for streaming.
 - `hokago` is always lowercase — code, UI, packages, commits.
 - Conventional commits (`feat:`/`fix:`/...), small one-concern commits (see `git log`).

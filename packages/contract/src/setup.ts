@@ -12,11 +12,6 @@ export { ErrorResponse } from "./auth.js";
  */
 export const SetupState = z.object({
   setupRequired: z.boolean(),
-  /**
-   * HOKAGO_JWT_SECRET unset: the API is running on its insecure dev-only
-   * fallback secret. Shown as a warning during setup, not a blocker.
-   */
-  insecureJwtSecret: z.boolean(),
 });
 export type SetupState = z.infer<typeof SetupState>;
 

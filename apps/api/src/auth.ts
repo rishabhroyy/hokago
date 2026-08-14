@@ -111,13 +111,59 @@ export function invalidateSessionLiveness(sessionId: string): void {
   livenessCache.delete(sessionId);
 }
 
-export async function registerAuth(app: FastifyInstance): Promise<void> {
-  const secret = process.env.HOKAGO_JWT_SECRET;
-  if (!secret) {
-    app.log.warn("HOKAGO_JWT_SECRET not set — using an insecure dev-only default. Set it in production.");
+// JWT signing secret resolution, immich-style: env wins when set, otherwise
+// a random secret is generated and persisted in server_settings on first
+// boot (read back on every later boot). This is what lets a drop-in install
+// run with zero configuration AND zero known published defaults — the
+// "set HOKAGO_JWT_SECRET yourself" step doesn't exist. A multi-replica
+// deployment should pin the env var so every instance signs identically.
+export async function resolveJwtSecret(
+  app: FastifyInstance,
+  db: PrismaClient,
+): Promise<string> {
+  const fromEnv = process.env.HOKAGO_JWT_SECRET;
+  if (fromEnv) {
+    app.log.info("JWT signing key from HOKAGO_JWT_SECRET env");
+    return fromEnv;
   }
+  const row = await db.serverSetting.findUnique({
+    where: { id: "singleton" },
+    select: { jwtSecret: true },
+  });
+  if (row?.jwtSecret) return row.jwtSecret;
+  // No env and no persisted secret — generate one and claim the slot
+  // atomically. The row may already exist with a null secret (the wizard's
+  // lazy singleton-upsert, or a pre-secret install), so updateMany gated on
+  // `jwtSecret: null` is the claim; only when the row is entirely missing
+  // does create run. Raced boots converge on the winner's secret.
+  const secret = randomBytes(32).toString("hex");
+  const claimed = await db.serverSetting.updateMany({
+    where: { id: "singleton", jwtSecret: null },
+    data: { jwtSecret: secret },
+  });
+  if (claimed.count === 1) {
+    app.log.info(
+      "HOKAGO_JWT_SECRET unset — generated a random signing secret and stored it in server_settings; HOKAGO_JWT_SECRET env overrides it when set",
+    );
+    return secret;
+  }
+  try {
+    await db.serverSetting.create({ data: { id: "singleton", jwtSecret: secret } });
+  } catch {
+    const settled = await db.serverSetting.findUnique({
+      where: { id: "singleton" },
+      select: { jwtSecret: true },
+    });
+    if (settled?.jwtSecret) return settled.jwtSecret;
+    throw new Error("could not persist an auto-generated jwt secret");
+  }
+  return secret;
+}
+
+export async function registerAuth(app: FastifyInstance): Promise<void> {
+  const secret = await resolveJwtSecret(app, db);
   await app.register(fastifyJwt, {
-    secret: secret ?? "dev-insecure-secret-do-not-use-in-production",
+    secret,
     sign: { expiresIn: ACCESS_TOKEN_TTL },
   });
 

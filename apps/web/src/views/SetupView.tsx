@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { api, storeAccessToken } from "../api-client";
-import { getSetupState } from "../setup-state";
 import { Icon } from "../ui/icons";
 import { LogoMark } from "../ui/Logo";
 import { ThemeToggle } from "../ui/useTheme";
@@ -15,7 +14,7 @@ interface CreatedLibrary {
 }
 
 /** First-run wizard: the whole fresh-install checklist.
- *  1. welcome — what this is, insecure-secret heads-up
+ *  1. welcome — what this is
  *  2. admin account — /setup/complete mints the session, so the wizard
  *     continues authenticated through the standard admin API
  *  3. libraries — point hokago at the media folders (each enabled library
@@ -38,8 +37,6 @@ export function SetupView() {
   const [libProfile, setLibProfile] = useState<"GENERAL" | "ANIME">("GENERAL");
   const [libBusy, setLibBusy] = useState(false);
   const [libError, setLibError] = useState<string | null>(null);
-
-  const { insecureJwtSecret } = getSetupState();
 
   const go = (next: number) => {
     s.page(next > step ? 1 : -1);
@@ -162,16 +159,6 @@ export function SetupView() {
                   <span className="font-semibold text-ink-2">media folders</span>. everything else can
                   be changed later in the admin console.
                 </p>
-
-              {insecureJwtSecret && (
-                <div className="mt-5 w-full rounded-2xl border border-accent/25 bg-accent/8 px-4 py-3 text-left">
-                  <p className="text-[13px] font-semibold text-accent">heads-up: running without a signing secret</p>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
-                    <code className="font-mono text-[11.5px] text-ink-3">HOKAGO_JWT_SECRET</code> isn't set, so sessions
-                    are signed with an insecure dev-only default. set it in your environment and restart when convenient.
-                  </p>
-                </div>
-              )}
 
               <button
                 type="button"

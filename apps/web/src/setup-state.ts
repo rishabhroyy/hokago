@@ -1,11 +1,10 @@
 export interface SetupState {
   setupRequired: boolean;
-  insecureJwtSecret: boolean;
 }
 
 // Default: pretend setup is done until the boot fetch proves otherwise — the
 // login gate must not flash the wizard on an API hiccup.
-let cached: SetupState = { setupRequired: false, insecureJwtSecret: false };
+let cached: SetupState = { setupRequired: false };
 
 /** One-shot boot probe; main.tsx awaits it before rendering (mirrors fetchFonts). */
 export async function fetchSetupState(): Promise<SetupState> {
@@ -15,7 +14,6 @@ export async function fetchSetupState(): Promise<SetupState> {
     const data = (await res.json()) as SetupState;
     cached = {
       setupRequired: Boolean(data.setupRequired),
-      insecureJwtSecret: Boolean(data.insecureJwtSecret),
     };
   } catch {
     // API unreachable (containers down in dev) — fall through to the default

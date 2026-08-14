@@ -39,7 +39,6 @@ export async function registerSetupRoutes(app: ZodFastifyInstance): Promise<void
     const accounts = await db.account.count();
     return {
       setupRequired: accounts === 0,
-      insecureJwtSecret: !process.env.HOKAGO_JWT_SECRET,
     };
   });
 

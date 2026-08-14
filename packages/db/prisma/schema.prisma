@@ -1015,12 +1015,17 @@ model PartyMember {
 /// Server settings. Single row enforced by application logic.
 model ServerSetting {
   id        String   @id @default("singleton")
- /// Base path, e.g. "/hokago" .
+/// Base path, e.g. "/hokago" .
   basePath  String   @default("/")
- /// Global + per-user transcode caps .
+/// JWT signing secret. env HOKAGO_JWT_SECRET wins when set; otherwise the
+/// first boot generates a random one and persists it here (immich-style),
+/// so a drop-in install never ships a known default — and users never
+/// have to generate one themselves.
+  jwtSecret String?
+/// Global + per-user transcode caps .
   maxConcurrentTranscodes Int @default(2)
   maxTranscodesPerUser    Int @default(1)
- /// Chromaprint scheduling (tier 3).
+/// Chromaprint scheduling (tier 3).
   fingerprintEnabled  Boolean @default(false)
   fingerprintThreads  Int     @default(2)
   fingerprintWindow   String? // cron expr, off-peak

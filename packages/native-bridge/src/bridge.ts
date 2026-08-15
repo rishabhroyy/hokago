@@ -37,6 +37,13 @@ export interface NativeDownloadSaveResult {
   sizeBytes: number;
 }
 
+/** A locally-saved file the shell knows about (survives offline). */
+export interface NativeLocalDownload {
+  /** The absolute path on device storage — the web matches manifest entries by this. */
+  localPath: string;
+  sizeBytes: number;
+}
+
 export interface NativeStorage {
   get(key: string): string | null;
   set(key: string, value: string): void;
@@ -64,6 +71,12 @@ export interface NativeBridge {
     save(url: string, filename: string): Promise<NativeDownloadSaveResult>;
     /** Desktop only: reveal the file in the OS file manager. */
     open?(localPath: string): void;
+    /** Every download saved on this device, for the offline library. */
+    list(): Promise<NativeLocalDownload[]>;
+    /** A playable URL for a locally-saved file (custom scheme / file://). */
+    localUrl(localPath: string): string;
+    /** Reads a local text sidecar (subtitle) back as a string — offline JASSUB. */
+    readText?(localPath: string): Promise<string>;
   };
 }
 
@@ -96,6 +109,26 @@ export function isTvShell(): boolean {
 export function supportsDownloads(): boolean {
   const bridge = getNativeBridge();
   return bridge !== null && DOWNLOAD_PLATFORMS.includes(bridge.platform);
+}
+
+/**
+ * True when the shell can play a file back from local storage (any platform
+ * that can download can play its own copies offline). TVs can't download, so
+ * they never get the offline library.
+ */
+export function supportsOffline(): boolean {
+  return supportsDownloads();
+}
+
+/**
+ * Probe whether the server is reachable. `navigator.onLine` only knows about
+ * the network link, not the server, so the app should also rely on a failed
+ * API heartbeat before declaring itself offline. This helper just reflects
+ * the browser's link state plus the bridge's knowledge.
+ */
+export function isNetworkLikelyOffline(): boolean {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  return false;
 }
 
 /**

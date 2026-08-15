@@ -6,6 +6,7 @@ import { getDeviceId } from "../native";
 import { fetchMediaItemDetail } from "../browse-api";
 import { useProfileId } from "../profile";
 import { canDownload, createDownload, deleteDownload, localFor, saveToDevice, waitReady } from "../downloads";
+import { paths, useRouter } from "../router";
 import { Icon } from "../ui/icons";
 import { useWiiSound } from "../ui/useWiiSound";
 
@@ -25,6 +26,7 @@ const STATUS_LABEL: Record<DownloadInfo["status"], string> = {
 };
 
 export function DownloadsView() {
+  const { navigate } = useRouter();
   const s = useWiiSound();
   const profileId = useProfileId();
   const [downloads, setDownloads] = useState<DownloadInfo[] | null>(null);
@@ -113,7 +115,13 @@ export function DownloadsView() {
 
   return (
     <div className="mx-auto min-h-screen max-w-[900px] px-6 pb-24 pt-28">
-      <h1 className="mb-8 font-display text-title font-bold">Downloads</h1>
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-title font-bold">Downloads</h1>
+        <button className="btn btn-ghost" onClick={() => navigate(paths.offline())}>
+          <Icon name="wifi-off" className="h-4 w-4" />
+          Offline library
+        </button>
+      </div>
       {error && (
         <p className="mb-5 rounded-2xl bg-accent/10 px-4 py-2.5 text-small font-semibold text-accent">{error}</p>
       )}

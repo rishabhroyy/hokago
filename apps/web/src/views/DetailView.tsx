@@ -5,6 +5,7 @@ import { api } from "../api-client";
 import { useProfileId } from "../profile";
 import { paths, useRouter } from "../router";
 import { canDownload, createDownload, recordLocalDownload, saveToDevice, waitReady } from "../downloads";
+import { recordOfflineEntry } from "../offline";
 import { Icon } from "../ui/icons";
 import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
@@ -260,7 +261,9 @@ export function DetailView({ itemId }: { itemId: string }) {
   const prefetchTile = (tile: TileItem) => prefetchMediaItemDetail(tile.id);
 
   // Download-to-device: server builds the artifact, the native bridge saves
-  // the bytes. Shells only (canDownload() is false in a plain browser).
+  // the bytes. Shells only (canDownload() is false in a plain browser). The
+  // saved copy is also registered in the offline manifest so it plays with no
+  // server reachable.
   const downloadThis = async (fileId: string, itemId_: string) => {
     s.select();
     setDlState("building");
@@ -273,6 +276,24 @@ export function DetailView({ itemId }: { itemId: string }) {
       const outcome = await saveToDevice(id);
       if (!outcome.ok) throw new Error(outcome.error);
       recordLocalDownload(id, { localPath: outcome.localPath, sizeBytes: outcome.sizeBytes });
+      // Offline manifest: title/kind/poster captured now, while the server's
+      // detail data is in hand — the offline library renders from this.
+      const isEpisode = itemId_ !== item.id;
+      const ep = isEpisode ? item.episodes.find((e) => e.id === itemId_) : null;
+      recordOfflineEntry({
+        downloadId: id,
+        mediaItemId: itemId_,
+        mediaFileId: fileId,
+        title: item.title,
+        kind: item.kind === "SERIES" ? "EPISODE" : "MOVIE",
+        subtitle: ep?.title ?? (item.kind === "SERIES" ? `Episode ${ep?.episodeNumber ?? "?"}` : undefined),
+        posterUrl: item.posterUrl ?? undefined,
+        backdropUrl: item.backdropUrl ?? undefined,
+        durationMs: ep?.runtimeMs ?? null,
+        localPath: outcome.localPath,
+        sizeBytes: outcome.sizeBytes,
+        subtitlePaths: [],
+      });
       setDlState("done");
     } catch (err) {
       setDlState("error");

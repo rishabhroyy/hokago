@@ -1,4 +1,5 @@
 import { RouterProvider, useRouter, type Route } from "./router";
+import { paths } from "./router";
 import { SoundProvider } from "./ui/useWiiSound";
 import { TopNav } from "./ui/TopNav";
 import { useTvKeyboardNav } from "./ui/tv-keys";
@@ -14,12 +15,17 @@ import { PartyView } from "./views/PartyView";
 import { NotFoundView } from "./views/NotFoundView";
 import { TvAccountsView } from "./views/TvAccountsView";
 import { DownloadsView } from "./views/DownloadsView";
+import { OfflineView } from "./views/OfflineView";
+import { OfflineWatchPage } from "./views/OfflineWatchPage";
 import { NativeUpdateGate } from "./views/NativeUpdateGate";
 import { WatchPage } from "./WatchPage";
 import { AdminView } from "./admin/AdminView";
 import { getSetupState } from "./setup-state";
 import { isTvShell } from "./native";
 import { getActiveAccount, hasActiveAccount } from "./tv-session";
+import { useConnectivity } from "./useConnectivity";
+import { useProfileId } from "./profile";
+import { Icon } from "./ui/icons";
 
 function Shell() {
   const { route } = useRouter();
@@ -71,6 +77,10 @@ function ShellRoutes({ route }: { route: Route }) {
       return <TvAccountsView />;
     case "downloads":
       return <DownloadsView />;
+    case "offline":
+      return <OfflineView />;
+    case "offlineWatch":
+      return <OfflineWatchPage downloadId={route.downloadId} profileId={route.profileId} />;
     case "search":
       return <SearchView initialQuery={route.q} />;
     case "party":
@@ -84,12 +94,37 @@ function ShellRoutes({ route }: { route: Route }) {
 
 function Chrome() {
   const { route } = useRouter();
+  const profileId = useProfileId();
+  const { online, justReconnected } = useConnectivity(profileId);
   useTvKeyboardNav();
   return (
     <>
       {route.view !== "admin" && <TopNav />}
+      {!online && route.view !== "offline" && route.view !== "offlineWatch" && route.view !== "admin" && (
+        <OfflineBanner />
+      )}
+      {justReconnected && route.view !== "admin" && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center">
+          <div className="pointer-events-auto rounded-full border border-emerald-500/40 bg-emerald-500/90 px-5 py-2.5 text-meta font-bold text-white shadow-panel backdrop-blur">
+            back online — watch progress synced
+          </div>
+        </div>
+      )}
       <Shell />
     </>
+  );
+}
+
+function OfflineBanner() {
+  const { navigate } = useRouter();
+  return (
+    <button
+      onClick={() => navigate(paths.offline())}
+      className="fixed inset-x-0 top-0 z-40 flex items-center justify-center gap-2 bg-amber-500/90 px-4 py-2 text-small font-bold text-black shadow-panel backdrop-blur"
+    >
+      <Icon name="wifi-off" className="h-3.5 w-3.5" />
+      server unreachable — watching offline · open offline library
+    </button>
   );
 }
 

@@ -10,6 +10,7 @@
 import { getNativeBridge, resolveUrl, supportsDownloads } from "@hokago/native-bridge";
 import { api } from "./api-client";
 import { getDeviceId } from "./native";
+import { removeOfflineEntry } from "./offline";
 import type { MediaFileDescriptor } from "@hokago/contract/browse";
 
 export interface LocalDownload {
@@ -121,5 +122,6 @@ export async function saveToDevice(downloadId: string, onProgress?: (received: n
 
 export async function deleteDownload(downloadId: string): Promise<void> {
   clearLocalDownload(downloadId);
+  removeOfflineEntry(downloadId);
   await api.DELETE("/downloads/{id}", { params: { path: { id: downloadId } } });
 }

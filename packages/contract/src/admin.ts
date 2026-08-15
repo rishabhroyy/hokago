@@ -75,6 +75,7 @@ export const AdminLibrary = z.object({
   writable: z.boolean(),
   composeAllPosters: z.boolean(),
   enabled: z.boolean(),
+  hiddenFromHome: z.boolean(),
   lastScanAt: z.coerce.date().nullable(),
   itemCount: z.number(),
   storageBytes: z.number(),
@@ -95,6 +96,7 @@ export const AdminLibraryCreateBody = z.object({
   writable: z.boolean().optional(),
   composeAllPosters: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  hiddenFromHome: z.boolean().optional(),
 });
 export type AdminLibraryCreateBody = z.infer<typeof AdminLibraryCreateBody>;
 
@@ -108,6 +110,7 @@ export const AdminLibraryUpdateBody = z.object({
   writable: z.boolean().optional(),
   composeAllPosters: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  hiddenFromHome: z.boolean().optional(),
 });
 export type AdminLibraryUpdateBody = z.infer<typeof AdminLibraryUpdateBody>;
 

@@ -103,7 +103,7 @@ async function findNextEpisode(
  */
 export async function loadContinueWatching(db: PrismaClient, profileId: string): Promise<ContinueWatchingEntry[]> {
   const states = await db.playbackState.findMany({
-    where: { profileId },
+    where: { profileId, mediaItem: { library: { hiddenFromHome: false } } },
     include: { mediaItem: { include: itemInclude } },
     orderBy: { updatedAt: "desc" },
   });

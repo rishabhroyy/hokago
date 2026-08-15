@@ -320,7 +320,7 @@ async function buildHome(profileId: string | null): Promise<HomeResponse> {
   const hasAnime = libraries.some((l) => l.contentProfile === "ANIME");
 
   const items = await db.mediaItem.findMany({
-    where: { parentId: null, kind: { in: ["MOVIE", "SERIES"] }, library: { enabled: true } },
+    where: { parentId: null, kind: { in: ["MOVIE", "SERIES"] }, library: { enabled: true, hiddenFromHome: false } },
     select: cardSelect,
   });
   const cards: MediaCard[] = items.map(toCard);

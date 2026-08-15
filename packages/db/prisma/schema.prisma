@@ -416,6 +416,8 @@ model Library {
  /// Force composed posters even where real art exists — consistency > authenticity .
   composeAllPosters Boolean     @default(false)
   enabled        Boolean        @default(true)
+  /// Still browsable (navbar) and watchable — just absent from /home rails and recommendations.
+  hiddenFromHome Boolean        @default(false)
   lastScanAt     DateTime?
   /// Last directory fully completed in the sorted walk order, for scan
  /// resume . Null when idle or a scan finished cleanly.

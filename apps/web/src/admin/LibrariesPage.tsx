@@ -12,6 +12,7 @@ type LibForm = {
   writable: boolean;
   composeAllPosters: boolean;
   enabled: boolean;
+  hiddenFromHome: boolean;
 };
 
 const emptyForm: LibForm = {
@@ -23,6 +24,7 @@ const emptyForm: LibForm = {
   writable: false,
   composeAllPosters: false,
   enabled: true,
+  hiddenFromHome: false,
 };
 
 export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) => void }) {
@@ -48,6 +50,7 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
       writable: l.writable,
       composeAllPosters: l.composeAllPosters,
       enabled: l.enabled,
+      hiddenFromHome: l.hiddenFromHome,
     });
     setShowForm(true);
   };
@@ -111,6 +114,7 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
                 <Check checked={form.writable} onChange={(v) => set("writable", v)}>writable</Check>
                 <Check checked={form.composeAllPosters} onChange={(v) => set("composeAllPosters", v)}>compose all posters</Check>
                 <Check checked={form.enabled} onChange={(v) => set("enabled", v)}>enabled</Check>
+                <Check checked={form.hiddenFromHome} onChange={(v) => set("hiddenFromHome", v)}>hidden from home</Check>
               </div>
             </Field>
           </div>
@@ -141,6 +145,7 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
                 <Td>
                   <span className="flex flex-wrap gap-1.5">
                     <Badge tone={l.enabled ? "green" : "gray"}>{l.enabled ? "enabled" : "disabled"}</Badge>
+                    {l.hiddenFromHome && <Badge tone="gray">hidden from home</Badge>}
                     {l.writable && <Badge tone="blue">writable</Badge>}
                   </span>
                 </Td>

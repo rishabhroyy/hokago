@@ -135,6 +135,7 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
             writable: req.body.writable ?? false,
             composeAllPosters: req.body.composeAllPosters ?? false,
             enabled: req.body.enabled ?? true,
+            hiddenFromHome: req.body.hiddenFromHome ?? false,
           },
         });
         if (lib.enabled) await enqueueScan(lib.id).catch(() => {});

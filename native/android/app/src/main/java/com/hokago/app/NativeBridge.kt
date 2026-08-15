@@ -34,6 +34,17 @@ class NativeBridge(private val webView: WebView) {
               delete pending[d.id];
               if (d.ok) p.resolve({ localPath: d.localPath, sizeBytes: d.sizeBytes });
               else p.reject(new Error(d.error || "download failed"));
+            } else if (d.type === "downloadListResult") {
+              var p = pending[d.id];
+              if (!p) return;
+              delete pending[d.id];
+              p.resolve(d.entries || []);
+            } else if (d.type === "readTextResult") {
+              var p = pending[d.id];
+              if (!p) return;
+              delete pending[d.id];
+              if (d.ok) p.resolve(d.text);
+              else p.reject(new Error(d.error || "could not read subtitle"));
             }
           });
           window.hokagoNative = {
@@ -52,6 +63,23 @@ class NativeBridge(private val webView: WebView) {
                 return new Promise(function (resolve, reject) {
                   pending[id] = { resolve: resolve, reject: reject };
                   window.androidBridge.saveDownload(id, url, filename);
+                });
+              },
+              list: function () {
+                var id = nextId++;
+                return new Promise(function (resolve, reject) {
+                  pending[id] = { resolve: resolve, reject: reject };
+                  window.androidBridge.downloadList(id);
+                });
+              },
+              localUrl: function (localPath) {
+                return "hokago-file://" + String(localPath).replace(/ /g, "%20");
+              },
+              readText: function (localPath) {
+                var id = nextId++;
+                return new Promise(function (resolve, reject) {
+                  pending[id] = { resolve: resolve, reject: reject };
+                  window.androidBridge.readText(id, localPath);
                 });
               },
               open: function (path) { window.androidBridge.openPath(path); }
@@ -97,6 +125,38 @@ class NativeBridge(private val webView: WebView) {
         executor.execute {
             val result = download(id, url, filename)
             postEvent("downloadResult", result)
+        }
+    }
+
+    @JavascriptInterface
+    fun downloadList(id: Int) {
+        executor.execute {
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "hokago")
+            val entries = JSONArray()
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && !f.name.startsWith(".")) {
+                    val o = JSONObject()
+                    o.put("localPath", f.absolutePath)
+                    o.put("sizeBytes", f.length())
+                    entries.put(o)
+                }
+            }
+            val payload = JSONObject()
+            payload.put("id", id)
+            payload.put("entries", entries)
+            postEvent("downloadListResult", payload.toString())
+        }
+    }
+
+    @JavascriptInterface
+    fun readText(id: Int, localPath: String) {
+        executor.execute {
+            try {
+                val text = File(localPath).readText()
+                postEvent("readTextResult", "{\"id\":$id,\"ok\":true,\"text\":${JSONObject.quote(text)}}")
+            } catch (e: Exception) {
+                postEvent("readTextResult", "{\"id\":$id,\"ok\":false,\"error\":${JSONObject.quote(e.message ?: "could not read subtitle")}}")
+            }
         }
     }
 

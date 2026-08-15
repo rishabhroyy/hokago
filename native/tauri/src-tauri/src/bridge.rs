@@ -99,6 +99,9 @@ pub fn injected_script(app_version: &str, app_build: &str) -> String {
             return {{ localPath: out.localPath, sizeBytes: out.sizeBytes }};
           }});
         }},
+        list: function () {{ return inv("downloads_list"); }},
+        localUrl: function (localPath) {{ return inv("downloads_local_url", {{ path: localPath }}); }},
+        readText: function (localPath) {{ return inv("downloads_read_text", {{ path: localPath }}); }},
         open: function (localPath) {{ try {{ inv("open_path", {{ path: localPath }}); }} catch (e) {{}} }}
       }}
     }};
@@ -206,5 +209,95 @@ pub async fn save_download(url: String, filename: String) -> Result<String, Stri
     }
 
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    // Index the save so downloads.list() (the offline library) sees it.
+    index_download(&path, size);
     Ok(json!({ "ok": true, "localPath": path.display().to_string(), "sizeBytes": size }).to_string())
+}
+
+// ── Offline library ────────────────────────────────────────────────────────
+// The web app keeps the authoritative download manifest (downloadId →
+// metadata) in its own storage; the shell only answers "which files are on
+// disk" so the web can prune vanished ones, and serves those files back to
+// the webview player through a custom scheme.
+
+fn downloads_dir() -> std::path::PathBuf {
+    dirs::download_dir()
+        .or_else(dirs::desktop_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("hokago")
+}
+
+/// Records a saved file in the sidecar index next to the downloads (a
+/// name→size JSON map). Not authoritative — the web's manifest is — it just
+/// lets list() survive a webview storage wipe.
+fn index_path() -> std::path::PathBuf {
+    downloads_dir().join(".hokago-index.json")
+}
+
+fn index_download(path: &std::path::Path, size: u64) {
+    let mut index: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(index_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    index.insert(
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string(),
+        json!({ "localPath": path.display().to_string(), "sizeBytes": size }),
+    );
+    let _ = std::fs::create_dir_all(downloads_dir());
+    let _ = std::fs::write(index_path(), serde_json::to_vec(&index).unwrap_or_default());
+}
+
+/// The files on disk in the downloads dir — the offline library's existence check.
+#[tauri::command]
+pub fn downloads_list() -> Vec<serde_json::Value> {
+    let dir = downloads_dir();
+    let mut out = Vec::new();
+    let index: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(index_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    if !index.is_empty() {
+        for (name, val) in &index {
+            if name == ".hokago-index.json" {
+                continue;
+            }
+            if let Some(entry) = val.as_object() {
+                let p = entry.get("localPath").and_then(|v| v.as_str()).unwrap_or("");
+                if !p.is_empty() && std::path::Path::new(p).exists() {
+                    out.push(val.clone());
+                }
+            }
+        }
+        return out;
+    }
+    // First run / index missing: fall back to scanning the dir.
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    out.push(json!({ "localPath": entry.path().display().to_string(), "sizeBytes": meta.len() }));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A URL the webview can load a local file from. Custom scheme so the SPA's
+/// <video> and fetch can reach device storage — handled by register_uri_scheme_protocol.
+/// The URL is `hokago-file://` + the absolute path (spaces %-encoded); the
+/// handler reads the URL path back and opens that file.
+#[tauri::command]
+pub fn downloads_local_url(path: String) -> String {
+    format!("hokago-file://{}", path.replace(' ', "%20"))
+}
+
+/// Reads a local text sidecar (subtitle) back for JASSUB offline.
+#[tauri::command]
+pub async fn downloads_read_text(path: String) -> Result<String, String> {
+    tokio::fs::read_to_string(&path).await.map_err(|e| e.to_string())
 }

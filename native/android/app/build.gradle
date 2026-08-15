@@ -48,6 +48,12 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    sourceSets {
+        // Bundled SPA for offline mode lives under src/main/assets/web-dist
+        // (CI copies apps/web/dist there; .gitkeep keeps the dir in the repo).
+        getByName("main").assets.srcDirs("src/main/assets")
+    }
 }
 
 dependencies {

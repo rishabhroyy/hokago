@@ -26,6 +26,17 @@
       delete pending[d.id];
       if (d.ok) p.resolve({ localPath: d.localPath, sizeBytes: d.sizeBytes });
       else p.reject(new Error(d.error || "download failed"));
+    } else if (d.type === "downloadListResult") {
+      var p = pending[d.id];
+      if (!p) return;
+      delete pending[d.id];
+      p.resolve(d.entries || []);
+    } else if (d.type === "readTextResult") {
+      var p = pending[d.id];
+      if (!p) return;
+      delete pending[d.id];
+      if (d.ok) p.resolve(d.text);
+      else p.reject(new Error(d.error || "could not read subtitle"));
     }
   });
 
@@ -58,6 +69,23 @@
         return new Promise(function (resolve, reject) {
           pending[id] = { resolve: resolve, reject: reject };
           send({ type: "download", id: id, url: url, filename: filename });
+        });
+      },
+      list: function () {
+        var id = nextId++;
+        return new Promise(function (resolve, reject) {
+          pending[id] = { resolve: resolve, reject: reject };
+          send({ type: "downloadList", id: id });
+        });
+      },
+      localUrl: function (localPath) {
+        return "hokago-file://" + String(localPath).replace(/ /g, "%20");
+      },
+      readText: function (localPath) {
+        var id = nextId++;
+        return new Promise(function (resolve, reject) {
+          pending[id] = { resolve: resolve, reject: reject };
+          send({ type: "readText", id: id, localPath: localPath });
         });
       },
       open: function (localPath) {

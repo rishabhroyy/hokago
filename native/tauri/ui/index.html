@@ -75,6 +75,17 @@
           if (saved) {
             const w = new URL(saved);
             document.getElementById('url').value = w.host + w.pathname.replace(/\/$/, '');
+            // Auto-launch: try the remote server; if it's unreachable, load
+            // the bundled SPA (offline mode) instead of sitting on this form.
+            const probe = new Promise((resolve) => {
+              const ctl = new AbortController();
+              const t = setTimeout(() => { ctl.abort(); resolve(false); }, 4000);
+              fetch(saved + '/health', { signal: ctl.signal, cache: 'no-store' })
+                .then((r) => { clearTimeout(t); resolve(r.ok); })
+                .catch(() => { clearTimeout(t); resolve(false); });
+            });
+            if (await probe) location.href = saved;
+            else location.href = 'hokago-spa://localhost/index.html';
           }
         }
       } catch (e) { /* first run */ }

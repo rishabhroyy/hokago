@@ -8,6 +8,7 @@ final class BrowserViewController: UIViewController, WKNavigationDelegate {
     var webView: WKWebView!
     private let serverURL: URL
     private let bridge: NativeBridge
+    private var triedOfflineFallback = false
 
     init(serverURL: URL) {
         self.serverURL = serverURL
@@ -27,6 +28,7 @@ final class BrowserViewController: UIViewController, WKNavigationDelegate {
 
         let config = WKWebViewConfiguration()
         config.userContentController = controller
+        config.setURLSchemeHandler(FileSchemeHandler(), forURLScheme: "hokago-file")
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsAirPlayForMediaPlayback = false
@@ -71,8 +73,18 @@ final class BrowserViewController: UIViewController, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         let nsError = error as NSError
-        if nsError.code != -999 {
+        if nsError.code != -999 && !triedOfflineFallback {
+            // Server unreachable — fall back to the bundled SPA (offline mode).
+            triedOfflineFallback = true
             bridge.post(event: "loadError", payload: ["message": error.localizedDescription])
+            loadBundledSpa()
         }
+    }
+
+    /// Offline fallback: the app bundles a copy of the SPA (web-dist) and
+    /// loads it from the bundle when the configured server can't be reached.
+    func loadBundledSpa() {
+        guard let bundleURL = Bundle.main.url(forResource: "web-dist", withExtension: nil) else { return }
+        webView.loadFileURL(bundleURL.appendingPathComponent("index.html"), allowingReadAccessTo: bundleURL)
     }
 }

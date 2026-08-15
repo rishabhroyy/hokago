@@ -50,6 +50,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - name: Build web SPA (offline bundle)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @hokago/db generate
+          pnpm --filter @hokago/contract generate
+          pnpm --filter @hokago/fonts build
+          pnpm -r build
+          rm -rf native/tauri/web-dist
+          mkdir -p native/tauri/web-dist
+          cp -R apps/web/dist/. native/tauri/web-dist/
       - name: Install Tauri CLI
         working-directory: native/tauri
         run: pnpm install --no-frozen-lockfile
@@ -84,6 +94,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+      - name: Build web SPA (offline bundle)
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @hokago/db generate
+          pnpm --filter @hokago/contract generate
+          pnpm --filter @hokago/fonts build
+          pnpm -r build
+          rm -rf native/tauri/web-dist
+          mkdir -p native/tauri/web-dist
+          cp -R apps/web/dist/. native/tauri/web-dist/
       - name: Install Tauri CLI
         working-directory: native/tauri
         run: pnpm install --no-frozen-lockfile
@@ -121,6 +142,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Build web SPA (offline bundle)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @hokago/db generate
+          pnpm --filter @hokago/contract generate
+          pnpm --filter @hokago/fonts build
+          pnpm -r build
+          rm -rf native/tauri/web-dist
+          mkdir -p native/tauri/web-dist
+          cp -R apps/web/dist/. native/tauri/web-dist/
       - name: Install Tauri CLI
         working-directory: native/tauri
         run: pnpm install --no-frozen-lockfile
@@ -145,8 +176,24 @@ jobs:
       APP_VERSION: ${{ needs.versions.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Build web SPA (offline bundle)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @hokago/db generate
+          pnpm --filter @hokago/contract generate
+          pnpm --filter @hokago/fonts build
+          pnpm -r build
+          rm -rf native/ios/web-dist
+          mkdir -p native/ios/web-dist
+          cp -R apps/web/dist/. native/ios/web-dist/
       - name: Bake version
         run: |
           sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: \"${APP_VERSION}\"/" native/ios/project.yml
@@ -180,6 +227,12 @@ jobs:
       APP_VERSION: ${{ needs.versions.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -187,6 +240,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.14"
+      - name: Build web SPA (offline bundle)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @hokago/db generate
+          pnpm --filter @hokago/contract generate
+          pnpm --filter @hokago/fonts build
+          pnpm -r build
+          rm -rf native/android/app/src/main/assets/web-dist
+          mkdir -p native/android/app/src/main/assets/web-dist
+          cp -R apps/web/dist/. native/android/app/src/main/assets/web-dist/
       - name: Ensure release exists
         run: |
           gh release create "$TAG" --draft --title "hokago $TAG" || true

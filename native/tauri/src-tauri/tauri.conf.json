@@ -30,6 +30,7 @@
     "targets": "all",
     "category": "Entertainment",
     "shortDescription": "hokago media server client",
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/icon.png"],
+    "resources": ["../web-dist/**/*"]
   }
 }

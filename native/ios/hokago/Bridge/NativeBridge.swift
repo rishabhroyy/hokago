@@ -55,6 +55,17 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
                     "error": result.error ?? "",
                 ])
             }
+        case "downloadList":
+            guard let id = body["id"] as? Int else { return }
+            let entries = downloadManager.list()
+            post(event: "downloadListResult", payload: ["id": id, "entries": entries])
+        case "readText":
+            guard let id = body["id"] as? Int, let path = body["localPath"] as? String else { return }
+            if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+                post(event: "readTextResult", payload: ["id": id, "ok": true, "text": text])
+            } else {
+                post(event: "readTextResult", payload: ["id": id, "ok": false, "error": "could not read subtitle"])
+            }
         case "open":
             if let path = body["localPath"] as? String {
                 let url = URL(fileURLWithPath: path)

@@ -17,6 +17,9 @@ targets:
     platform: iOS
     sources:
       - hokago
+    resources:
+      - web-dist
+      - path: hokago/Supporting/Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hokago.app

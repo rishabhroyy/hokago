@@ -1,11 +1,15 @@
 package com.hokago.app
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -15,6 +19,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import java.io.File
+import java.io.FileInputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -52,13 +58,48 @@ class MainActivity : AppCompatActivity() {
 
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = object : WebViewClient() {
+            private var offlineFallbackShown = false
+
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 bridge?.let { view.evaluateJavascript(it.injectedScript) {} }
             }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest?,
+                error: WebResourceError?,
+            ) {
+                super.onReceivedError(view, request, error)
+                // Server unreachable (main-frame load failed) → bundled SPA offline mode.
+                val isMainFrame = request?.isForMainFrame == true
+                val isNetwork = error?.errorCode == ERROR_HOST_LOOKUP || error?.errorCode == ERROR_CONNECT || error?.errorCode == ERROR_TIMEOUT
+                if (isMainFrame && isNetwork && !offlineFallbackShown) {
+                    offlineFallbackShown = true
+                    loadBundledSpa()
+                }
+            }
+
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val url = request.url.toString()
+                if (url.startsWith("hokago-file://")) {
+                    val path = Uri.decode(request.url.path ?: "")
+                    val file = File(path)
+                    if (file.exists()) {
+                        return WebResourceResponse("video/mp4", null, FileInputStream(file))
+                    }
+                    return WebResourceResponse("text/plain", "utf-8", "not found".byteInputStream())
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
         }
         bridge = NativeBridge(webView)
         webView.addJavascriptInterface(bridge, "androidBridge")
+    }
+
+    /** Offline fallback: load the bundled SPA from assets when the server is down. */
+    private fun loadBundledSpa() {
+        webView.loadUrl("file:///android_asset/web-dist/index.html")
     }
 
     private fun load(url: String) {

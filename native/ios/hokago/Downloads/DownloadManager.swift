@@ -70,6 +70,18 @@ final class DownloadManager {
         }
     }
 
+    /// Every saved file in Documents/hokago — the offline library's existence check.
+    func list() -> [[String: Any]] {
+        let dir = docsDirectory().appendingPathComponent("hokago", isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        return files.map { file -> [String: Any] in
+            let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int64) ?? 0
+            return ["localPath": file.path, "sizeBytes": size]
+        }
+    }
+
     private func docsDirectory() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }

@@ -51,6 +51,8 @@ Everything runs in containers **except the web app in dev**. `pnpm docker:dev` s
 - `HOKAGO_COEP=credentialless` flips the COEP fallback (default `require-corp`) in the vite dev server.
 - Transcode concurrency is capped per-API-process by `HOKAGO_MAX_TRANSCODES` (default 2); busy slots return 503 and clients retry. Idle sessions (no heartbeat 5 min) are reaped on a 60s sweep plus a boot sweep when the API starts.
 - Scan parallelism: the scan walk probes files and ingests leaves with bounded pools (`PROBE_CONCURRENCY`/`INGEST_CONCURRENCY` in `packages/scanner/src/constants.ts`). Worker-side caps: `HOKAGO_ARTWORK_CONCURRENCY` (default 4, bounds ffmpeg), `HOKAGO_TRICKPLAY_CONCURRENCY` (default 2, bounds whole-file trickplay decodes) and `HOKAGO_SCAN_CONCURRENCY` (default 1, parallel libraries).
+- Metadata failure accounting: only **deterministic** failures (404, bad response, unmatched query) increment the per-item poison counter; **transient** ones (429, 5xx, network blips — `isTransientError` in `apps/worker/src/index.ts`) complete silently and are re-driven by the periodic metadata sweep (`HOKAGO_METADATA_SWEEP_MS`, default 30 min), so a degraded provider can't park a library for hours.
+- Renames follow the content: ingest matches files by path, then inode (same-fs `mv`), then content-hash theft of a vanished twin row (`partialHash` = size + first/last 1MiB, so cp+rm and cross-device moves keep their item — streams, artwork, ExternalIds, watch state). Series identity transfers across a rename (ExternalIds + the derived franchise link move from the old series row to the new one before the old row is pruned); MOVIE titles refresh to the current parse.
 
 ## Architecture (own: where things live)
 

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -86,6 +87,113 @@ async function findOrCreateCollection(
   return { id: created.id };
 }
 
+/** Walk a child's parent chain to the root — finds the series an item (re)parents under. */
+async function rootSeriesOf(
+  db: PrismaClient,
+  itemId: string,
+): Promise<{ id: string; title: string } | null> {
+  let cursor = itemId;
+  for (let hops = 0; hops < 8; hops++) {
+    const row = await db.mediaItem.findUnique({
+      where: { id: cursor },
+      select: { parentId: true, kind: true, title: true },
+    });
+    if (!row) return null;
+    if (row.kind === "SERIES") return { id: cursor, title: row.title };
+    if (!row.parentId) return null;
+    cursor = row.parentId;
+  }
+  return null;
+}
+
+/**
+ * Series identity follows a rename: when a file re-parents out of one series
+ * into another (a show folder renamed, a season restructured), the resolved
+ * ExternalIds move to the new series and the scanner-derived franchise link
+ * is repointed. The old series row is left empty for the prune roll-up.
+ * Concurrent leaves of the same season all fire this — every query/upsert
+ * below is idempotent, so the first one wins and the rest no-op.
+ */
+async function transferSeriesIdentity(db: PrismaClient, oldParentId: string, newParentId: string): Promise<void> {
+  const oldRoot = await rootSeriesOf(db, oldParentId);
+  if (!oldRoot) return;
+  const newRoot = await rootSeriesOf(db, newParentId);
+  if (!newRoot || newRoot.id === oldRoot.id) return;
+
+  const transferred = await db.externalId.findMany({ where: { mediaItemId: oldRoot.id } });
+  if (transferred.length === 0) return;
+  if ((await db.externalId.count({ where: { mediaItemId: newRoot.id } })) > 0) return;
+
+  await db.externalId.createMany({
+    data: transferred.map((e) => ({
+      mediaItemId: newRoot.id,
+      provider: e.provider,
+      providerId: e.providerId,
+      confidence: e.confidence,
+    })),
+    skipDuplicates: true,
+  });
+
+  const oldEntry = await db.collectionEntry.findFirst({
+    where: { mediaItemId: oldRoot.id, relationType: "MAIN", collection: { derived: true } },
+  });
+  if (oldEntry) {
+    const collection = await findOrCreateCollection(db, { name: newRoot.title, kind: "FRANCHISE" });
+    await db.collectionEntry.upsert({
+      where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId: newRoot.id } },
+      create: { collectionId: collection.id, mediaItemId: newRoot.id, relationType: "MAIN" },
+      update: {},
+    });
+    await db.collectionEntry.delete({ where: { id: oldEntry.id } });
+  }
+}
+
+/**
+ * Identity is only ever set at creation — a row that re-parses as a
+ * different shape (e.g. an episode that runtime clustering previously flung
+ * out as a root- level movie) must be reset in place, or corrected scans
+ * leave stale root items behind forever. Shared by the inode-match and
+ * content-steal reattach paths below; MOVIE titles also follow the current
+ * parse so a renamed file/folder actually re-updates the library.
+ */
+async function reparentItem(
+  db: PrismaClient,
+  params: {
+    mediaItemId: string;
+    oldParentId: string | null;
+    kind: "MOVIE" | "EPISODE";
+    parentId: string | null;
+    title: string;
+    year: number | null;
+    seasonNumber: number | null;
+    episodeNumber: number | null;
+  },
+): Promise<void> {
+  await db.mediaItem.update({
+    where: { id: params.mediaItemId },
+    data: {
+      kind: params.kind,
+      parentId: params.parentId,
+      title: params.title,
+      sortTitle: params.title.toLowerCase(),
+      year: params.year,
+      seasonNumber: params.seasonNumber,
+      episodeNumber: params.episodeNumber,
+    },
+  });
+  // Scanner-made franchise links (relationType MOVIE) only mean anything
+  // while the item is an outlier movie — drop them when it reverts to a
+  // plain leaf. Hand-built/derived-as-collection links are untouched.
+  if (params.kind === "EPISODE") {
+    await db.collectionEntry.deleteMany({
+      where: { mediaItemId: params.mediaItemId, relationType: "MOVIE", collection: { derived: true } },
+    });
+  }
+  if (params.oldParentId !== null && params.parentId !== null && params.oldParentId !== params.parentId) {
+    await transferSeriesIdentity(db, params.oldParentId, params.parentId);
+  }
+}
+
 interface FileContext {
   file: DiscoveredFile;
   dir: string;
@@ -163,44 +271,21 @@ async function ingestLeafItem(
   // MediaItem/MediaFile, not re-import .
   let existingFile = await db.mediaFile.findUnique({
     where: { path: file.path },
-    include: { mediaItem: { select: { kind: true, parentId: true } } },
+    include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
   });
   if (!existingFile) {
     existingFile = await db.mediaFile.findFirst({
       where: { inode: file.inode, mediaItem: { libraryId } },
-      include: { mediaItem: { select: { kind: true, parentId: true } } },
+      include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
     });
   }
   let mediaItemId: string;
+  let oldParentId: string | null = null;
+  let huskItemId: string | null = null;
 
   if (existingFile) {
     mediaItemId = existingFile.mediaItemId;
-    // Identity is only ever set at creation — nothing else below re-parents.
-    // A row that re-parses as a different shape (e.g. an episode that runtime
-    // clustering previously flung out as a root-level movie) must be reset in
-    // place, or corrected scans leave stale root items behind forever.
-    if (existingFile.mediaItem.kind !== kind || existingFile.mediaItem.parentId !== parentId) {
-      await db.mediaItem.update({
-        where: { id: existingFile.mediaItemId },
-        data: {
-          kind,
-          parentId,
-          title,
-          sortTitle: title.toLowerCase(),
-          year: parsed.year,
-          seasonNumber,
-          episodeNumber,
-        },
-      });
-      // Scanner-made franchise links (relationType MOVIE) only mean anything
-      // while the item is an outlier movie — drop them when it reverts to a
-      // plain leaf. Hand-built/derived-as-collection links are untouched.
-      if (kind === "EPISODE") {
-        await db.collectionEntry.deleteMany({
-          where: { mediaItemId: existingFile.mediaItemId, relationType: "MOVIE", collection: { derived: true } },
-        });
-      }
-    }
+    oldParentId = existingFile.mediaItem.parentId;
   } else {
     const item = await db.mediaItem.create({
       data: {
@@ -216,9 +301,32 @@ async function ingestLeafItem(
       },
     });
     mediaItemId = item.id;
+    huskItemId = item.id;
   }
 
   const hash = await partialHash(file.path, file.sizeBytes);
+
+  // Content-identity steal: no path/inode match, but a row with the identical
+  // content hash (size + first/last MiB — partialHash) whose own file has
+  // vanished proves this is a copy-style move (cp+rm, cross-device mv) — the
+  // inode fallback above only survives same-filesystem renames. Reuse the old
+  // row + item (streams, artwork, ExternalIds, watch state survive) instead
+  // of importing the file as a brand-new item; the husk item just created has
+  // enqueued nothing yet and is removed. A twin whose file is still on disk is
+  // a legitimate duplicate — copies stay separate items.
+  if (!existingFile) {
+    const twin = await db.mediaFile.findFirst({
+      where: { hash, mediaItem: { libraryId }, path: { not: file.path } },
+      include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
+    });
+    if (twin && !existsSync(twin.path)) {
+      existingFile = twin;
+      mediaItemId = twin.mediaItemId;
+      oldParentId = twin.mediaItem.parentId;
+      if (huskItemId) await db.mediaItem.delete({ where: { id: huskItemId } });
+    }
+  }
+
   const nfo = await findNfoForFile(file.path);
 
   const fileFields = {
@@ -239,6 +347,24 @@ async function ingestLeafItem(
     // Update by id, not by path — the path itself may be what changed (rename/move).
     mediaFileId = existingFile.id;
     await db.mediaFile.update({ where: { id: mediaFileId }, data: fileFields });
+    // Shape changed (kind/parent/reparse) or a MOVIE retitled — reset in
+    // place, or corrected scans leave stale root items behind forever.
+    if (
+      existingFile.mediaItem.kind !== kind ||
+      existingFile.mediaItem.parentId !== parentId ||
+      (kind === "MOVIE" && existingFile.mediaItem.title !== title)
+    ) {
+      await reparentItem(db, {
+        mediaItemId: existingFile.mediaItemId,
+        oldParentId,
+        kind,
+        parentId,
+        title,
+        year: parsed.year,
+        seasonNumber,
+        episodeNumber,
+      });
+    }
   } else {
     const created = await db.mediaFile.create({ data: { mediaItemId, ...fileFields } });
     mediaFileId = created.id;

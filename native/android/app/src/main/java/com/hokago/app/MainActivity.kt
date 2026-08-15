@@ -93,8 +93,9 @@ class MainActivity : AppCompatActivity() {
                 return super.shouldInterceptRequest(view, request)
             }
         }
-        bridge = NativeBridge(webView)
-        webView.addJavascriptInterface(bridge, "androidBridge")
+        val b = NativeBridge(webView)
+        bridge = b
+        webView.addJavascriptInterface(b, "androidBridge")
     }
 
     /** Offline fallback: load the bundled SPA from assets when the server is down. */

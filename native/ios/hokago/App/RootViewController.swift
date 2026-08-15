@@ -4,7 +4,7 @@ import WebKit
 /// Root controller: shows the web view when a server URL is configured,
 /// otherwise the first-run setup screen.
 final class RootViewController: UIViewController {
-    var webView: WebViewController?
+    var webView: BrowserViewController?
     var setup: ServerSetupViewController?
 
     override func viewDidLoad() {
@@ -36,7 +36,7 @@ final class RootViewController: UIViewController {
         setup?.removeFromParent()
         setup?.view.removeFromSuperview()
         setup = nil
-        let wv = WebViewController(serverURL: url)
+        let wv = BrowserViewController(serverURL: url)
         addChild(wv)
         view.addSubview(wv.view)
         wv.view.frame = view.bounds

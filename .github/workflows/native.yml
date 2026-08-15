@@ -62,7 +62,7 @@ jobs:
           cp -R apps/web/dist/. native/tauri/web-dist/
       - name: Install Tauri CLI
         working-directory: native/tauri
-        run: pnpm install --no-frozen-lockfile
+        run: npm install --no-package-lock --no-save
       - name: Bake version
         run: |
           sed -i '' "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml
@@ -108,7 +108,7 @@ jobs:
           cp -R apps/web/dist/. native/tauri/web-dist/
       - name: Install Tauri CLI
         working-directory: native/tauri
-        run: pnpm install --no-frozen-lockfile
+        run: npm install --no-package-lock --no-save
       - name: Bake version
         shell: bash
         run: |
@@ -156,7 +156,7 @@ jobs:
           cp -R apps/web/dist/. native/tauri/web-dist/
       - name: Install Tauri CLI
         working-directory: native/tauri
-        run: pnpm install --no-frozen-lockfile
+        run: npm install --no-package-lock --no-save
       - name: Bake version
         run: |
           sed -i "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml

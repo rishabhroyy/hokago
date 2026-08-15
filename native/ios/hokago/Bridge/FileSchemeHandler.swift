@@ -37,7 +37,7 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
         let clampedEnd = min(max(end, 0), len - 1)
         let count = clampedEnd >= start ? clampedEnd - start + 1 : 0
 
-        guard let handle = FileHandle(forReadingFrom: fileURL) else {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
             urlSchemeTask.didFailWithError(URLError(.cannotOpenFile))
             return
         }

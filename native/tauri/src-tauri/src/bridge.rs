@@ -116,7 +116,11 @@ pub fn injected_script(app_version: &str, app_build: &str) -> String {
 #[tauri::command]
 pub fn bridge_info(app: tauri::AppHandle) -> serde_json::Value {
     let _ = app;
-    json!({ "platform": platform(), "clientKey": crate::config::client_key() })
+    json!({
+        "platform": platform(),
+        "clientKey": crate::config::client_key(),
+        "serverUrl": crate::config::server_url(),
+    })
 }
 
 /// Wraps a synchronous helper for the async IPC surface; serde_json::Value

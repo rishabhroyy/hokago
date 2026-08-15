@@ -10,6 +10,7 @@
   var CLIENT_KEY = "%CLIENT_KEY%";
   var APP_VERSION = "%APP_VERSION%";
   var APP_BUILD = "%APP_BUILD%";
+  var SERVER_URL = "%SERVER_URL%";
 
   var pending = {};
   var nextId = 1;
@@ -49,6 +50,7 @@
     appVersion: APP_VERSION,
     appBuild: APP_BUILD,
     clientKey: CLIENT_KEY,
+    serverUrl: SERVER_URL === "" ? null : SERVER_URL,
     storage: {
       get: function (k) {
         var v = localStorage.getItem(k);

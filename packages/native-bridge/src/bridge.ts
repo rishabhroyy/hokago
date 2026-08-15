@@ -59,6 +59,8 @@ export interface NativeBridge {
   appBuild: string;
   /** Stable per-install UUID generated at first launch — sent as LoginBody.clientKey / PairingRequestBody.clientKey. */
   clientKey: string;
+  /** The configured server origin — the offline SPA needs it to probe /health and sync watch-state. */
+  serverUrl: string | null;
   /** Synchronous storage mirror; persists through webview data clears. */
   storage: NativeStorage;
   /**

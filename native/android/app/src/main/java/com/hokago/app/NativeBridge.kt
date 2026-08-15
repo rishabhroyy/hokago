@@ -52,6 +52,7 @@ class NativeBridge(private val webView: WebView) {
             appVersion: window.androidBridge.appVersion(),
             appBuild: window.androidBridge.appBuild(),
             clientKey: window.androidBridge.clientKey(),
+            serverUrl: window.androidBridge.serverUrl(),
             storage: {
               get: function (k) { return window.androidBridge.storageGet(k); },
               set: function (k, v) { window.androidBridge.storageSet(k, v); },
@@ -108,6 +109,12 @@ class NativeBridge(private val webView: WebView) {
             prefs.edit().putString("clientKey", key).apply()
         }
         return key
+    }
+
+    @JavascriptInterface
+    fun serverUrl(): String? {
+        val prefs = HokagoApp.instance.getSharedPreferences("hokago_config", 0)
+        return prefs.getString("serverURL", null)
     }
 
     @JavascriptInterface

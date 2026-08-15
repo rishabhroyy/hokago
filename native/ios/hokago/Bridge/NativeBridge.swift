@@ -19,10 +19,12 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        let serverUrl = ServerConfig.shared.serverURL?.absoluteString ?? ""
         return template
             .replacingOccurrences(of: "%CLIENT_KEY%", with: ServerConfig.shared.clientKey)
             .replacingOccurrences(of: "%APP_VERSION%", with: version)
             .replacingOccurrences(of: "%APP_BUILD%", with: build)
+            .replacingOccurrences(of: "%SERVER_URL%", with: serverUrl)
     }
 
     // ── Inbound (web → native) ─────────────────────────────────────────────

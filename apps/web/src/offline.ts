@@ -13,7 +13,7 @@
  * copy the shell serves) and is re-hydrated from the native bridge
  * (downloads.list()) which is the ground truth for what bytes exist on disk.
  */
-import { getNativeBridge, supportsOffline, resolveUrl } from "@hokago/native-bridge";
+import { getNativeBridge, supportsOffline } from "@hokago/native-bridge";
 
 export { supportsOffline };
 
@@ -38,16 +38,42 @@ const MANIFEST_KEY = "hokago_offline_library";
 const QUEUE_KEY = "hokago_offline_watch_queue";
 const VIEW_KEY = "hokago_offline_viewed";
 
+// The offline SPA loads from a custom-scheme origin (hokago-spa:// / file://),
+// but the manifest is written while online from the *server* origin —
+// localStorage is origin-scoped, so the offline copy would see an empty
+// manifest. The bridge secure-store mirror is origin-independent (Keychain /
+// Keystore / keyring), so reads prefer it and writes mirror through it.
+function rawRead(key: string): string | null {
+  const bridge = getNativeBridge();
+  if (bridge?.storage) {
+    const v = bridge.storage.get(key);
+    if (v != null) return v;
+  }
+  return localStorage.getItem(key);
+}
+
+function rawWrite(key: string, value: string): void {
+  const bridge = getNativeBridge();
+  if (bridge?.storage) bridge.storage.set(key, value);
+  localStorage.setItem(key, value);
+}
+
+function rawDelete(key: string): void {
+  const bridge = getNativeBridge();
+  if (bridge?.storage) bridge.storage.delete(key);
+  localStorage.removeItem(key);
+}
+
 function readManifest(): Record<string, OfflineEntry> {
   try {
-    return JSON.parse(localStorage.getItem(MANIFEST_KEY) ?? "{}") as Record<string, OfflineEntry>;
+    return JSON.parse(rawRead(MANIFEST_KEY) ?? "{}") as Record<string, OfflineEntry>;
   } catch {
     return {};
   }
 }
 
 function writeManifest(map: Record<string, OfflineEntry>): void {
-  localStorage.setItem(MANIFEST_KEY, JSON.stringify(map));
+  rawWrite(MANIFEST_KEY, JSON.stringify(map));
 }
 
 /** Register a successfully-saved download with its display metadata. */
@@ -105,14 +131,14 @@ export interface OfflineWatchEntry {
 
 function readQueue(): Record<string, OfflineWatchEntry> {
   try {
-    return JSON.parse(localStorage.getItem(QUEUE_KEY) ?? "{}") as Record<string, OfflineWatchEntry>;
+    return JSON.parse(rawRead(QUEUE_KEY) ?? "{}") as Record<string, OfflineWatchEntry>;
   } catch {
     return {};
   }
 }
 
 function writeQueue(q: Record<string, OfflineWatchEntry>): void {
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+  rawWrite(QUEUE_KEY, JSON.stringify(q));
 }
 
 /** Queue a position change for later sync (offline playback only). */
@@ -138,6 +164,9 @@ export function hasPendingWatchSync(mediaItemId: string): boolean {
  * Flush the queue to /watch-state/sync. Called when connectivity returns;
  * entries are only dropped on a successful response. Needs profileId, which
  * lives in the live session — offline playback reads it from localStorage.
+ * Uses the shell's configured server origin (bridge.serverUrl) so the call
+ * reaches the real server even when this SPA copy is served from a local
+ * custom scheme.
  */
 export async function flushWatchSync(profileId: string): Promise<number> {
   const entries = pendingWatchSync();
@@ -150,7 +179,8 @@ export async function flushWatchSync(profileId: string): Promise<number> {
     const stored = bridge.storage.get("hokago_access_token");
     if (stored) headers["Authorization"] = `Bearer ${stored}`;
   }
-  const res = await fetch(resolveUrl("/watch-state/sync"), {
+  const base = bridge?.serverUrl ? bridge.serverUrl.replace(/\/$/, "") : "";
+  const res = await fetch(`${base}/watch-state/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({ profileId, entries }),

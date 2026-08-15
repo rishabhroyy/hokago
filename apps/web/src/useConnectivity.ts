@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isNetworkLikelyOffline } from "@hokago/native-bridge";
+import { getNativeBridge, isNetworkLikelyOffline } from "@hokago/native-bridge";
 import { flushWatchSync } from "./offline";
 
 /**
@@ -47,13 +47,16 @@ export function useConnectivity(profileId: string | null) {
   }, [markOnline, markOffline]);
 
   // Server probe: /health is unauthenticated (native clients use it too).
-  // Poll while offline; the first success is the reconnect moment.
+  // Poll while offline; the first success is the reconnect moment. Uses the
+  // shell's configured server origin so it reaches the real server even when
+  // this SPA copy is served from a local custom scheme.
   useEffect(() => {
     if (onlineRef.current) return;
     let cancelled = false;
+    const base = getNativeBridge()?.serverUrl?.replace(/\/$/, "") ?? "";
     const probe = async () => {
       try {
-        const res = await fetch("/health", { method: "GET", cache: "no-store" });
+        const res = await fetch(`${base}/health`, { method: "GET", cache: "no-store" });
         if (!cancelled && res.ok) markOnline();
       } catch {
         // still offline

@@ -72,7 +72,14 @@ interface NativeBridge {
   storage: { get(key): string | null; set(key, value): void; delete(key): void };  // synchronous
   downloads: {
     save(url: string, filename: string): Promise<{ localPath: string; sizeBytes: number }>;
-    open?(localPath: string): void;   // desktop only: reveal in file manager
+    /** Desktop only: reveal the file in the OS file manager. */
+    open?(localPath: string): void;
+    /** Every saved file on disk — the offline library's existence check. */
+    list(): Promise<{ localPath: string; sizeBytes: number }[]>;
+    /** A playable URL for a local file (hokago-file:// scheme — the shell serves it). */
+    localUrl(localPath: string): string;
+    /** Reads a local text sidecar (subtitle) back for offline JASSUB. */
+    readText?(localPath: string): Promise<string>;
   };
 }
 ```
@@ -138,24 +145,53 @@ only when a change touches native-level capability (a new bridge method, a
 player/font API the old webview can't run). Pure web changes never require a
 store update — the next launch just fetches the new SPA.
 
+## Offline mode
+
+Downloads are only useful offline, so the shells bundle a copy of the built
+SPA and the web app gets an offline library.
+
+- **Boot fallback**: each shell bundles `apps/web/dist` (Tauri: a `web-dist`
+  resource served at `hokago-spa://`; iOS: a `web-dist` bundle folder loaded
+  via `loadFileURL`; Android: assets under `web-dist/`). The shell tries the
+  configured server first (Discord-model freshness); when it can't be reached
+  it loads the bundled SPA instead. The bundled SPA is *exactly the same
+  app* — no fork — so offline behaviour is the same code path as online.
+- **Offline library** (`apps/web/src/offline.ts`, `/offline`): a local
+  manifest of every saved download, with title/kind/poster metadata captured
+  at download time (DetailView). It re-hydrates against `downloads.list()` so
+  vanished files drop out. `OfflineView` renders it; `OfflineWatchPage`
+  (`/offline/watch/:downloadId`) plays a saved file through
+  `downloads.localUrl()` — a `hokago-file://` custom scheme the shell serves
+  with Range support so seeking works.
+- **Offline watch-state**: playback progress is queued locally
+  (`queueWatchState`) and flushed to `/watch-state/sync` the moment
+  connectivity returns (`useConnectivity` polls `/health` every 5s while
+  offline; a `back online` toast confirms the sync). The server's sync route
+  predates this and is unchanged — plain upserts, no watchDay credit.
+- **Detection**: `navigator.onLine` + a `/health` probe. An offline banner
+  appears at the top of every view and links into the offline library.
+
 ## Shell implementations
 
 - **Tauri desktop** (`native/tauri`) — Tauri 2, wry webview, config +
   clientKey in `src-tauri/src/config.rs`, bridge + keyring mirror + reqwest
   downloads in `src-tauri/src/bridge.rs`. Remote origins (`http(s)://**`) get
-  core IPC via the capability in `src-tauri/capabilities/main.json`. Icon: a
-  committed 1024px `icon.png`; CI runs `tauri icon` to derive `.icns`/`.ico`.
+  core IPC via the capability in `src-tauri/capabilities/main.json`; the
+  `hokago-file://`/`hokago-spa://` schemes are registered on the builder. Icon:
+  a committed 1024px `icon.png`; CI runs `tauri icon` to derive `.icns`/`.ico`.
 - **iOS** (`native/ios`) — raw WKWebView, no Capacitor. Xcode project generated
   from `project.yml` with XcodeGen (committed; CI runs `brew install xcodegen
   && xcodegen generate`). Bridge: `WKUserScript` at document start + a
   `WKScriptMessageHandler`; tokens in the Keychain; downloads via
-  `URLSession.downloadTask` with the Bearer header.
+  `URLSession.downloadTask` with the Bearer header; `hokago-file://` served by
+  a `WKURLSchemeHandler`.
 - **Android** (`native/android`) — raw WebView with a synchronous
   `addJavascriptInterface` bridge; phone + TV product flavors; AES-GCM
   Keystore-backed secure store; downloads via `HttpURLConnection` into public
-  Downloads (opened with a FileProvider). Gradle wrapper is **not** committed —
-  CI uses `gradle/actions/setup-gradle` with `gradle-version` and invokes
-  `gradle` directly.
+  Downloads (opened with a FileProvider); `hokago-file://` intercepted in
+  `shouldInterceptRequest`. Gradle wrapper is **not** committed — CI uses
+  `gradle/actions/setup-gradle` with `gradle-version` and invokes `gradle`
+  directly.
 
 ## CI delivery (`.github/workflows/native.yml`)
 

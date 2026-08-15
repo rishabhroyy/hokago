@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { configDir } from "./artwork.js";
 import { runFfmpeg } from "./generate-art.js";
+import { mapLimit } from "./limit.js";
 
 // Sprite-sheet scrubber previews: one JPG sheet per 25 tiles (5x5), one tile
 // per 10s of video at 320x180 — ~6MB/90min per the schema comment. Sheets are
@@ -25,6 +26,13 @@ export const TRICKPLAY_TILES_PER_SHEET = TRICKPLAY_COLS * TRICKPLAY_ROWS;
 // A tile is one keyframe seek + a handful of decoded frames — generous
 // ceiling for a pathological seek, nothing near the old whole-window cost.
 const TILE_TIMEOUT_MS = 60_000;
+
+// How many tile-seek ffmpeg spawns run at once inside one job. Each spawn is
+// a short seek+GOP decode, so a job can safely run several concurrently; the
+// worker's HOKAGO_TRICKPLAY_CONCURRENCY still bounds whole-file jobs. Tuning
+// up helps single-file turnaround (540 tiles for a 90-min movie) at the cost
+// of parallel ffmpeg load on the box.
+const TILE_CONCURRENCY = 4;
 
 const TILE_FILTER =
   `scale=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:force_original_aspect_ratio=decrease,` +
@@ -97,11 +105,12 @@ export async function generateTrickplaySheets(
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 
-  // Pass 1 — one keyframe-seek per tile. Tile N of sheet M is exactly
-  // (M*25 + N) * 10s of media time, matching the old window-decode grid.
+  // Pass 1 — one keyframe-seek per tile, bounded-fan-out so the seek spawns
+  // for a whole show overlap instead of running serially. Tile N of sheet M is
+  // exactly (M*25 + N) * 10s of media time, matching the old window-decode grid.
   const tilePaths: string[] = [];
   let blackTile: string | null = null;
-  for (let tile = 0; tile < totalTiles; tile++) {
+  await mapLimit(Array.from({ length: totalTiles }), TILE_CONCURRENCY, async (_, tile) => {
     const startSec = (tile * TRICKPLAY_INTERVAL_MS) / 1000;
     const tilePath = path.join(dir, `tile-${String(tile + 1).padStart(6, "0")}.jpg`);
     try {
@@ -134,18 +143,19 @@ export async function generateTrickplaySheets(
       // job failure and propagates to the worker's retry/poison gate. A
       // "nothing written" at the very first tile means the file has no
       // decodable video at all — that is genuinely broken and does poison.
-      if (!isNothingWrittenError(err) || tilePaths.length === 0) throw err;
+      if (!isNothingWrittenError(err) || tile === 0) throw err;
       blackTile ??= await makeBlackTile(dir);
       await copyFile(blackTile, tilePath);
     }
     tilePaths.push(tilePath);
-  }
+  });
 
   // Pass 2 — lay each sheet's tiles into a 5x5 grid in one image2 pass; the
   // tail sheet simply has fewer frames (the grid leaves empty cells, same as
-  // the old window decode).
+  // the old window decode). Sheets are independent once pass 1 is done, so
+  // they can fan out too.
   const sheetPaths: string[] = [];
-  for (let sheet = 0; sheet < sheetCount; sheet++) {
+  await mapLimit(Array.from({ length: sheetCount }), TILE_CONCURRENCY, async (_, sheet) => {
     const outPath = path.join(dir, `sheet-${String(sheet + 1).padStart(4, "0")}.jpg`);
     await runFfmpeg(
       [
@@ -165,7 +175,7 @@ export async function generateTrickplaySheets(
       { timeoutMs: TILE_TIMEOUT_MS },
     );
     sheetPaths.push(path.relative(configDir(), outPath));
-  }
+  });
 
   // Tiles are intermediate — the sheets are the deliverable.
   await Promise.all(tilePaths.map((p) => rm(p, { force: true })));

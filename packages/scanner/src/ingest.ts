@@ -485,6 +485,15 @@ export async function ingestLibrary(
   const deferArtwork = opts.onArtworkNeeded !== undefined;
   const deferTrickplay = opts.onTrickplayNeeded !== undefined;
 
+  // Probe the whole library in one bounded fan-out instead of directory by
+  // directory. Each probe is an ffprobe spawn (~100-400ms) and the previous
+  // code serialized probes across directories (probe dir A fully, then dir
+  // B) — with hundreds of shows that pipeline stutters and cores sit idle
+  // between directories. Probes are keyed by file path and never mutate the
+  // DB, so a single global pool is pure fan-out with no correctness cost.
+  const probeResults = await mapLimit(files, PROBE_CONCURRENCY, (f) => probeFile(f.path));
+  const probeByPath = new Map(files.map((f, i) => [f.path, probeResults[i]]));
+
   const summary: IngestSummary = {
     directoriesScanned: byDir.size,
     filesScanned: files.length,
@@ -540,12 +549,7 @@ export async function ingestLibrary(
   for (const dir of sortedDirs) {
     if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) continue;
     const dirFiles = [...(byDir.get(dir) ?? [])].sort((a, b) => a.path.localeCompare(b.path));
-
-    // Probe the whole directory in parallel — each probe is an ffprobe spawn
-    // (~100-400ms), and serial probing dominates scan time on big libraries.
-    // Probes are keyed by file path and never mutated, so this is pure fan-out.
-    const probeResults = await mapLimit(dirFiles, PROBE_CONCURRENCY, (f) => probeFile(f.path));
-    const probes = new Map(dirFiles.map((f, i) => [f.path, probeResults[i]]));
+    const probes = new Map(dirFiles.map((f) => [f.path, probeByPath.get(f.path) ?? null]));
 
     if (!isSeasonLikeDirectory(dirFiles, profile)) {
       // Every file in a non-season directory is independently a movie — no

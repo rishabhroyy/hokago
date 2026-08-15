@@ -3,6 +3,7 @@ import { paths, useRouter } from "../router";
 import { Icon, type IconName } from "../ui/icons";
 import { LogoMark } from "../ui/Logo";
 import { useIsAdmin } from "../profile";
+import { adminApi } from "../admin-api";
 import { DashboardPage } from "./DashboardPage";
 import { LibrariesPage } from "./LibrariesPage";
 import { UsersPage } from "./UsersPage";
@@ -30,6 +31,8 @@ export function AdminView() {
   const [toasts, setToasts] = useState<{ msg: string; err?: boolean; id: number }[]>([]);
   const toastId = useRef(0);
   const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [queuedJobs, setQueuedJobs] = useState(0);
+  const [failedJobs, setFailedJobs] = useState(0);
 
   useEffect(() => {
     // Unauthenticated on purpose — /health is the version probe native
@@ -38,6 +41,25 @@ export function AdminView() {
       .then((r) => (r.ok ? r.json() : null))
       .then((h: { version?: string } | null) => setServerVersion(h?.version ?? null))
       .catch(() => setServerVersion(null));
+  }, []);
+
+  // Immich-style queued-jobs badge: an aggregate of every queue's pending work
+  // (waiting + active + delayed) on the sidebar, refreshed on the same cadence
+  // as the Jobs page. Failed count turns the badge red so nothing silently dies.
+  useEffect(() => {
+    const load = () => {
+      adminApi
+        .queues()
+        .then((qs) => {
+          const sum = (k: string) => qs.reduce((acc, q) => acc + (q.counts[k as keyof typeof q.counts] ?? 0), 0);
+          setQueuedJobs(sum("waiting") + sum("active") + sum("delayed"));
+          setFailedJobs(sum("failed"));
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
   }, []);
 
   const toast = useCallback((msg: string, err?: boolean) => {
@@ -90,6 +112,15 @@ export function AdminView() {
             >
               <Icon name={PAGES[p].icon} className="h-[16px] w-[16px] shrink-0" />
               <span className="max-[860px]:hidden">{PAGES[p].title}</span>
+              {p === "jobs" && (queuedJobs > 0 || failedJobs > 0) && (
+                <span
+                  className={`ml-auto rounded-full px-2 py-[2px] font-mono text-kicker font-bold tabular-nums ${
+                    failedJobs > 0 ? "bg-red-500/15 text-red-600 dark:text-red-400" : "bg-wii/15 text-wii-deep"
+                  }`}
+                >
+                  {failedJobs > 0 ? failedJobs : queuedJobs}
+                </span>
+              )}
             </button>
           ))}
         </nav>

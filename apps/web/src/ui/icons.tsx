@@ -8,6 +8,7 @@ const ICONS = {
   "search": { vb: "0 0 24 24", body: `<circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` },
   "x": { vb: "0 0 24 24", body: `<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>` },
   "play": { vb: "0 0 24 24", body: `<path d="M6 4l14 8-14 8V4Z" fill="currentColor"/>` },
+  "wifi-off": { vb: "0 0 24 24", body: `<path d="M2 8.5a14.5 14.5 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8.5 15.5a5.5 5.5 0 0 1 7 0M12 19h.01M2 2l20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>` },
   "pause": { vb: "0 0 24 24", body: `<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>` },
   "plus": { vb: "0 0 24 24", body: `<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` },
   "download": { vb: "0 0 24 24", body: `<path d="M12 3v13m0 0l-5-5m5 5l5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` },

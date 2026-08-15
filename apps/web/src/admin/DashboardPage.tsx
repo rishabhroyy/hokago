@@ -24,6 +24,8 @@ export function DashboardPage() {
   if (!s) return <Card head="Dashboard" hint="loading…" children={null} />;
 
   const kindLine = Object.entries(s.itemKinds).map(([k, v]) => `${fmtNum(v)} ${k.toLowerCase()}`).join(" · ");
+  const queued = s.queues.reduce((acc, q) => acc + (q.counts.waiting ?? 0) + (q.counts.active ?? 0) + (q.counts.delayed ?? 0), 0);
+  const failed = s.queues.reduce((acc, q) => acc + (q.counts.failed ?? 0), 0);
 
   return (
     <>
@@ -33,6 +35,7 @@ export function DashboardPage() {
         <Stat icon="lib" tone="gold" value={fmtNum(s.libraries)} label="libraries" sub={`${fmtDate(s.lastScanAt)} last scan`} />
         <Stat icon="users" value={fmtNum(s.accounts)} label="accounts" sub={`${fmtNum(s.profiles)} profiles`} />
         <Stat icon="tv" tone="green" value={fmtNum(s.activeSessions)} label="watching now" sub={`${fmtNum(s.runningTranscodes)} transcoding`} />
+        <Stat icon="activity" tone={failed > 0 ? "red" : queued > 0 ? "gold" : "green"} value={fmtNum(queued)} label="jobs queued" sub={failed > 0 ? `${fmtNum(failed)} failed — see Jobs` : "scan · artwork · trickplay · metadata"} />
         <Stat icon="alert" tone={s.needsAttention > 0 ? "red" : "gold"} value={fmtNum(s.needsAttention)} label="needs attention" sub={s.needsAttention > 0 ? "poison-pill or failed jobs" : "all clear"} />
       </div>
 

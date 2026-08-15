@@ -9,27 +9,27 @@ import { runFfmpeg } from "./generate-art.js";
 // per 10s of video at 320x180 — ~6MB/90min per the schema comment. Sheets are
 // disposable cache under /config/cache/trickplay/{mediaFileId}/, regenerated
 // whenever the file's content hash changes (sourceHash on the Trickplay row).
+//
+// Tiles are captured with one keyframe-seek per tile (-ss input seek + one
+// output frame) instead of decoding the whole window continuously — a 250s
+// window decode of a 1080p episode is minutes of GPU/CPU time, a seek+GOP
+// decode is a few hundred ms, so a whole show's sheets land in well under a
+// minute instead of hours. The seek lands on the keyframe at-or-before the
+// 10s grid, so tiles drift by at most one GOP — invisible in a scrubber.
 export const TRICKPLAY_TILE_WIDTH = 320;
 export const TRICKPLAY_TILE_HEIGHT = 180;
 export const TRICKPLAY_INTERVAL_MS = 10_000;
 export const TRICKPLAY_COLS = 5;
 export const TRICKPLAY_ROWS = 5;
 export const TRICKPLAY_TILES_PER_SHEET = TRICKPLAY_COLS * TRICKPLAY_ROWS;
-const SHEET_WINDOW_SEC = (TRICKPLAY_TILES_PER_SHEET * TRICKPLAY_INTERVAL_MS) / 1000;
 
-/** One ffmpeg decode of a 250s window per sheet: fps=1/10 samples every 10s
- *  boundary and the tile filter packs 25 of them into one grid. `-ss` seeks to
- *  the keyframe at-or-before the window start and fps emits on the absolute
- *  PTS grid, so tile N of sheet M is exactly (M*25 + N) * 10s of media time. */
-const SHEET_FILTER =
+// A tile is one keyframe seek + a handful of decoded frames — generous
+// ceiling for a pathological seek, nothing near the old whole-window cost.
+const TILE_TIMEOUT_MS = 60_000;
+
+const TILE_FILTER =
   `scale=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:force_original_aspect_ratio=decrease,` +
-  `pad=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,` +
-  `fps=1/${TRICKPLAY_INTERVAL_MS / 1000},tile=${TRICKPLAY_COLS}x${TRICKPLAY_ROWS}`;
-
-// A sheet decodes ~250s of video; software decode of a 90-min movie is the
-// slowest legitimately common case, so give each sheet a generous ceiling and
-// let the worker's concurrency cap (HOKAGO_TRICKPLAY_CONCURRENCY) bound load.
-const SHEET_TIMEOUT_MS = 10 * 60_000;
+  `pad=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black`;
 
 export interface TrickplayResult {
   /** Relative to the config dir (e.g. cache/trickplay/{fileId}/sheet-0001.jpg) — the API resolves against configDir(). */
@@ -43,11 +43,10 @@ export interface TrickplayResult {
 
 /** Generates (or regenerates — the old dir is wiped first) the sheet set for
  *  one media file. Idempotent per file: crash-anywhere is safe, a re-run just
- *  rewrites the same directory. Throws on a failed sheet — a partial sheet set
+ *  rewrites the same directory. Throws on a failed tile — a partial sheet set
  *  would desync the client's tile math, so a permanently broken sheet is a
  *  job failure (poison-pill), not a silently short index. `hwaccel` enables
- *  hardware decode for the whole-file window decodes (the heaviest ffmpeg
- *  work in the system). */
+ *  hardware decode for the per-tile keyframe seeks. */
 export async function generateTrickplaySheets(
   filePath: string,
   durationMs: number,
@@ -71,15 +70,15 @@ export async function generateTrickplaySheets(
   }
 
   const sheetCount = Math.ceil(totalTiles / TRICKPLAY_TILES_PER_SHEET);
-  const durationSec = durationMs / 1000;
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 
-  const sheetPaths: string[] = [];
-  for (let sheet = 0; sheet < sheetCount; sheet++) {
-    const startSec = sheet * SHEET_WINDOW_SEC;
-    const windowSec = Math.min(SHEET_WINDOW_SEC, durationSec - startSec);
-    const outPath = path.join(dir, `sheet-${String(sheet + 1).padStart(4, "0")}.jpg`);
+  // Pass 1 — one keyframe-seek per tile. Tile N of sheet M is exactly
+  // (M*25 + N) * 10s of media time, matching the old window-decode grid.
+  const tilePaths: string[] = [];
+  for (let tile = 0; tile < totalTiles; tile++) {
+    const startSec = (tile * TRICKPLAY_INTERVAL_MS) / 1000;
+    const tilePath = path.join(dir, `tile-${String(tile + 1).padStart(6, "0")}.jpg`);
     await runFfmpeg(
       [
         "-y",
@@ -88,22 +87,49 @@ export async function generateTrickplaySheets(
         String(startSec),
         "-i",
         filePath,
-        "-t",
-        String(windowSec),
+        "-frames:v",
+        "1",
         "-an",
         "-sn",
         "-vf",
-        SHEET_FILTER,
+        TILE_FILTER,
+        "-q:v",
+        "5",
+        tilePath,
+      ],
+      { timeoutMs: TILE_TIMEOUT_MS },
+    );
+    tilePaths.push(tilePath);
+  }
+
+  // Pass 2 — lay each sheet's tiles into a 5x5 grid in one image2 pass; the
+  // tail sheet simply has fewer frames (the grid leaves empty cells, same as
+  // the old window decode).
+  const sheetPaths: string[] = [];
+  for (let sheet = 0; sheet < sheetCount; sheet++) {
+    const outPath = path.join(dir, `sheet-${String(sheet + 1).padStart(4, "0")}.jpg`);
+    await runFfmpeg(
+      [
+        "-y",
+        "-start_number",
+        String(sheet * TRICKPLAY_TILES_PER_SHEET + 1),
+        "-i",
+        path.join(dir, "tile-%06d.jpg"),
         "-frames:v",
         "1",
+        "-vf",
+        `tile=${TRICKPLAY_COLS}x${TRICKPLAY_ROWS}`,
         "-q:v",
         "5",
         outPath,
       ],
-      { timeoutMs: SHEET_TIMEOUT_MS },
+      { timeoutMs: TILE_TIMEOUT_MS },
     );
     sheetPaths.push(path.relative(configDir(), outPath));
   }
+
+  // Tiles are intermediate — the sheets are the deliverable.
+  await Promise.all(tilePaths.map((p) => rm(p, { force: true })));
 
   return {
     sheetPaths,

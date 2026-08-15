@@ -1,7 +1,6 @@
-import { mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
-import { hwDecodeArgs, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { configDir } from "./artwork.js";
 import { runFfmpeg } from "./generate-art.js";
 
@@ -31,6 +30,26 @@ const TILE_FILTER =
   `scale=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:force_original_aspect_ratio=decrease,` +
   `pad=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black`;
 
+/** True when ffmpeg failed because a keyframe-seek landed past the last
+ *  decodable frame ("nothing was written") — the file is fine, its reported
+ *  container duration just outlives the video (audio tails, padding). This is
+ *  "content ends here", not corruption, so it must not poison the item. */
+export function isNothingWrittenError(err: unknown): boolean {
+  const msg = err instanceof Error ? `${err.message} ${String(err.cause ?? "")}` : String(err);
+  return /nothing was written|received no packets|output file is empty|no packets/i.test(msg);
+}
+
+/** One solid-black tile, reused for every past-the-end grid cell. Generated
+ *  once per run (this is the same encode the failed tile would have made). */
+async function makeBlackTile(dir: string): Promise<string> {
+  const outPath = path.join(dir, "black.jpg");
+  await runFfmpeg(
+    ["-y", "-f", "lavfi", "-i", "color=black:s=320x180:r=1", "-frames:v", "1", "-q:v", "5", outPath],
+    { timeoutMs: TILE_TIMEOUT_MS },
+  );
+  return outPath;
+}
+
 export interface TrickplayResult {
   /** Relative to the config dir (e.g. cache/trickplay/{fileId}/sheet-0001.jpg) — the API resolves against configDir(). */
   sheetPaths: string[];
@@ -43,15 +62,20 @@ export interface TrickplayResult {
 
 /** Generates (or regenerates — the old dir is wiped first) the sheet set for
  *  one media file. Idempotent per file: crash-anywhere is safe, a re-run just
- *  rewrites the same directory. Throws on a failed tile — a partial sheet set
- *  would desync the client's tile math, so a permanently broken sheet is a
- *  job failure (poison-pill), not a silently short index. `hwaccel` enables
- *  hardware decode for the per-tile keyframe seeks. */
+ *  rewrites the same directory.
+ *
+ *  Robustness: the container duration routinely outlives the decodable video
+ *  (audio tails, padding, rounding) — a keyframe-seek near the reported end
+ *  can land past the last real frame and yield nothing. That's "content ends
+ *  here", not a broken file: a black cell is left in place so the sheet grid
+ *  stays dense and the API's duration-derived tile math never desyncs. Only a
+ *  genuinely undecodable tile (corrupt region, decode error) throws — that is
+ *  the poison-pill case. Hardware decode is applied by runFfmpeg itself (the
+ *  worker sets its hw state at boot), so no hw args are passed here. */
 export async function generateTrickplaySheets(
   filePath: string,
   durationMs: number,
   mediaFileId: string,
-  hwaccel?: HwaccelState,
 ): Promise<TrickplayResult> {
   const totalTiles = Math.ceil(durationMs / TRICKPLAY_INTERVAL_MS);
   const dir = path.join(configDir(), "cache", "trickplay", mediaFileId);
@@ -76,29 +100,44 @@ export async function generateTrickplaySheets(
   // Pass 1 — one keyframe-seek per tile. Tile N of sheet M is exactly
   // (M*25 + N) * 10s of media time, matching the old window-decode grid.
   const tilePaths: string[] = [];
+  let blackTile: string | null = null;
   for (let tile = 0; tile < totalTiles; tile++) {
     const startSec = (tile * TRICKPLAY_INTERVAL_MS) / 1000;
     const tilePath = path.join(dir, `tile-${String(tile + 1).padStart(6, "0")}.jpg`);
-    await runFfmpeg(
-      [
-        "-y",
-        ...(hwaccel ? hwDecodeArgs(hwaccel) : []),
-        "-ss",
-        String(startSec),
-        "-i",
-        filePath,
-        "-frames:v",
-        "1",
-        "-an",
-        "-sn",
-        "-vf",
-        TILE_FILTER,
-        "-q:v",
-        "5",
-        tilePath,
-      ],
-      { timeoutMs: TILE_TIMEOUT_MS },
-    );
+    try {
+      await runFfmpeg(
+        [
+          "-y",
+          "-ss",
+          String(startSec),
+          "-i",
+          filePath,
+          "-frames:v",
+          "1",
+          "-an",
+          "-sn",
+          "-vf",
+          TILE_FILTER,
+          "-q:v",
+          "5",
+          tilePath,
+        ],
+        { timeoutMs: TILE_TIMEOUT_MS },
+      );
+    } catch (err) {
+      // A keyframe-seek that lands past the last real frame (container
+      // duration over-reports the video — audio tails, padding, rounding)
+      // fails with "nothing was written". That's the end of the content, not
+      // a broken file: drop a black cell so the sheet grid stays dense and
+      // the client's duration-derived tile math never points at a hole.
+      // Anything else (corrupt region, decode failure, timeout) is a genuine
+      // job failure and propagates to the worker's retry/poison gate. A
+      // "nothing written" at the very first tile means the file has no
+      // decodable video at all — that is genuinely broken and does poison.
+      if (!isNothingWrittenError(err) || tilePaths.length === 0) throw err;
+      blackTile ??= await makeBlackTile(dir);
+      await copyFile(blackTile, tilePath);
+    }
     tilePaths.push(tilePath);
   }
 
@@ -130,6 +169,7 @@ export async function generateTrickplaySheets(
 
   // Tiles are intermediate — the sheets are the deliverable.
   await Promise.all(tilePaths.map((p) => rm(p, { force: true })));
+  if (blackTile) await rm(blackTile, { force: true });
 
   return {
     sheetPaths,

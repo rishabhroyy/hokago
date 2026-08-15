@@ -26,7 +26,7 @@ import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { pruneMissingMedia } from "@hokago/scanner/prune";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
 import { probeFile } from "@hokago/scanner/probe";
-import { generateTrickplaySheets } from "@hokago/scanner/trickplay";
+import { generateTrickplaySheets, isNothingWrittenError } from "@hokago/scanner/trickplay";
 import { killTrackedChildren, trackedPidCount, trackPid, untrackPid } from "@hokago/scanner/child-registry";
 import { configDir, probeConfigDir } from "@hokago/scanner/artwork";
 import { setArtworkHwaccel } from "@hokago/scanner/generate-art";
@@ -271,13 +271,17 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
     // Fail-soft: a hw-decode failure retires hw (the setter holds the same
     // mutated state) and the BullMQ retry re-runs the job on CPU.
     reportJobHwFailure("artwork", err);
+    // Transient (spawn timeout, EMFILE, disk/pipe blip): never count toward
+    // poison — the periodic metadata sweep and boot reconciler re-drive
+    // missing work. Let BullMQ retry without recording a failure.
+    if (isTransientFfmpegError(err)) throw err;
     const failure = await db.jobFailure.upsert({
       where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK } },
       create: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK, attempts: 1, lastError: String(err) },
       update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
     });
     if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
- // Poison pill : stop retrying, stay playable, surface to admins.
+      // Poison pill: stop retrying, stay playable, surface to admins.
       await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } });
       return; // swallow — no rethrow, so BullMQ won't keep retrying a dead job
     }
@@ -299,7 +303,7 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
       return;
     }
 
-    const result = await generateTrickplaySheets(filePath, duration, mediaFileId, hwaccel);
+    const result = await generateTrickplaySheets(filePath, duration, mediaFileId);
     await db.trickplay.upsert({
       where: { mediaFileId },
       create: {
@@ -326,6 +330,10 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
     // Fail-soft: a hw-decode failure retires hw (the state generateTrickplaySheets
     // holds is the same mutated object) and the BullMQ retry re-runs on CPU.
     reportJobHwFailure("trickplay", err);
+    // Transient (spawn timeout, EMFILE, disk/pipe blip): never count toward
+    // poison — the boot reconciler re-derives missing sheets, and a degraded
+    // moment must not park a library. Let BullMQ retry without recording.
+    if (isTransientFfmpegError(err)) throw err;
     const failure = await db.jobFailure.upsert({
       where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } },
       create: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY, attempts: 1, lastError: String(err) },
@@ -556,6 +564,22 @@ function isTransientError(err: unknown): boolean {
 }
 
 /**
+ * ffmpeg failures that are environmental, not the file's fault — spawn/IO
+ * timeouts (execFile kills the child), EMFILE under heavy parallelism, disk
+ * or pipe errors. These must never count toward the poison threshold or a
+ * briefly loaded box (or a full disk) parks a whole library in minutes. Only
+ * deterministic decode/encode failures (corrupt region, unsupported stream)
+ * poison. Deterministic-vs-transient is decided by message, same as the
+ * metadata path above.
+ */
+function isTransientFfmpegError(err: unknown): boolean {
+  const msg = err instanceof Error ? `${err.message} ${String(err.cause ?? "")}` : String(err);
+  return /timed?\s?out|timeout|killed|signal|emfile|enfile|enospc|eio|eintr|epipe|econnreset|too\s?many\s?open\s?files|no\s?space\s?left|device\s?or\s?resource\s?busy|spawn\s?\w+\s?emfile/i.test(
+    msg,
+  );
+}
+
+/**
  * Same degrade-never-error/poison-pill shape as processArtwork. `providerName`
  * is baked in per-queue (one handler instance per provider) — a miss doesn't
  * retry here, it enqueues the next provider in that item's chain, so BullMQ's
@@ -687,6 +711,45 @@ async function reconcile(): Promise<void> {
       dir: path.dirname(file.path),
       durationMs: file.durationMs,
     });
+  }
+
+  // Trickplay leg zero: un-poison rows that the old accounting poisoned by
+  // mistake. Pre-fix, every failure counted — a tail keyframe-seek past the
+  // last decodable frame ("nothing was written"), a spawn timeout, an EMFILE
+  // blip — so healthy files with audio tails/padding got parked. Those error
+  // classes are now benign by definition (the generator black-cells the tail,
+  // transient errors don't count); clear them so the reconciler re-derives
+  // the missing sheets instead of skipping the item forever.
+  const stalePoison = await db.jobFailure.findMany({
+    where: { jobType: QUEUE_NAMES.TRICKPLAY, attempts: { gte: JOB_FAILURE_THRESHOLD } },
+    select: { mediaItemId: true, lastError: true },
+  });
+  const benign = stalePoison.filter((row) => {
+    const msg = row.lastError ?? "";
+    return (
+      isNothingWrittenError(msg) ||
+      isTransientFfmpegError(msg) ||
+      /hwaccel|vaapi|qsv|nvenc|cuda|device creation failed|hardware device|cannot allocate memory/i.test(msg)
+    );
+  });
+  if (benign.length > 0) {
+    await db.jobFailure.deleteMany({
+      where: { jobType: QUEUE_NAMES.TRICKPLAY, mediaItemId: { in: benign.map((b) => b.mediaItemId) } },
+    });
+    // Poison-pilling also flipped MediaItem.state to NEEDS_ATTENTION; the
+    // reconciler's needingTrickplay query only re-derives items in state OK.
+    // Reset it for the items that now hold no poison rows at all (a separate
+    // artwork/metadata poison would still keep it flagged).
+    const unpoisonedIds = benign.map((b) => b.mediaItemId);
+    const stillPoisoned = await db.jobFailure.findMany({
+      where: { mediaItemId: { in: unpoisonedIds } },
+      select: { mediaItemId: true },
+    });
+    const resetIds = unpoisonedIds.filter((id) => !stillPoisoned.some((p) => p.mediaItemId === id));
+    if (resetIds.length > 0) {
+      await db.mediaItem.updateMany({ where: { id: { in: resetIds } }, data: { state: "OK" } });
+    }
+    console.log(`reconciler: cleared ${benign.length} trickplay poison row(s) mis-accounted by the old bug — sheets will re-derive`);
   }
 
   // Trickplay leg one: files that never got sheets. The enqueue gate inside

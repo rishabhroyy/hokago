@@ -96,6 +96,8 @@ export const MediaItemDetail = MediaCard.extend({
   audioTracks: z.array(AudioTrackInfo),
   /** Watch summary for the requesting profile — null when no profileId was passed. */
   watch: MediaItemWatch.nullable().default(null),
+  /** Identity rows — what this item is currently matched to, for the "fix match" UI. */
+  externalIds: z.array(z.object({ provider: z.string(), providerId: z.string() })),
   collections: z.array(
     z.object({
       id: z.string(),

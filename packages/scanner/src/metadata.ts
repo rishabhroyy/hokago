@@ -623,9 +623,17 @@ export async function resolveMetadataStep(
         return true;
       }
       const revalidated = findAcceptedMatch(query, result.matches);
-      if (revalidated) {
-        await applyMatch(db, target, providerName, revalidated, result.lastModified, wikidataBridge);
-        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, revalidated.providerId, providers);
+      // A pinned/prior identity is never re-contested on title alone: when
+      // the provider returned exactly the entry for the id we already hold
+      // (manual "fix match" pins, or the provider itself renamed the entry),
+      // accept it even though the folder-derived title no longer clears the
+      // gate — the gate protects against accepting a *new wrong* id, not
+      // against re-confirming the id we already resolved to.
+      const confirmed =
+        revalidated ?? result.matches.find((m) => m.providerId === existing.providerId);
+      if (confirmed) {
+        await applyMatch(db, target, providerName, confirmed, result.lastModified, wikidataBridge);
+        await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, confirmed.providerId, providers);
         return true;
       }
       await touchLastResolvedAt(db, target.mediaItemId, providerName);

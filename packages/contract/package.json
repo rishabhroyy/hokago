@@ -15,6 +15,7 @@
     "./media-files": "./dist/media-files.js",
     "./downloads": "./dist/downloads.js",
     "./watch-party": "./dist/watch-party.js",
+    "./metadata": "./dist/metadata.js",
     "./openapi": "./dist/openapi.js",
     "./client": "./dist/client.js"
   },

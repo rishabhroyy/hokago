@@ -38,6 +38,12 @@ importers:
       '@hokago/ffmpeg':
         specifier: workspace:*
         version: link:../../packages/ffmpeg
+      '@hokago/metadata':
+        specifier: workspace:*
+        version: link:../../packages/metadata
+      '@hokago/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@hokago/queue':
         specifier: workspace:*
         version: link:../../packages/queue

@@ -9,6 +9,7 @@ import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
 import { cardToTile } from "../ui/tile-mapping";
 import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu";
+import { FixMatchPanel } from "./FixMatchPanel";
 import { useWiiSound } from "../ui/useWiiSound";
 import { popAndPing, useReducedMotion, useStaggerEntrance } from "../ui/effects";
 import { sanitizeOverview } from "../ui/sanitize";
@@ -202,6 +203,7 @@ export function DetailView({ itemId }: { itemId: string }) {
   const [item, setItem] = useState<MediaItemDetail | null>(null);
   const [selectedAudio, setSelectedAudio] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; ep: EpisodeCard } | null>(null);
+  const [fixOpen, setFixOpen] = useState(false);
 
   useEffect(() => {
     if (!profileId) return;
@@ -367,6 +369,19 @@ export function DetailView({ itemId }: { itemId: string }) {
                       : ""}
                   </span>
                 )}
+                {(item.kind === "MOVIE" || item.kind === "SERIES") && (
+                  <button
+                    className="rounded-full bg-paper px-3 py-1 font-semibold text-ink-2 ring-1 ring-line transition-colors hover:text-wii-deep"
+                    onClick={() => {
+                      s.select();
+                      setFixOpen(true);
+                    }}
+                    title="Search providers and pin a match (fixes missing artwork/metadata)"
+                  >
+                    <Icon name="search" className="mr-1 inline h-3.5 w-3.5" />
+                    Fix match
+                  </button>
+                )}
               </div>
 
               {item.genres.length > 0 && (
@@ -488,6 +503,22 @@ export function DetailView({ itemId }: { itemId: string }) {
       <div className="pb-16" />
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={episodeMenuItems(menu.ep)} onClose={() => setMenu(null)} />
+      )}
+      {fixOpen && (
+        <FixMatchPanel
+          itemId={item.id}
+          title={item.title}
+          year={item.year}
+          kind={item.kind === "MOVIE" ? "MOVIE" : "SERIES"}
+          externalIds={item.externalIds}
+          onClose={() => setFixOpen(false)}
+          onPinned={() => {
+            invalidateMediaItemDetail(itemId);
+            fetchMediaItemDetail(itemId, profileId ?? "dev").then((detail) => {
+              if (detail) setItem(detail);
+            });
+          }}
+        />
       )}
     </div>
   );

@@ -59,6 +59,17 @@ import {
   ErrorResponse as DownloadErrorResponse,
 } from "./downloads.js";
 import {
+  MetadataSearchQuery,
+  MetadataSearchResponse,
+  MetadataMatchPinParams,
+  MetadataMatchPinBody,
+  MetadataMatchPinResponse,
+  MetadataMatchDeleteParams,
+  MetadataMatchDeleteBody,
+  MetadataMatchDeleteResponse,
+  ErrorResponse as MetadataErrorResponse,
+} from "./metadata.js";
+import {
   StartPlaybackBody,
   StartPlaybackResponse,
   PlaybackSessionParams,
@@ -935,6 +946,38 @@ export function buildOpenApiDocument(): OpenAPIObject {
     summary: "Downloaded font bytes",
     request: { params: DownloadFontParams },
     responses: { 200: { description: "Font bytes", ...binary("font/woff2") } },
+  });
+
+  // /metadata — manual "fix match" (provider search + identity pinning)
+  registry.registerPath({
+    method: "get",
+    path: "/metadata/search",
+    summary: "Search keyless metadata providers for a manual match",
+    request: { query: MetadataSearchQuery },
+    responses: {
+      200: { description: "Candidates across all providers", ...json(MetadataSearchResponse) },
+      401: { description: "Unauthorized", ...json(MetadataErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/media-items/{id}/metadata-match",
+    summary: "Pin a manual identity match (the resolve job applies metadata/artwork)",
+    request: { params: MetadataMatchPinParams, body: json(MetadataMatchPinBody) },
+    responses: {
+      200: { description: "Pinned", ...json(MetadataMatchPinResponse) },
+      404: { description: "Media item not found", ...json(MetadataErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/media-items/{id}/metadata-match",
+    summary: "Unpin a manual match, reverting the item to auto-resolution",
+    request: { params: MetadataMatchDeleteParams, body: json(MetadataMatchDeleteBody) },
+    responses: {
+      200: { description: "Unpinned", ...json(MetadataMatchDeleteResponse) },
+      404: { description: "Media item not found", ...json(MetadataErrorResponse) },
+    },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

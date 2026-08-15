@@ -116,6 +116,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       include: {
         artwork: { select: { id: true, kind: true, priority: true } },
         files: { select: { id: true }, take: 1 },
+        externalIds: { select: { provider: true, providerId: true } },
         _count: { select: { children: true } },
         children: { select: cardSelect, orderBy: { sortTitle: "asc" } },
         collectionEntries: {
@@ -135,7 +136,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
     });
     if (!item) return reply.code(404).send({ error: "media item not found" });
 
-    const { children, collectionEntries, ...rest } = item;
+    const { children, collectionEntries, externalIds, ...rest } = item;
 
     const episodes =
       item.kind === "SERIES"
@@ -197,6 +198,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       }),
       audioTracks,
       watch,
+      externalIds: externalIds.map((e) => ({ provider: e.provider, providerId: e.providerId })),
       collections: collectionEntries.map((entry) => ({
         id: entry.collection.id,
         name: entry.collection.name,

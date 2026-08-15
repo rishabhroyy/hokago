@@ -23,6 +23,7 @@ import {
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
+import { pruneMissingMedia } from "@hokago/scanner/prune";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
 import { probeFile } from "@hokago/scanner/probe";
 import { generateTrickplaySheets } from "@hokago/scanner/trickplay";
@@ -212,7 +213,7 @@ async function enqueueMetadata(providerName: string, job: MetadataJobData): Prom
 
 async function processScan(job: Job<ScanJobData>): Promise<void> {
   const library = await db.library.findUniqueOrThrow({ where: { id: job.data.libraryId } });
-  await ingestLibrary(db, library.id, library.rootPath, {
+  const summary = await ingestLibrary(db, library.id, library.rootPath, {
     resumeFromCursor: library.scanCursor,
     contentProfile: library.contentProfile,
  // Checkpointing : persist progress after every completed
@@ -232,6 +233,18 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
     where: { id: library.id },
     data: { scanCursor: null, lastScanAt: new Date() },
   });
+  // Staleness sweep: full walk completed (cursor cleared) — rows whose files
+  // vanished from disk are gone for real. Gated on the walk finding at least
+  // one file: an empty walk means the mount is gone or the library is new,
+  // and pruning would nuke everything. Deleted items cascade their artwork,
+  // watch state, and derived rows; only disk artifacts (artwork bytes, fonts)
+  // are left to the content-addressed store.
+  if (summary.filesScanned > 0) {
+    const pruned = await pruneMissingMedia(db, library.id, library.rootPath);
+    if (pruned.filesRemoved + pruned.itemsRemoved + pruned.collectionsRemoved > 0) {
+      console.log(`scan ${library.name}: pruned ${pruned.filesRemoved} missing files, ${pruned.itemsRemoved} items, ${pruned.collectionsRemoved} empty collections`);
+    }
+  }
   // Rescan = the universal retry. The failure threshold poisons items
   // (artwork → NEEDS_ATTENTION, metadata → silent); clearing both here lets
   // the next scan/reconcile re-derive their artwork and metadata jobs from

@@ -8,6 +8,7 @@
     "./metadata": "./dist/metadata.js",
     "./probe": "./dist/probe.js",
     "./child-registry": "./dist/child-registry.js",
+    "./prune": "./dist/prune.js",
     "./generate-art": "./dist/generate-art.js",
     "./trickplay": "./dist/trickplay.js",
     "./artwork": "./dist/artwork.js"

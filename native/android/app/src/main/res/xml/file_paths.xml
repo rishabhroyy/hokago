@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-path name="downloads" path="Download/hokago/" />
+    <external-path name="downloads2" path="Downloads/hokago/" />
+    <external-path name="external_root" path="." />
+    <root-path name="internal_root" path="." />
+</paths>

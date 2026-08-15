@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>hokago</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #0d0f13; color: #e8eaed;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .card { width: min(460px, 90vw); padding: 4rem 0; }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: .5rem; }
+    p { color: #9aa3b2; font-size: .9rem; line-height: 1.5; margin-bottom: 1.75rem; }
+    form { display: flex; flex-direction: column; gap: .75rem; }
+    input {
+      padding: .75rem .9rem; border-radius: .5rem; border: 1px solid #2a2f3a;
+      background: #15181f; color: inherit; font-size: .95rem; outline: none;
+    }
+    input:focus { border-color: #4f7cff; }
+    .row { display: flex; gap: .75rem; }
+    button {
+      padding: .75rem 1.25rem; border-radius: .5rem; border: none;
+      background: #4f7cff; color: #fff; font-size: .95rem; font-weight: 600; cursor: pointer;
+    }
+    button:hover { background: #6a90ff; }
+    .error { color: #ff6b6b; font-size: .85rem; min-height: 1.25em; }
+    .hint { color: #6b7480; font-size: .8rem; margin-top: .5rem; }
+    code { background: #15181f; padding: .1em .35em; border-radius: .25em; color: #b6c2d4; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Connect to your server</h1>
+    <p>hokago is a thin client for your self-hosted media server. Enter the URL of your <b>hokago</b> instance — e.g. <code>http://192.168.1.20:3000</code> or your remote address.</p>
+    <form id="form">
+      <input id="url" type="url" placeholder="https://hokago.example.com" autocomplete="off" spellcheck="false" />
+      <div class="row">
+        <button type="submit">Connect</button>
+      </div>
+      <div class="error" id="error"></div>
+      <div class="hint">The app ships an embedded copy of the hokago web UI; your server URL is stored on this device only.</div>
+    </form>
+  </div>
+
+  <script>
+    const inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke
+      ? window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__)
+      : null;
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const el = document.getElementById('url');
+      const err = document.getElementById('error');
+      err.textContent = '';
+      let url = el.value.trim();
+      if (!url) { err.textContent = 'Enter a server URL.'; return; }
+      if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+      try {
+        if (inv) await inv('save_server_url', { url });
+        location.href = url;
+      } catch (err2) {
+        err.textContent = 'Could not save the server URL: ' + String(err2);
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        if (inv) {
+          const saved = await inv('get_server_url');
+          if (saved) {
+            const w = new URL(saved);
+            document.getElementById('url').value = w.host + w.pathname.replace(/\/$/, '');
+          }
+        }
+      } catch (e) { /* first run */ }
+    });
+  </script>
+</body>
+</html>

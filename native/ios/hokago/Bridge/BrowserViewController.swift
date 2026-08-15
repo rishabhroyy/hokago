@@ -1,0 +1,78 @@
+import Foundation
+import UIKit
+import WebKit
+
+/// The WKWebView shell — plain browser engine, SPA loaded fresh from the
+/// server on every launch (Discord-style: web UI is always current).
+final class BrowserViewController: UIViewController, WKNavigationDelegate {
+    var webView: WKWebView!
+    private let serverURL: URL
+    private let bridge: NativeBridge
+
+    init(serverURL: URL) {
+        self.serverURL = serverURL
+        self.bridge = NativeBridge()
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    override func loadView() {
+        let script = bridge.initializationScript()
+        let controller = WKUserContentController()
+        controller.addUserScript(
+            WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        )
+        controller.add(bridge, name: "hokagoNative")
+
+        let config = WKWebViewConfiguration()
+        config.userContentController = controller
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.allowsAirPlayForMediaPlayback = false
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = self
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.allowsBackForwardNavigationGestures = true
+        webView.backgroundColor = .black
+        bridge.webView = webView
+        view = webView
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        load(serverURL)
+    }
+
+    func load(_ url: URL) {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        webView.load(request)
+    }
+
+    // ── Navigation ─────────────────────────────────────────────────────────
+    func goBackOrNotify() {
+        if webView.canGoBack {
+            webView.goBack()
+        } else {
+            bridge.post(event: "back", payload: [:])
+        }
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .menu {
+            goBackOrNotify()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        if nsError.code != -999 {
+            bridge.post(event: "loadError", payload: ["message": error.localizedDescription])
+        }
+    }
+}

@@ -1,0 +1,6 @@
+target/
+node_modules/
+src-tauri/gen/schemas/
+*.icns
+*.ico
+!src-tauri/icons/icon.png

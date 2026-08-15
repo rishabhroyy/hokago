@@ -1,0 +1,208 @@
+# hokago — native clients: on every v* tag, build the webview shells
+# (macOS/Windows/Linux via Tauri, iOS via XcodeGen, Android phone+TV via
+# Gradle) and attach them to a GitHub release. release.yml publishes the
+# server image to GHCR; this workflow is the client delivery pipeline.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# → GitHub Release "hokago v0.2.0" (draft) with the per-platform artifacts.
+#
+# Version plumbing: each job strips the leading "v" off the tag and bakes it
+# into the app version (Cargo.toml/tauri.conf.json for Tauri, project.yml for
+# XcodeGen, -PappVersion* for Gradle). The web app reads it back via
+# window.hokagoNative.appVersion and gates on MIN_NATIVE_VERSION.
+
+name: native
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        run: |
+          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "version=${{ github.ref_name }}" | sed 's/^v//' | awk '{print "version=" $0}' >> "$GITHUB_OUTPUT"
+
+  tauri-macos:
+    needs: versions
+    runs-on: macos-14
+    env:
+      APP_VERSION: ${{ needs.versions.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Install Tauri CLI
+        working-directory: native/tauri
+        run: pnpm install --no-frozen-lockfile
+      - name: Bake version
+        run: |
+          sed -i '' "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml
+          sed -i '' "s/\"version\": \".*\"/\"version\": \"${APP_VERSION}\"/" native/tauri/src-tauri/tauri.conf.json
+          sed -i '' "s/\"version\": \".*\"/\"version\": \"${APP_VERSION}\"/" native/tauri/package.json
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: native/tauri
+          tagName: ${{ needs.versions.outputs.tag }}
+          releaseName: "hokago ${{ needs.versions.outputs.tag }}"
+          releaseDraft: true
+          args: --target aarch64-apple-darwin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tauri-windows:
+    needs: versions
+    runs-on: windows-latest
+    env:
+      APP_VERSION: ${{ needs.versions.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install Tauri CLI
+        working-directory: native/tauri
+        run: pnpm install --no-frozen-lockfile
+      - name: Bake version
+        shell: bash
+        run: |
+          sed -i "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml
+          sed -i "s/\"version\": \".*\"/\"version\": \"${APP_VERSION}\"/" native/tauri/src-tauri/tauri.conf.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"${APP_VERSION}\"/" native/tauri/package.json
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: native/tauri
+          tagName: ${{ needs.versions.outputs.tag }}
+          releaseName: "hokago ${{ needs.versions.outputs.tag }}"
+          releaseDraft: true
+          args: --target x86_64-pc-windows-msvc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tauri-linux:
+    needs: versions
+    runs-on: ubuntu-22.04
+    env:
+      APP_VERSION: ${{ needs.versions.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install Tauri CLI
+        working-directory: native/tauri
+        run: pnpm install --no-frozen-lockfile
+      - name: Bake version
+        run: |
+          sed -i "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml
+          sed -i "s/\"version\": \".*\"/\"version\": \"${APP_VERSION}\"/" native/tauri/src-tauri/tauri.conf.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"${APP_VERSION}\"/" native/tauri/package.json
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: native/tauri
+          tagName: ${{ needs.versions.outputs.tag }}
+          releaseName: "hokago ${{ needs.versions.outputs.tag }}"
+          releaseDraft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ios:
+    needs: versions
+    runs-on: macos-14
+    env:
+      APP_VERSION: ${{ needs.versions.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Bake version
+        run: |
+          sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: \"${APP_VERSION}\"/" native/ios/project.yml
+      - name: Generate project
+        working-directory: native/ios
+        run: xcodegen generate
+      - name: Ensure release exists
+        run: |
+          gh release create "$TAG" --draft --title "hokago $TAG" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.versions.outputs.tag }}
+      - name: Build simulator app
+        run: |
+          xcodebuild -project hokago.xcodeproj -scheme hokago -configuration Release \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build
+          ditto -ck --rsrc --sequesterRsrc build/Build/Products/Release-iphonesimulator/hokago.app \
+            "hokago-${APP_VERSION}-ios-simulator.zip"
+      - name: Upload simulator app
+        run: |
+          gh release upload "$TAG" "hokago-${APP_VERSION}-ios-simulator.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.versions.outputs.tag }}
+
+  android:
+    needs: versions
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION: ${{ needs.versions.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14"
+      - name: Ensure release exists
+        run: |
+          gh release create "$TAG" --draft --title "hokago $TAG" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.versions.outputs.tag }}
+      - name: Build APKs
+        working-directory: native/android
+        run: |
+          gradle -PappVersionName="$APP_VERSION" assemblePhoneRelease assembleTvRelease
+      - name: Upload APKs
+        run: |
+          gh release upload "$TAG" \
+            native/android/app/build/outputs/apk/phone/release/app-phone-release.apk \
+            native/android/app/build/outputs/apk/tv/release/app-tv-release.apk \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.versions.outputs.tag }}

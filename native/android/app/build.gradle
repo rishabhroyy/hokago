@@ -1,0 +1,60 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+
+// Versions are injected by CI from the git tag; local/dev builds use
+// gradle.properties defaults.
+val appVersionName: String = providers.gradleProperty("appVersionName").getOrElse("0.2.0")
+val appVersionCode: Int = providers.gradleProperty("appVersionCode").getOrElse("1").toInt()
+
+android {
+    namespace = "com.hokago.app"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.hokago.app"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = appVersionCode
+        versionName = appVersionName
+    }
+
+    flavorDimensions += "form"
+    productFlavors {
+        phone {
+            dimension = "form"
+            manifestPlaceholders["isTv"] = "false"
+        }
+        tv {
+            dimension = "form"
+            manifestPlaceholders["isTv"] = "true"
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    buildFeatures {
+        viewBinding = true
+    }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.lifecycle)
+    implementation(libs.androidx.leanback)
+    implementation(libs.androidx.media)
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Hokago" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/hokago_bg</item>
+        <item name="android:colorBackground">@color/hokago_bg</item>
+        <item name="colorPrimary">@color/hokago_accent</item>
+        <item name="colorAccent">@color/hokago_accent</item>
+    </style>
+</resources>

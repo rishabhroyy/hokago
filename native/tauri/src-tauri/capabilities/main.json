@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "default",
+  "description": "The main window — remote origins may use core IPC (events) and the app's own commands.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://**", "https://**"]
+  },
+  "permissions": ["core:default"]
+}

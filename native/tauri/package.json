@@ -1,0 +1,11 @@
+{
+  "name": "hokago-desktop",
+  "private": true,
+  "version": "0.2.0",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

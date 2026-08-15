@@ -35,6 +35,7 @@ export function TopNav() {
   const isAdmin = useIsAdmin();
   const [libraries, setLibraries] = useState<LibrarySummary[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -100,6 +101,47 @@ export function TopNav() {
         </div>
       </div>
       <div className="flex items-center gap-3">
+        {/* Mobile: a hamburger reveals Home + libraries — the pill's library
+            links are hidden below 820px and must stay reachable on phones. */}
+        <div className="relative max-[820px]:block hidden">
+          <button
+            className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
+              navOpen ? "bg-wii/15 text-wii-deep" : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
+            }`}
+            title="Libraries"
+            aria-label="Libraries"
+            onClick={() => setNavOpen((o) => !o)}
+          >
+            <Icon name="lib" className="h-[17px] w-[17px]" />
+          </button>
+          {navOpen && (
+            <div className="panel absolute right-0 top-[46px] w-[220px] overflow-hidden rounded-[22px] py-1.5">
+              <button
+                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
+                onClick={() => {
+                  setNavOpen(false);
+                  navigate(paths.home());
+                }}
+              >
+                <Icon name="home" className="h-4 w-4" />
+                Home
+              </button>
+              {libraries.map((lib) => (
+                <button
+                  key={lib.id}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
+                  onClick={() => {
+                    setNavOpen(false);
+                    navigate(paths.library(lib.id));
+                  }}
+                >
+                  <Icon name="lib" className="h-4 w-4" />
+                  {lib.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <span className="font-mono text-small font-medium tabular-nums text-ink-3 max-[820px]:hidden">{clock}</span>
         {!tv && <ThemeToggle />}
         {!tv && (

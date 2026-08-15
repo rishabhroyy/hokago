@@ -213,9 +213,22 @@ jobs:
             CODE_SIGNING_ALLOWED=NO build
           ditto -ck --rsrc --sequesterRsrc build/Build/Products/Release-iphonesimulator/hokago.app \
             "hokago-${APP_VERSION}-ios-simulator.zip"
-      - name: Upload simulator app
+      - name: Build device IPA (unsigned — Sideloadly re-signs with your Apple ID)
         run: |
-          gh release upload "$TAG" "hokago-${APP_VERSION}-ios-simulator.zip" --clobber
+          xcodebuild -project hokago.xcodeproj -scheme hokago -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/hokago.app Payload/
+          zip -qr "hokago-${APP_VERSION}-ios-sideload.ipa" Payload
+          rm -rf Payload
+      - name: Upload simulator app + sideload IPA
+        run: |
+          gh release upload "$TAG" \
+            "hokago-${APP_VERSION}-ios-simulator.zip" \
+            "hokago-${APP_VERSION}-ios-sideload.ipa" \
+            --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.versions.outputs.tag }}

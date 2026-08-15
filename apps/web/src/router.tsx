@@ -8,6 +8,8 @@ export type Route =
   | { view: "party"; code: string | null }
   | { view: "prefs" }
   | { view: "pair" }
+  | { view: "accounts" }
+  | { view: "downloads" }
   | { view: "search"; q: string | null }
   | { view: "admin" }
   | { view: "login" }
@@ -23,6 +25,8 @@ function parse(pathname: string, search: string): Route {
   if (parts[0] === "admin") return { view: "admin" };
   if (parts[0] === "prefs") return { view: "prefs" };
   if (parts[0] === "pair") return { view: "pair" };
+  if (parts[0] === "accounts") return { view: "accounts" };
+  if (parts[0] === "downloads") return { view: "downloads" };
   if (parts[0] === "search") return { view: "search", q: q.get("q") };
   if (parts[0] === "party" && !parts[1]) return { view: "party", code: null };
   if (parts[0] === "party" && parts[1]) return { view: "party", code: parts[1] };
@@ -49,6 +53,8 @@ export const paths = {
   admin: () => "/admin",
   prefs: () => "/prefs",
   pair: () => "/pair",
+  accounts: () => "/accounts",
+  downloads: () => "/downloads",
   search: (query?: string) => (query ? `/search?q=${encodeURIComponent(query)}` : "/search"),
   library: (id: string) => `/library/${id}`,
   detail: (id: string) => `/title/${id}`,

@@ -4,6 +4,7 @@ import { fetchMediaItemDetail, invalidateMediaItemDetail, prefetchMediaItemDetai
 import { api } from "../api-client";
 import { useProfileId } from "../profile";
 import { paths, useRouter } from "../router";
+import { canDownload, createDownload, recordLocalDownload, saveToDevice, waitReady } from "../downloads";
 import { Icon } from "../ui/icons";
 import { HUE_CLASS, hueFor, iconFor, type TileItem } from "../ui/Tile";
 import { Row } from "../ui/Row";
@@ -204,6 +205,8 @@ export function DetailView({ itemId }: { itemId: string }) {
   const [selectedAudio, setSelectedAudio] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; ep: EpisodeCard } | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
+  const [dlState, setDlState] = useState<"idle" | "building" | "saving" | "done" | "error">("idle");
+  const [dlError, setDlError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!profileId) return;
@@ -255,6 +258,27 @@ export function DetailView({ itemId }: { itemId: string }) {
 
   const openTile = (tile: TileItem) => navigate(paths.detail(tile.id));
   const prefetchTile = (tile: TileItem) => prefetchMediaItemDetail(tile.id);
+
+  // Download-to-device: server builds the artifact, the native bridge saves
+  // the bytes. Shells only (canDownload() is false in a plain browser).
+  const downloadThis = async (fileId: string, itemId_: string) => {
+    s.select();
+    setDlState("building");
+    setDlError(null);
+    try {
+      const { id } = await createDownload({ mediaItemId: itemId_, mediaFileId: fileId });
+      const status = await waitReady(id);
+      if (status !== "READY") throw new Error(status === "FAILED" ? "the server failed to build the download" : "download timed out");
+      setDlState("saving");
+      const outcome = await saveToDevice(id);
+      if (!outcome.ok) throw new Error(outcome.error);
+      recordLocalDownload(id, { localPath: outcome.localPath, sizeBytes: outcome.sizeBytes });
+      setDlState("done");
+    } catch (err) {
+      setDlState("error");
+      setDlError(err instanceof Error ? err.message : "download failed");
+    }
+  };
 
   // Watch party: creates a room for a specific playable item (a chosen
   // episode, or the hero target for series / the movie itself otherwise) and
@@ -422,6 +446,29 @@ export function DetailView({ itemId }: { itemId: string }) {
                       <Icon name="users" className="h-4 w-4" />
                       Watch party
                     </button>
+                    {canDownload() && (
+                      <button
+                        className="btn btn-ghost"
+                        disabled={dlState === "building" || dlState === "saving"}
+                        title="Save this file to this device (original quality + subtitles)"
+                        onClick={() => {
+                          if (!playMediaFileId || !playMediaItemId) return;
+                          void downloadThis(playMediaFileId, playMediaItemId);
+                        }}
+                      >
+                        <Icon name="download" className="h-4 w-4" />
+                        {dlState === "building"
+                          ? "building…"
+                          : dlState === "saving"
+                            ? "saving…"
+                            : dlState === "done"
+                              ? "saved to this device ✓"
+                              : "Download"}
+                      </button>
+                    )}
+                    {dlState === "error" && dlError && (
+                      <span className="text-small font-semibold text-accent">{dlError}</span>
+                    )}
                   </>
                 )}
               </div>

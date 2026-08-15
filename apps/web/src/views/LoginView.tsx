@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, storeAccessToken } from "../api-client";
+import { api, storeAuthResult } from "../api-client";
+import { clientKey, loginPlatform } from "../native";
 import { Icon } from "../ui/icons";
 import { LogoMark } from "../ui/Logo";
 import { ThemeToggle } from "../ui/useTheme";
@@ -54,11 +55,18 @@ export function LoginView() {
         return;
       }
       const { data, error: loginError } = await api.POST("/auth/login", {
-        body: { username: username.trim(), password, device: "web" },
+        body: {
+          username: username.trim(),
+          password,
+          device: "web",
+          // Shells identify the device so sessions bind to a real Device row.
+          ...(clientKey()
+            ? { clientKey: clientKey()!, deviceName: "hokago app", platform: loginPlatform() }
+            : {}),
+        },
       });
       if (loginError || !data) throw new Error("invalid username or password");
-      storeAccessToken(data.accessToken);
-      localStorage.setItem("hokago_refresh_token", data.refreshToken);
+      storeAuthResult({ ...data, username: username.trim() });
       // Full reload: drops the anonymous session's caches and 401 state.
       location.assign("/");
     } catch (err) {

@@ -4,6 +4,8 @@ import { paths, useRouter } from "../router";
 import { useIsAdmin, usePrimaryProfile } from "../profile";
 import { useSoundToggle, useWiiSound } from "./useWiiSound";
 import { clearAuth } from "../api-client";
+import { getNativeBridge, supportsDownloads } from "@hokago/native-bridge";
+import { isTvShell } from "../native";
 import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
 import { popAndPing, starShower, useKonami, useReducedMotion } from "./effects";
@@ -53,6 +55,8 @@ export function TopNav() {
   });
 
   const reduced = useReducedMotion();
+  const tv = isTvShell();
+  const downloads = !tv && supportsDownloads();
 
   if (route.view === "player" || route.view === "login") return null;
 
@@ -97,89 +101,127 @@ export function TopNav() {
       </div>
       <div className="flex items-center gap-3">
         <span className="font-mono text-small font-medium tabular-nums text-ink-3 max-[820px]:hidden">{clock}</span>
-        <ThemeToggle />
-        <button
-          className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap hover:bg-wii/10 active:scale-90 ${enabled ? "text-wii-deep" : "text-ink-3"}`}
-          title="Sound"
-          onClick={toggle}
-        >
-          <Icon name={enabled ? "vol" : "mute"} className="h-[17px] w-[17px]" />
-        </button>
-        <button
-          className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
-            route.view === "party"
-              ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
-              : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
-          }`}
-          title="Watch party"
-          aria-label="Join a watch party"
-          onClick={(e) => go(paths.party(), e)}
-        >
-          <Icon name="users" className="h-[17px] w-[17px]" />
-        </button>
-        <button
-          className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
-            route.view === "search"
-              ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
-              : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
-          }`}
-          title="Search"
-          aria-label="Search"
-          onClick={(e) => go(paths.search(), e)}
-        >
-          <Icon name="search" className="h-[17px] w-[17px]" />
-        </button>
+        {!tv && <ThemeToggle />}
+        {!tv && (
+          <button
+            className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap hover:bg-wii/10 active:scale-90 ${enabled ? "text-wii-deep" : "text-ink-3"}`}
+            title="Sound"
+            onClick={toggle}
+          >
+            <Icon name={enabled ? "vol" : "mute"} className="h-[17px] w-[17px]" />
+          </button>
+        )}
+        {downloads && (
+          <button
+            className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
+              route.view === "downloads"
+                ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
+                : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
+            }`}
+            title="Downloads"
+            aria-label="Downloads"
+            onClick={(e) => go(paths.downloads(), e)}
+          >
+            <Icon name="download" className="h-[17px] w-[17px]" />
+          </button>
+        )}
+        {!tv && (
+          <button
+            className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
+              route.view === "party"
+                ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
+                : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
+            }`}
+            title="Watch party"
+            aria-label="Join a watch party"
+            onClick={(e) => go(paths.party(), e)}
+          >
+            <Icon name="users" className="h-[17px] w-[17px]" />
+          </button>
+        )}
+        {!tv && (
+          <button
+            className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
+              route.view === "search"
+                ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
+                : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
+            }`}
+            title="Search"
+            aria-label="Search"
+            onClick={(e) => go(paths.search(), e)}
+          >
+            <Icon name="search" className="h-[17px] w-[17px]" />
+          </button>
+        )}
         <div ref={menuRef} className="relative">
           <button
             className="flex h-[36px] w-[36px] items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#45ADDD,#187AA5)] font-display text-card-head font-bold text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_3px_8px_-2px_rgba(46,155,196,0.55)] ring-2 ring-white/70 transition-transform duration-150 ease-snap hover:scale-105 active:scale-92"
-            title={profile?.name ?? "account"}
+            title={tv ? "Accounts" : profile?.name ?? "account"}
             onClick={() => setMenuOpen((o) => !o)}
           >
-            {profile?.avatarPath ? (
+            {!tv && profile?.avatarPath ? (
               <img src={profile.avatarPath} alt="" className="h-full w-full object-cover" />
             ) : (
-              (profile?.name?.[0] ?? "h").toLowerCase()
+              <Icon name="users" className="h-[17px] w-[17px]" />
             )}
           </button>
           {menuOpen && (
             <div className="panel absolute right-0 top-[46px] w-[220px] overflow-hidden rounded-[22px] py-1.5">
-              <div className="flex items-center gap-2.5 border-b border-line/70 px-4 pb-2.5 pt-2">
-                {profile?.avatarPath && (
-                  <img src={profile.avatarPath} alt="" className="h-6 w-6 rounded-full object-cover" />
-                )}
-                <div className="min-w-0">
-                  <div className="truncate text-meta font-bold text-ink">{profile?.name ?? "…"}</div>
-                  <div className="font-mono text-kicker uppercase tracking-[0.12em] text-ink-3">
-                    {isAdmin ? "admin" : "member"}
+              {!tv ? (
+                <>
+                  <div className="flex items-center gap-2.5 border-b border-line/70 px-4 pb-2.5 pt-2">
+                    {profile?.avatarPath && (
+                      <img src={profile.avatarPath} alt="" className="h-6 w-6 rounded-full object-cover" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-meta font-bold text-ink">{profile?.name ?? "…"}</div>
+                      <div className="font-mono text-kicker uppercase tracking-[0.12em] text-ink-3">
+                        {isAdmin ? "admin" : "member"}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-              <button
-                onClick={() => navigate(paths.prefs())}
-                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
-              >
-                <Icon name="gear" className="h-4 w-4" />
-                Preferences
-              </button>
-              {isAdmin && (
-                <button
-                  onClick={() => navigate(paths.admin())}
-                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
-                >
-                  <Icon name="grid" className="h-4 w-4" />
-                  Admin panel
-                </button>
+                  <button
+                    onClick={() => navigate(paths.prefs())}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
+                  >
+                    <Icon name="gear" className="h-4 w-4" />
+                    Preferences
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => navigate(paths.admin())}
+                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
+                    >
+                      <Icon name="grid" className="h-4 w-4" />
+                      Admin panel
+                    </button>
+                  )}
+                  <button
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-accent/8 hover:text-accent"
+                    onClick={() => {
+                      clearAuth();
+                      location.assign("/login");
+                    }}
+                  >
+                    <Icon name="back" className="h-4 w-4 rotate-180" />
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="border-b border-line/70 px-4 pb-2.5 pt-2">
+                    <div className="truncate text-meta font-bold text-ink">{getNativeBridge()?.appVersion ? `app v${getNativeBridge()!.appVersion}` : "…"}</div>
+                    <div className="font-mono text-kicker uppercase tracking-[0.12em] text-ink-3">this TV</div>
+                  </div>
+                  <button
+                    onClick={() => navigate(paths.accounts())}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-wii/8 hover:text-wii-deep"
+                  >
+                    <Icon name="users" className="h-4 w-4" />
+                    Switch user / sign up
+                  </button>
+                </>
               )}
-              <button
-                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-meta font-bold text-ink transition-colors hover:bg-accent/8 hover:text-accent"
-                onClick={() => {
-                  clearAuth();
-                  location.assign("/login");
-                }}
-              >
-                <Icon name="back" className="h-4 w-4 rotate-180" />
-                Sign out
-              </button>
             </div>
           )}
         </div>

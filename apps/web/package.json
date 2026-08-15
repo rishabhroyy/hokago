@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@hokago/contract": "workspace:*",
+    "@hokago/native-bridge": "workspace:*",
     "@vidstack/react": "1.15.6",
     "hls.js": "^1.6.16",
     "jassub": "^2.5.7",

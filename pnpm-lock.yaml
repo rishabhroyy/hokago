@@ -72,6 +72,9 @@ importers:
       '@hokago/contract':
         specifier: workspace:*
         version: link:../../packages/contract
+      '@hokago/native-bridge':
+        specifier: workspace:*
+        version: link:../../packages/native-bridge
       '@vidstack/react':
         specifier: 1.15.6
         version: 1.15.6(@types/react@19.2.17)(react@19.2.7)
@@ -178,6 +181,8 @@ importers:
         version: 2.5.0
 
   packages/metadata: {}
+
+  packages/native-bridge: {}
 
   packages/providers:
     dependencies:

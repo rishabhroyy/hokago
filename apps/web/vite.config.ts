@@ -28,6 +28,8 @@ const API_PATHS = [
   "/external-artwork",
   "/watch-state",
   "/parties",
+  "/downloads",
+  "/metadata",
   "/admin/queues",
   "/admin-api",
 ];

@@ -1,7 +1,10 @@
 import { createHokagoClient } from "@hokago/contract/client";
+import { getNativeBridge, isTvShell } from "@hokago/native-bridge";
+import { getActiveAccount, updateActiveTokens, removeAccount, addAccount } from "./tv-session";
 
 const ACCESS_KEY = "hokago_access_token";
 const REFRESH_KEY = "hokago_refresh_token";
+const DEVICE_KEY = "hokago_device_id";
 // Mirror of the access token for the browser to send on media/font/artwork
 // subresource requests — `<video>`, `<img>` and CSS font fetches can't carry
 // an Authorization header, so the API's authenticate decorator falls back to
@@ -9,8 +12,35 @@ const REFRESH_KEY = "hokago_refresh_token";
 // and same-origin img/video/font requests always do.
 const ACCESS_COOKIE = "hokago_access";
 
+// ── Storage: bridge mirror in a shell, localStorage in a plain browser. The
+// native shells persist this to Keychain/Keystore on every write, so sessions
+// survive webview data wipes; the localStorage copy keeps the two in sync.
+function read(key: string): string | null {
+  const bridge = getNativeBridge();
+  if (bridge) return bridge.storage.get(key);
+  return localStorage.getItem(key);
+}
+
+function write(key: string, value: string): void {
+  const bridge = getNativeBridge();
+  if (bridge) bridge.storage.set(key, value);
+  localStorage.setItem(key, value);
+}
+
+function erase(key: string): void {
+  const bridge = getNativeBridge();
+  if (bridge) bridge.storage.delete(key);
+  localStorage.removeItem(key);
+}
+
 export function storeAccessToken(token: string): void {
-  localStorage.setItem(ACCESS_KEY, token);
+  // TV mode: tokens live per-account, rotated in the active account object.
+  const active = getActiveAccount();
+  if (active) {
+    updateActiveTokens(token);
+  } else {
+    write(ACCESS_KEY, token);
+  }
   const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
   const maxAge = typeof payload.exp === "number" ? Math.max(60, Math.round(payload.exp - Date.now() / 1000)) : 900;
   document.cookie = `${ACCESS_COOKIE}=${token}; Path=/; SameSite=Lax; Max-Age=${maxAge}`;
@@ -20,28 +50,59 @@ function clearAccessCookie(): void {
   document.cookie = `${ACCESS_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`;
 }
 
+/** Seed the cookie from a token that survived a reload (active TV account or the legacy key). */
+const bootToken = getAccessToken();
+if (bootToken) storeAccessToken(bootToken);
+
+export function storeDeviceId(deviceId: string | null): void {
+  if (deviceId) write(DEVICE_KEY, deviceId);
+  else erase(DEVICE_KEY);
+}
+
+export function getDeviceId(): string | null {
+  return read(DEVICE_KEY);
+}
+
+/**
+ * Commit a fresh auth result. TV mode: register it as a new account (making
+ * it active). Everywhere else: the legacy single-session keys.
+ */
+export function storeAuthResult(auth: {
+  accessToken: string;
+  refreshToken: string;
+  sessionId: string;
+  deviceId: string | null;
+  username?: string;
+}): void {
+  if (isTvShell()) {
+    addAccount({
+      username: auth.username ?? "user",
+      accessToken: auth.accessToken,
+      refreshToken: auth.refreshToken,
+      sessionId: auth.sessionId,
+      deviceId: auth.deviceId,
+    });
+  } else {
+    write(ACCESS_KEY, auth.accessToken);
+    write(REFRESH_KEY, auth.refreshToken);
+    storeAccessToken(auth.accessToken);
+  }
+  storeDeviceId(auth.deviceId);
+}
+
 // One in-flight refresh at a time — concurrent 401s must not race.
 let refreshInFlight: Promise<string | null> | null = null;
 
 function getAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_KEY);
+  const active = getActiveAccount();
+  if (active) return active.accessToken;
+  return read(ACCESS_KEY);
 }
-
-// Seed the cookie from any token that survived a reload. A fresh login and
-// every refresh set it too, but a mid-TTL token must land in the cookie
-// before the first <video>/<img> subresource request fires — otherwise the
-// media stalls until the token approaches expiry and a refresh happens.
-const bootToken = getAccessToken();
-if (bootToken) storeAccessToken(bootToken);
 
 function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_KEY);
-}
-
-export function clearAuth(): void {
-  localStorage.removeItem(ACCESS_KEY);
-  localStorage.removeItem(REFRESH_KEY);
-  clearAccessCookie();
+  const active = getActiveAccount();
+  if (active) return active.refreshToken;
+  return read(REFRESH_KEY);
 }
 
 function tokenExpiresInMs(token: string): number | null {
@@ -99,6 +160,45 @@ export async function ensureAccessToken(): Promise<string | null> {
   return refreshAccessToken();
 }
 
+/**
+ * A session that can't refresh anymore is over. TV mode: drop that account
+ * (revoke server-side, best-effort) and fall to the account switcher; a
+ * browser goes to the login gate.
+ */
+function sessionDead(): void {
+  const active = getActiveAccount();
+  if (active) {
+    void fetch("/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: active.refreshToken }),
+    }).catch(() => {});
+    removeAccount(active.id);
+    location.assign("/");
+    return;
+  }
+  clearAuth();
+  if (location.pathname !== "/login") location.assign("/login");
+}
+
+export function clearAuth(): void {
+  const active = getActiveAccount();
+  if (active) {
+    void fetch("/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: active.refreshToken }),
+    }).catch(() => {});
+    removeAccount(active.id);
+    location.assign("/");
+    return;
+  }
+  erase(ACCESS_KEY);
+  erase(REFRESH_KEY);
+  erase(DEVICE_KEY);
+  clearAccessCookie();
+}
+
 async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const token = await ensureAccessToken();
   // Start from the request's OWN headers. openapi-fetch passes a Request
@@ -117,11 +217,10 @@ async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (url.includes("/auth/")) return res;
 
   // One retry with a freshly refreshed token; if the refresh itself fails,
-  // the session is truly over — clear both tokens and show the login gate.
+  // the session is truly over — drop it and show the appropriate gate.
   const fresh = await refreshAccessToken();
   if (!fresh) {
-    clearAuth();
-    if (location.pathname !== "/login") location.assign("/login");
+    sessionDead();
     return res;
   }
   headers.set("Authorization", `Bearer ${fresh}`);

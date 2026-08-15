@@ -229,6 +229,7 @@ jobs:
           zip -qr "hokago-${APP_VERSION}-ios-sideload.ipa" Payload
           rm -rf Payload
       - name: Upload simulator app + sideload IPA
+        working-directory: native/ios
         run: |
           gh release upload "$TAG" \
             "hokago-${APP_VERSION}-ios-simulator.zip" \

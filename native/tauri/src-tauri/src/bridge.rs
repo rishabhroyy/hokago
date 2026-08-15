@@ -45,7 +45,7 @@ fn set_secure(key: &str, value: &str) {
 
 fn delete_secure(key: &str) {
     if let Ok(entry) = Entry::new(SERVICE, key) {
-        let _ = entry.delete_password();
+        let _ = entry.delete_credential();
     }
     let _ = std::fs::remove_file(fallback_path(key));
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "identifier": "default",
+  "identifier": "main",
   "description": "The main window — remote origins and the bundled offline SPA may use core IPC (events) and the app's own commands.",
   "windows": ["main"],
   "remote": {

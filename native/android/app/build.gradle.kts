@@ -21,11 +21,11 @@ android {
 
     flavorDimensions += "form"
     productFlavors {
-        phone {
+        create("phone") {
             dimension = "form"
             manifestPlaceholders["isTv"] = "false"
         }
-        tv {
+        create("tv") {
             dimension = "form"
             manifestPlaceholders["isTv"] = "true"
         }

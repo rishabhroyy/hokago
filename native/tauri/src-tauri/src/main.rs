@@ -4,11 +4,12 @@ mod bridge;
 mod config;
 
 use std::io::{Read, Seek};
+use tauri::Runtime;
 
 /// Serves `hokago-file://<absolute-path>` bytes (the webview's offline player).
 /// Range support so <video> can seek into the file.
-fn file_scheme_handler(
-    _ctx: tauri::UriSchemeContext,
+fn file_scheme_handler<R: Runtime>(
+    _ctx: tauri::UriSchemeContext<'_, R>,
     request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     let raw_path = request.uri().path().to_string();
@@ -72,8 +73,8 @@ fn file_scheme_handler(
 /// Serves the bundled SPA (apps/web/dist) from `hokago-spa://` — the offline
 /// fallback when the configured server is unreachable. Route fallback to
 /// index.html so SPA deep links work.
-fn spa_scheme_handler(
-    ctx: tauri::UriSchemeContext,
+fn spa_scheme_handler<R: Runtime>(
+    ctx: tauri::UriSchemeContext<'_, R>,
     request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     use std::path::PathBuf;
@@ -122,8 +123,8 @@ fn main() {
     let script = bridge::injected_script(version, build);
 
     tauri::Builder::default()
-        .register_uri_scheme_protocol("hokago-file", file_scheme_handler)
-        .register_uri_scheme_protocol("hokago-spa", spa_scheme_handler)
+        .register_uri_scheme_protocol("hokago-file", |ctx, request| file_scheme_handler(ctx, request))
+        .register_uri_scheme_protocol("hokago-spa", |ctx, request| spa_scheme_handler(ctx, request))
         .on_page_load(move |webview, _payload| {
             // Re-inject the bridge on every page load (local setup page AND
             // remote SPA, including reloads) so a fresh context always gets it.

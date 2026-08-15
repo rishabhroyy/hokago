@@ -86,7 +86,7 @@ function SeasonGrid({
                 <span className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[42%] bg-gradient-to-b from-white/20 to-transparent" />
                 <span className="pointer-events-none absolute inset-0 z-[1] rounded-[13px] ring-1 ring-inset ring-white/20" />
                 <span className="absolute left-[9px] top-2 z-[2] rounded-full bg-white/95 px-2 py-[3px] font-mono text-kicker dark:bg-paper font-bold text-ink shadow-[0_2px_6px_-2px_rgba(60,40,30,0.4)]">
-                  EP {ep.episodeNumber ?? "?"}
+                  {ep.kind === "MOVIE" ? "MOVIE" : `EP ${ep.episodeNumber ?? "?"}`}
                 </span>
                 {ep.watched && (
                   <span
@@ -235,15 +235,18 @@ export function DetailView({ itemId }: { itemId: string }) {
     return <DetailSkeleton itemId={itemId} />;
   }
 
-  const firstEpisode = item.episodes[0];
   const watchedCount = item.episodes.filter((e) => e.watched).length;
   // The hero button targets the next thing to watch: an episode in progress
   // (Continue), else the first unwatched one, else (everything watched) the
-  // first episode again for a rewatch.
+  // first episode again for a rewatch. A MOVIE child (the Mugen Train
+  // shape — a film inside the show folder) is never the auto-target: it's an
+  // extra, not the next episode.
+  const seriesEpisodes = item.episodes.filter((e) => e.kind !== "MOVIE");
   const nextEpisode =
-    item.episodes.find((e) => !e.watched && e.positionMs > 0) ??
-    item.episodes.find((e) => !e.watched) ??
-    firstEpisode ??
+    seriesEpisodes.find((e) => !e.watched && e.positionMs > 0) ??
+    seriesEpisodes.find((e) => !e.watched) ??
+    seriesEpisodes[0] ??
+    item.episodes[0] ??
     null;
   const isContinue = nextEpisode !== null && !nextEpisode.watched && nextEpisode.positionMs > 0;
   const playMediaFileId = item.kind === "SERIES" ? (nextEpisode?.mediaFileId ?? null) : item.mediaFileId;

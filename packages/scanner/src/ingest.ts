@@ -459,17 +459,19 @@ export async function storeArtwork(
 }
 
 export interface IngestOptions {
- /** Skip directories at/before this sorted path — resume after a checkpointed interruption . */
+  /** Skip directories at/before this sorted path — resume after a checkpointed interruption. */
   resumeFromCursor?: string | null;
   /** Called after a directory's MediaItem/Evidence work is fully committed — persist as the new scanCursor. */
   onDirectoryComplete?: (dir: string) => Promise<void>;
+  /** Called as directories are processed, (doneDirs, totalDirs) — the scan-progress signal. */
+  onScanProgress?: (doneDirs: number, totalDirs: number) => Promise<void>;
   /** When set, artwork is not resolved inline — each file needing it is handed to this callback instead (queued). */
   onArtworkNeeded?: (job: ArtworkNeeded) => Promise<void>;
   /** When set, trickplay sheets are not generated inline — handed to this callback instead (queued). */
   onTrickplayNeeded?: (job: TrickplayNeeded) => Promise<void>;
- /** Called for every MOVIE/SERIES item so network-provider metadata (Step 6) can be queued. */
+  /** Called for every MOVIE/SERIES item so network-provider metadata (Step 6) can be queued. */
   onMetadataNeeded?: (job: MetadataNeeded) => Promise<void>;
- /** Forks the parser registry . Defaults to the library's own profile when omitted. */
+  /** Forks the parser registry. Defaults to the library's own profile when omitted. */
   contentProfile?: ContentProfile;
 }
 
@@ -545,9 +547,22 @@ export async function ingestLibrary(
   // Global, deterministic order independent of filesystem readdir order —
   // required for scanCursor resume to mean anything.
   const sortedDirs = Array.from(byDir.keys()).sort();
+  const totalDirs = sortedDirs.length;
+
+  // Progress is reported per committed directory (matching the resumeCursor
+  // checkpoint granularity). Directories skipped by a resume cursor still
+  // count toward "done" — they're already processed from a previous run.
+  let doneDirs = 0;
+  const reportProgress = async (): Promise<void> => {
+    doneDirs += 1;
+    await opts.onScanProgress?.(doneDirs, totalDirs);
+  };
 
   for (const dir of sortedDirs) {
-    if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) continue;
+    if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) {
+      await reportProgress();
+      continue;
+    }
     const dirFiles = [...(byDir.get(dir) ?? [])].sort((a, b) => a.path.localeCompare(b.path));
     const probes = new Map(dirFiles.map((f) => [f.path, probeByPath.get(f.path) ?? null]));
 
@@ -576,6 +591,7 @@ export async function ingestLibrary(
         summary.moviesCreated += 1;
       }
       await opts.onDirectoryComplete?.(dir);
+      await reportProgress();
       continue;
     }
 
@@ -616,7 +632,13 @@ export async function ingestLibrary(
       const isMain = isEpisodeNamed || main.includes(file.path);
       let result: LeafResult | null = null;
       if (isOutlier) {
-        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null, deferArtwork, deferTrickplay, profile);
+        // The Mugen Train shape: a movie living inside a show folder. It
+        // stays *inside* the show — parented to the season, exactly like an
+        // episode — so it shows up under the series, not as a root-level
+        // standalone movie. Only files in a *flat* (non-season) directory are
+        // ever root-level movies; a movie inside a show folder is part of that
+        // show, full stop.
+        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", season.id, seasonNumber, deferArtwork, deferTrickplay, profile);
       } else if (isMain) {
         result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber, deferArtwork, deferTrickplay, profile);
       }
@@ -692,6 +714,7 @@ export async function ingestLibrary(
     }
 
     await opts.onDirectoryComplete?.(dir);
+    await reportProgress();
   }
 
   return summary;

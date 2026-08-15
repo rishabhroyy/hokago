@@ -58,6 +58,12 @@ services:
   valkey:
     image: valkey/valkey:8-bookworm
     restart: unless-stopped
+    # AOF on top of the RDB snapshot: the queue state (BullMQ jobs) lives
+    # here, and while the bind mount below survives container restarts and
+    # re-pulls, only append-mode covers a hard kill or power loss between
+    # RDB snapshots. The worker's boot reconciler re-derives any lost work
+    # from Postgres regardless — this just avoids the re-derivation wave.
+    command: ["valkey-server", "--appendonly", "yes"]
     ports:
       # Published for local dev (running apps/worker or apps/api directly on
       # the host, outside compose). Not required by any container — safe to

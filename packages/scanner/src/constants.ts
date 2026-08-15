@@ -99,8 +99,8 @@ export const SELF_HEALING_RETRY_BACKOFF_MS = 24 * 60 * 60 * 1000;
 // CPU/IO-bound and stateless per file, so the directory loop runs them with
 // bounded concurrency instead of serially. Generous defaults are fine — the
 // bottleneck these protect is process spawn cost, not RAM.
-export const PROBE_CONCURRENCY = 4;
-export const INGEST_CONCURRENCY = 4;
+export const PROBE_CONCURRENCY = 8;
+export const INGEST_CONCURRENCY = 8;
 
 const SEASON_DIR = /^season\s*0*(\d{1,3})$/i;
 const SEASON_DIR_SHORT = /^s0*(\d{1,3})$/i;

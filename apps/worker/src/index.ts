@@ -607,24 +607,26 @@ function makeProcessMetadata(providerName: string) {
 // One scan job per library; a single walk already parallelizes probe + leaf
 // work internally. HOKAGO_SCAN_CONCURRENCY > 1 lets several libraries scan
 // at once (each keeps its own pools — raise with caution on weak machines).
-const scanConcurrency = Math.max(1, Number(process.env.HOKAGO_SCAN_CONCURRENCY ?? 1));
+const scanConcurrency = Math.max(1, Number(process.env.HOKAGO_SCAN_CONCURRENCY ?? 2));
 const scanWorker = new Worker<ScanJobData>(QUEUE_NAMES.SCAN, processScan, {
   connection,
   concurrency: scanConcurrency,
 });
 // Artwork extraction is ffmpeg/CPU-bound — cap via HOKAGO_ARTWORK_CONCURRENCY
-// (default 4) so a big library scan fans out without melting the box. The
+// (default 8) so a big library scan fans out without melting the box. The
 // scan walk itself is parallelized inside the scanner (probe + leaf ingestion
 // pools), and this queue is what actually bounds total ffmpeg load.
-const artworkConcurrency = Math.max(1, Number(process.env.HOKAGO_ARTWORK_CONCURRENCY ?? 4));
+const artworkConcurrency = Math.max(1, Number(process.env.HOKAGO_ARTWORK_CONCURRENCY ?? 8));
 const artworkWorker = new Worker<ArtworkJobData>(QUEUE_NAMES.ARTWORK, processArtwork, {
   connection,
   concurrency: artworkConcurrency, // backpressure : bounded ffmpeg concurrency
 });
-// Trickplay decodes the whole file per job — the heaviest ffmpeg work in the
-// system. Each job extracts one sheet at a time (sequential ffmpeg inside the
-// job); HOKAGO_TRICKPLAY_CONCURRENCY (default 2) bounds concurrent decodes.
-const trickplayConcurrency = Math.max(1, Number(process.env.HOKAGO_TRICKPLAY_CONCURRENCY ?? 2));
+// Trickplay jobs are cheap since the per-tile rewrite: one keyframe-seek
+// ffmpeg spawn per tile, run sequentially inside the job. Concurrency here
+// bounds parallel sheet jobs (each a short-lived ffmpeg at a time), so it can
+// ride high — HOKAGO_TRICKPLAY_CONCURRENCY (default 8) keeps a wave moving
+// without ever decoding a whole window.
+const trickplayConcurrency = Math.max(1, Number(process.env.HOKAGO_TRICKPLAY_CONCURRENCY ?? 8));
 const trickplayWorker = new Worker<TrickplayJobData>(QUEUE_NAMES.TRICKPLAY, processTrickplay, {
   connection,
   concurrency: trickplayConcurrency,
@@ -642,18 +644,18 @@ const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, process
 const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
   TVMAZE: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_TVMAZE, makeProcessMetadata("TVMAZE"), {
     connection,
-    concurrency: 2,
+    concurrency: 3,
     limiter: { max: 20, duration: 10_000 }, // TVmaze: ≥20 calls/10s per IP
   }),
   ANILIST: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_ANILIST, makeProcessMetadata("ANILIST"), {
     connection,
-    concurrency: 2,
-    limiter: { max: 30, duration: 60_000 }, // AniList: currently degraded to 30/min
+    concurrency: 3,
+    limiter: { max: 45, duration: 60_000 }, // AniList: ~90/min nominal, 45 keeps 429s rare
   }),
   MAL: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_MAL, makeProcessMetadata("MAL"), {
     connection,
-    concurrency: 2,
-    limiter: { max: 60, duration: 60_000 }, // Jikan: ~60/min
+    concurrency: 3,
+    limiter: { max: 90, duration: 60_000 }, // Jikan: 3/s nominal, 90/min stays safely under
   }),
 };
 

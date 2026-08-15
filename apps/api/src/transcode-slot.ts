@@ -7,7 +7,7 @@
  * HOKAGO_MAX_TRANSCODES. DIRECT_PLAY sessions take no slot (no ffmpeg).
  */
 
-const MAX_TRANSCODES = Math.max(1, Number(process.env.HOKAGO_MAX_TRANSCODES ?? 2));
+const MAX_TRANSCODES = Math.max(1, Number(process.env.HOKAGO_MAX_TRANSCODES ?? 4));
 
 let active = 0;
 const waiters: Array<() => void> = [];

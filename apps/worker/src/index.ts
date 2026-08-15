@@ -540,6 +540,22 @@ async function processDownload(job: Job<DownloadJobData>): Promise<void> {
 }
 
 /**
+ * Provider failures that are transient by nature — rate limits, 5xx, network
+ * blips — must never count toward the poison threshold, or a degraded
+ * provider (AniList has been throttling at 30/min) parks a whole library in
+ * minutes. Only deterministic failures (404s, bad responses, unmatchable
+ * queries) poison. The metadata sweep re-drives transient losers until the
+ * provider recovers.
+ */
+function isTransientError(err: unknown): boolean {
+  const msg = err instanceof Error ? `${err.message} ${String(err.cause ?? "")}` : String(err);
+  if (/\b429\b|\b5\d\d\b/.test(msg)) return true;
+  return /rate\s?limit|too\s?many\s?requests|timed?\s?out|timeout|econnreset|enetunreach|eai_again|socket\s?hang\s?up|fetch\s?failed|temporarily\s?unavailable|service\s?unavailable|bad\s?gateway|gateway\s?timeout|internal\s?server\s?error|aborted|overload/i.test(
+    msg,
+  );
+}
+
+/**
  * Same degrade-never-error/poison-pill shape as processArtwork. `providerName`
  * is baked in per-queue (one handler instance per provider) — a miss doesn't
  * retry here, it enqueues the next provider in that item's chain, so BullMQ's
@@ -568,6 +584,11 @@ function makeProcessMetadata(providerName: string) {
         if (next) await enqueueMetadata(next, job.data);
       }
     } catch (err) {
+      // Transient (429 / 5xx / network blip): let the job complete without
+      // recording a failure — the metadata sweep keeps re-driving unresolved
+      // items until the provider recovers, and the counter stays honest so a
+      // later deterministic error still reaches the threshold on its own.
+      if (isTransientError(err)) return;
       const failure = await db.jobFailure.upsert({
         where: { mediaItemId_jobType: { mediaItemId, jobType } },
         create: { mediaItemId, jobType, attempts: 1, lastError: String(err) },
@@ -701,6 +722,24 @@ async function reconcile(): Promise<void> {
   // A MOVIE/SERIES missing an ExternalId for every provider in its own
   // chain has never been successfully resolved (or its match was lost) —
   // re-enqueue against the first provider, same as a fresh onMetadataNeeded.
+  const metadataReDerived = await reconcileMetadata();
+
+  console.log(
+    `reconciler: ${libraries.length} librar${libraries.length === 1 ? "y" : "ies"} re-enqueued, ` +
+      `${needingArtwork.length} artwork job(s) re-derived, ` +
+      `${needingTrickplay.length + staleTrickplay.length} trickplay job(s) re-derived, ` +
+      `${metadataReDerived} metadata job(s) re-derived`,
+  );
+}
+
+/**
+ * Metadata leg of reconcile — a MOVIE/SERIES missing an ExternalId for every
+ * provider in its own chain has never been successfully resolved (or its
+ * match was lost) — re-enqueue against the first provider, same as a fresh
+ * onMetadataNeeded.
+ */
+async function reconcileMetadata(): Promise<number> {
+  const libraries = await db.library.findMany({ where: { enabled: true } });
   let metadataReDerived = 0;
   for (const library of libraries) {
     for (const kind of ["MOVIE", "SERIES"] as const) {
@@ -729,12 +768,7 @@ async function reconcile(): Promise<void> {
     }
   }
 
-  console.log(
-    `reconciler: ${libraries.length} librar${libraries.length === 1 ? "y" : "ies"} re-enqueued, ` +
-      `${needingArtwork.length} artwork job(s) re-derived, ` +
-      `${needingTrickplay.length + staleTrickplay.length} trickplay job(s) re-derived, ` +
-      `${metadataReDerived} metadata job(s) re-derived`,
-  );
+  return metadataReDerived;
 }
 
 /**
@@ -777,3 +811,16 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 
 await reconcile();
 console.log("hokago-worker: up");
+
+// Transient provider failures (429/5xx/network — makeProcessMetadata) complete
+// without queue retries or poison rows, so a provider down during a scan or
+// boot relies on this sweep to keep re-driving unresolved items until it
+// recovers. One deterministic jobId per item keeps it from piling up.
+const metadataSweepMs = Math.max(60_000, Number(process.env.HOKAGO_METADATA_SWEEP_MS ?? 30 * 60_000));
+setInterval(() => {
+  reconcileMetadata()
+    .then((n) => {
+      if (n > 0) console.log(`metadata sweep: re-enqueued ${n} job(s)`);
+    })
+    .catch((err) => console.error("metadata sweep failed:", err));
+}, metadataSweepMs);

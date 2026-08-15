@@ -4,9 +4,10 @@ plugins {
 }
 
 // Versions are injected by CI from the git tag; local/dev builds use
-// gradle.properties defaults.
-val appVersionName: String = providers.gradleProperty("appVersionName").getOrElse("0.2.0")
-val appVersionCode: Int = providers.gradleProperty("appVersionCode").getOrElse("1").toInt()
+// gradle.properties defaults. (Named hokago* so they don't shadow the typed
+// accessors Gradle generates from the gradle.properties keys themselves.)
+val hokagoVersionName: String = providers.gradleProperty("appVersionName").getOrElse("0.2.0")
+val hokagoVersionCode: Int = providers.gradleProperty("appVersionCode").getOrElse("1").toInt()
 
 android {
     namespace = "com.hokago.app"
@@ -16,8 +17,8 @@ android {
         applicationId = "com.hokago.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = appVersionCode
-        versionName = appVersionName
+        versionCode = hokagoVersionCode
+        versionName = hokagoVersionName
     }
 
     flavorDimensions += "form"

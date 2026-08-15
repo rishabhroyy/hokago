@@ -32,7 +32,7 @@ jobs:
       - id: v
         run: |
           echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          echo "version=${{ github.ref_name }}" | sed 's/^v//' | awk '{print "version=" $0}' >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
   tauri-macos:
     needs: versions
@@ -207,6 +207,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.versions.outputs.tag }}
       - name: Build simulator app
+        working-directory: native/ios
         run: |
           xcodebuild -project hokago.xcodeproj -scheme hokago -configuration Release \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
@@ -214,6 +215,7 @@ jobs:
           ditto -ck --rsrc --sequesterRsrc build/Build/Products/Release-iphonesimulator/hokago.app \
             "hokago-${APP_VERSION}-ios-simulator.zip"
       - name: Build device IPA (unsigned — Sideloadly re-signs with your Apple ID)
+        working-directory: native/ios
         run: |
           xcodebuild -project hokago.xcodeproj -scheme hokago -configuration Release \
             -destination 'generic/platform=iOS' -derivedDataPath build \

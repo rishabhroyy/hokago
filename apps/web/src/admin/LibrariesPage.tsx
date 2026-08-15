@@ -3,6 +3,21 @@ import { adminApi, fmtBytes, fmtDate, fmtNum } from "../admin-api";
 import { ActionBtn, Badge, Card, Check, Empty, Field, PrimaryBtn, Table, Td, inputCls, type Toast } from "./ui";
 
 type Library = Awaited<ReturnType<typeof adminApi.libraries>>[number];
+
+function ScanProgress({ lib }: { lib: Library }) {
+  const pct = lib.scanProgress && lib.scanProgress.totalDirs > 0 ? Math.round((lib.scanProgress.doneDirs / lib.scanProgress.totalDirs) * 100) : 0;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono text-kicker font-bold tabular-nums text-wii-deep">
+        {lib.scanProgress?.doneDirs ?? 0} / {lib.scanProgress?.totalDirs ?? "…"}
+      </span>
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-paper ring-1 ring-line">
+        <span className="block h-full rounded-full bg-gradient-to-r from-wii-2 to-wii" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="text-small font-semibold text-ink-3">directories</span>
+    </div>
+  );
+}
 type LibForm = {
   name: string;
   rootPath: string;
@@ -37,6 +52,13 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
     adminApi.libraries().then(setLibs).catch(() => setLibs(null));
   }, []);
   useEffect(load, [load]);
+  // Poll every 3s while any library is mid-scan, so the progress bar moves.
+  useEffect(() => {
+    const scanning = () => libs?.some((l) => l.scanProgress != null) ?? false;
+    if (!scanning()) return;
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
+  }, [libs, load]);
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setShowForm(true); };
   const openEdit = (l: Library) => {
@@ -149,7 +171,9 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
                     {l.writable && <Badge tone="blue">writable</Badge>}
                   </span>
                 </Td>
-                <Td className="text-ink-2">{fmtDate(l.lastScanAt)}</Td>
+                <Td className="text-ink-2">
+                  {l.scanProgress ? <ScanProgress lib={l} /> : fmtDate(l.lastScanAt)}
+                </Td>
                 <Td><span className="flex justify-end gap-1.5">
                   <ActionBtn icon="scan" onClick={() => scan(l.id)}>Scan</ActionBtn>
                   <ActionBtn icon="edit" onClick={() => openEdit(l)}>Edit</ActionBtn>

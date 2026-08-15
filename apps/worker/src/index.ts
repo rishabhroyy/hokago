@@ -216,10 +216,15 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
   const summary = await ingestLibrary(db, library.id, library.rootPath, {
     resumeFromCursor: library.scanCursor,
     contentProfile: library.contentProfile,
- // Checkpointing : persist progress after every completed
+    // Checkpointing: persist progress after every completed
     // directory so a killed scan resumes instead of restarting from zero.
     onDirectoryComplete: async (dir) => {
       await db.library.update({ where: { id: library.id }, data: { scanCursor: dir } });
+    },
+    // Expose scan progress to BullMQ so the admin console can show "N of M
+    // directories done" — same granularity as the checkpoint cursor.
+    onScanProgress: async (doneDirs, totalDirs) => {
+      await job.updateProgress({ doneDirs, totalDirs });
     },
     onArtworkNeeded: enqueueArtwork,
     onTrickplayNeeded: enqueueTrickplay,

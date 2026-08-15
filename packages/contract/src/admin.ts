@@ -79,6 +79,8 @@ export const AdminLibrary = z.object({
   lastScanAt: z.coerce.date().nullable(),
   itemCount: z.number(),
   storageBytes: z.number(),
+  /** Live scan progress from the BullMQ job — null when no scan is running. */
+  scanProgress: z.object({ doneDirs: z.number(), totalDirs: z.number() }).nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });

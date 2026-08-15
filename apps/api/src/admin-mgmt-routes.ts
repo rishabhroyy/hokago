@@ -112,12 +112,25 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
       JOIN media_items i ON i.id = f."mediaItemId"
       GROUP BY i."libraryId"`;
     const storage = new Map(storageRows.map((r) => [r.libraryId, Number(r.bytes)]));
+    // Live scan progress for every library from the BullMQ scan queue — the
+    // deterministic jobId (scanJobId) makes getJob a cheap per-library lookup.
+    const scanProgress = new Map<string, { doneDirs: number; totalDirs: number }>();
+    for (const lib of libs) {
+      const job = await scanQueue.getJob(scanJobId(lib.id));
+      if (job && job.finishedOn == null) {
+        const p = job.progress as { doneDirs?: number; totalDirs?: number } | number | undefined;
+        if (p && typeof p === "object" && typeof p.totalDirs === "number") {
+          scanProgress.set(lib.id, { doneDirs: p.doneDirs ?? 0, totalDirs: p.totalDirs });
+        }
+      }
+    }
     return libs.map(({ _count, ...lib }) => ({
       ...lib,
       mediaKinds: lib.mediaKinds as AdminLibrary["mediaKinds"],
       providerOrder: lib.providerOrder as AdminLibrary["providerOrder"],
       itemCount: _count.items,
       storageBytes: storage.get(lib.id) ?? 0,
+      scanProgress: scanProgress.get(lib.id) ?? null,
     }));
   });
 
@@ -141,7 +154,26 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
           },
         });
         if (lib.enabled) await enqueueScan(lib.id).catch(() => {});
-        return reply.code(201).send({ ...lib, mediaKinds: lib.mediaKinds as AdminLibrary["mediaKinds"], providerOrder: lib.providerOrder as AdminLibrary["providerOrder"], itemCount: 0, storageBytes: 0 });
+        const created: AdminLibrary = {
+          id: lib.id,
+          name: lib.name,
+          rootPath: lib.rootPath,
+          contentProfile: lib.contentProfile as AdminLibrary["contentProfile"],
+          mediaKinds: lib.mediaKinds as AdminLibrary["mediaKinds"],
+          providerOrder: lib.providerOrder as AdminLibrary["providerOrder"],
+          scanMode: lib.scanMode as AdminLibrary["scanMode"],
+          writable: lib.writable,
+          composeAllPosters: lib.composeAllPosters,
+          enabled: lib.enabled,
+          hiddenFromHome: lib.hiddenFromHome,
+          lastScanAt: lib.lastScanAt,
+          itemCount: 0,
+          storageBytes: 0,
+          scanProgress: null,
+          createdAt: lib.createdAt,
+          updatedAt: lib.updatedAt,
+        };
+        return reply.code(201).send(created);
       } catch (err) {
         if ((err as { code?: string }).code === "P2002") {
           return reply.code(409).send({ error: "rootPath already used by another library" });
@@ -162,7 +194,15 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
         db.mediaItem.count({ where: { libraryId: lib.id } }),
         libraryStorageBytes(lib.id),
       ]);
-      return { ...lib, mediaKinds: lib.mediaKinds as AdminLibrary["mediaKinds"], providerOrder: lib.providerOrder as AdminLibrary["providerOrder"], itemCount, storageBytes };
+      const job = await scanQueue.getJob(scanJobId(lib.id));
+      let scanProgress: { doneDirs: number; totalDirs: number } | null = null;
+      if (job && job.finishedOn == null) {
+        const p = job.progress as { doneDirs?: number; totalDirs?: number } | number | undefined;
+        if (p && typeof p === "object" && typeof p.totalDirs === "number") {
+          scanProgress = { doneDirs: p.doneDirs ?? 0, totalDirs: p.totalDirs };
+        }
+      }
+      return { ...lib, mediaKinds: lib.mediaKinds as AdminLibrary["mediaKinds"], providerOrder: lib.providerOrder as AdminLibrary["providerOrder"], itemCount, storageBytes, scanProgress };
     },
   );
 

@@ -4,6 +4,7 @@ mod bridge;
 mod config;
 
 use std::io::{Read, Seek};
+use tauri::Manager;
 use tauri::Runtime;
 
 /// Serves `hokago-file://<absolute-path>` bytes (the webview's offline player).
@@ -32,10 +33,9 @@ fn file_scheme_handler<R: Runtime>(
                     let end = end.min(len.saturating_sub(1));
                     let count = end.saturating_sub(start).saturating_add(1);
                     let mut buf = vec![0u8; count as usize];
-                    let mut slice = (&mut file).take(count);
-                    // seek to start
+                    // seek to start, then read exactly `count` bytes
                     file.seek(std::io::SeekFrom::Start(start)).ok();
-                    slice.read_exact(&mut buf).ok();
+                    (&mut file).take(count).read_exact(&mut buf).ok();
                     (
                         buf,
                         tauri::http::StatusCode::PARTIAL_CONTENT,
@@ -78,7 +78,7 @@ fn spa_scheme_handler<R: Runtime>(
     request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     use std::path::PathBuf;
-    let root = ctx.app_handle().path().resource_dir().unwrap_or_else(|| PathBuf::from(".")).join("web-dist");
+    let root = ctx.app_handle().path().resource_dir().unwrap_or_else(|_| PathBuf::from(".")).join("web-dist");
     let raw_path = request.uri().path().to_string();
     let rel = raw_path.trim_start_matches('/');
     let mut file_path = root.join(rel);

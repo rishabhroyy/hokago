@@ -1,25 +1,34 @@
-# Native clients — intentions & architecture
+# Native clients — architecture & implementation
 
-Status: **backend plumbing is done; no native client exists yet.** This file is
-the contract for future agents who build the client suite. If the code and this
-file disagree, the code is right — fix this file.
+Status: **implemented.** The backend plumbing, the bridge contract, the web-side
+TV/downloads/update-gate code, and all three shell families (Tauri desktop,
+iOS WKWebView, Android WebView phone+TV) exist, and `.github/workflows/native.yml`
+builds and releases them on every `v*` tag. If the code and this file disagree,
+the code is right — fix this file.
 
 ## North star
 
-- **One codebase, one UI.** `apps/web` is the single source of truth for the UI
-  (React + Tailwind + the hardcoded design in `tailwind.config.ts`/`app.css`).
-  Every native app is a thin **webview shell** embedding that same app, so the
-  UI is 1:1 byte-for-byte across web/mobile/desktop/TV. Any approach that
-  re-implements the UI in a native toolkit (SwiftUI/Compose/RN-rendered) is a
-  second codebase to keep in sync and is **rejected**.
-- **Native feel comes from bridges, not from re-rendering.** Each shell
-  provides: a native media player, a native download manager + file storage, a
-  secure token store, native scroll/gesture physics, and (TV) remote/D-pad key
-  mapping onto DOM events. The web app must not be forked to add these — it
-  talks to a platform bridge instead.
+- **One codebase, one UI, one player.** `apps/web` is the single source of truth
+  for the UI **and the media player** (React + Tailwind + vidstack + hls.js +
+  JASSUB). Every native app is a thin **webview shell** embedding the same SPA,
+  so the UI and playback are byte-for-byte identical across web/mobile/desktop/
+  TV. Any approach that re-implements the UI *or* the player in a native toolkit
+  (SwiftUI/Compose/AVPlayer/ExoPlayer) is a second codebase to keep in sync and
+  is **rejected**. There is no native media player; the web player runs inside
+  the webview on every platform.
+- **Bridges are narrow.** A shell only supplies what a webview cannot:
+  stable per-install identity, a secure store that survives webview data wipes,
+  and (non-TV) real download bytes to device storage. Everything else — routing,
+  auth, TV pairing, account switching, D-pad navigation, playback decisions —
+  lives in the web app and is exercised identically in a plain browser.
 - **Clients are thin.** All logic, decisions, and state (playback method,
   transcoding, watch state, downloads) live server-side. A client just calls
   the typed API and plays bytes.
+- **Updates are Discord-style.** The SPA is fetched fresh from the server on
+  every launch — a webview shell can never ship stale UI. The shell itself
+  only needs updating when *native* capabilities change, which the web app
+  detects via `window.hokagoNative.appVersion` against `MIN_NATIVE_VERSION`
+  and surfaces through `NativeUpdateGate`.
 - **Chromecast is never** (invariant). AirPlay rides along with the native
   clients (it's just a playback target profile).
 
@@ -27,121 +36,315 @@ file disagree, the code is right — fix this file.
 
 | Platform | Shell | Player | Downloads | Auth UI |
 |---|---|---|---|---|
-| Web | browser | vidstack + hls.js + JASSUB | — (never, browser) | login/pair |
-| iOS / iPadOS | Capacitor (or native WKWebView shell) | AVPlayer | yes (via bridge) | login + pair |
-| Android | Capacitor | ExoPlayer / Media3 | yes | login + pair |
-| macOS / Windows / Linux | Tauri | libmpv / system media framework | yes | login + pair |
-| tvOS | native TVML/webview shell | AVPlayer | **no** (by design) | **pairing only** (no keyboard) |
-| Android TV / Google TV | webview shell | ExoPlayer | **no** | **pairing only** |
+| Web | browser | vidstack + hls.js + JASSUB (in-app) | — (never, browser) | login/pair |
+| iOS / iPadOS | native WKWebView (no Capacitor) | web player in webview | yes (native, `downloads.save`) | login + pair |
+| Android (phone) | native WebView | web player in webview | yes | login + pair |
+| macOS / Windows / Linux | Tauri 2 | web player in webview | yes (native, `~/Downloads/hokago/`) | login + pair |
+| Android TV / Google TV | native WebView (same app, `tv` flavor) | web player in webview | **no** (by design) | **pairing only** + account switcher |
+| ~~tvOS~~ | — | — | — | — |
+
+**tvOS was dropped**: Apple forbids third-party apps from using WKWebView on
+tvOS, so a tvOS client would mean re-implementing the entire UI in SwiftUI —
+a second codebase, rejected by the north star. Android TV keeps WebView
+availability, so it ships.
 
 TV apps must not offer downloads/offline (explicit product decision). They
 authenticate exclusively through the TV pairing flow — there is no soft
-keyboard password entry.
+keyboard password entry — and multi-profile switching happens in-app via the
+account switcher (no passwords needed; sessions are already on the device).
+
+## The bridge contract (implemented, `packages/native-bridge`)
+
+Every shell injects a `window.hokagoNative` object into **every page load** of
+the remote SPA, before the first script runs (Tauri: `on_page_load` eval of a
+generated script; iOS: a `WKUserScript` at document start; Android:
+`evaluateJavascript` on `onPageStarted`). The web app treats it as an optional
+capability layer — the browser build never sees it, and every consumer degrades
+gracefully. The single source of truth is
+`packages/native-bridge/src/bridge.ts`; shells must match it exactly.
+
+```ts
+interface NativeBridge {
+  platform: "ios" | "android" | "macos" | "windows" | "linux" | "androidtv" | "googletv";
+  appVersion: string;   // the git tag, e.g. "0.2.0" — the web gates on MIN_NATIVE_VERSION
+  appBuild: string;     // native build number (CFBundleVersion / versionCode)
+  clientKey: string;    // stable per-install UUID, sent as LoginBody.clientKey / PairingRequestBody.clientKey
+  storage: { get(key): string | null; set(key, value): void; delete(key): void };  // synchronous
+  downloads: {
+    save(url: string, filename: string): Promise<{ localPath: string; sizeBytes: number }>;
+    open?(localPath: string): void;   // desktop only: reveal in file manager
+  };
+}
+```
+
+- **Storage** is a *mirror*. The web app keeps its canonical tokens in
+  `localStorage` and writes every change through to `bridge.storage` too; the
+  shell persists that copy in the OS secure store (Tauri: keyring with a plain
+  file fallback for headless Linux; iOS: Keychain; Android: AES-GCM wrapped by
+  the Android Keystore, plain-prefs fallback). Result: wiping webview storage
+  never kills a session. Reads are synchronous everywhere (Android's
+  `addJavascriptInterface` and Tauri's IPC are sync; iOS serves reads from
+  localStorage and re-seeds it asynchronously from the Keychain after a wipe).
+- **Native → web events**: shells dispatch
+  `window.dispatchEvent(new CustomEvent("hokago-native", { detail: { type: ... } }))`.
+  `type: "back"` is the one consumed by the web app (TV/remote back at router
+  root). Download completion uses an internal `downloadResult` correlation id
+  that the injected shim resolves into the `downloads.save` promise.
+- **Downloads never see tokens in JS.** The web hands the shell a resolved
+  artifact URL + filename; the native side attaches `Authorization: Bearer
+  <token>` from its own secure-store mirror (`hokago_access_token`). The web
+  keeps that mirror warm via `startTokenWarmth` (refresh every 4 min while a
+  shell session is alive).
+- **Base URL**: each shell has a first-run setup screen (Tauri: a local
+  `index.html` in `native/tauri/ui/`; iOS: `ServerSetupViewController`; Android:
+  an inline setup view) that stores the server URL and navigates the webview to
+  it. The web app resolves origin-relative API paths against `window.location`
+  via `resolveUrl` (`packages/native-bridge/src/bridge.ts`) — no client code
+  assumes a fixed host.
 
 ## How the web app runs in a shell
 
-The shell loads the built SPA (the API serves it at `/`; the shell can also
-bundle it offline-updatable). Configuration that must flow shell → web app:
+1. **Base URL** — first-run setup screen per shell; stored in native config
+   (`{config_dir}/hokago/server.json` on desktop, `UserDefaults`/prefs elsewhere).
+   Desktop exposes a "Change Server…" menu item that navigates back to the setup
+   page (`show_setup` command).
+2. **Token store** — `apps/web/src/api-client.ts` writes through the bridge
+   (`read`/`write`/`erase` in `api-client.ts`), falling back to `localStorage`
+   in a browser. The cookie mirror (`hokago_access`, SameSite=Lax) stays for the
+   web player's subresource fetches (`<video>`/`<img>`/fonts can't send headers);
+   native downloaders send `Authorization` themselves and need no cookie.
+3. **TV mode** (Android TV/Google TV) — entirely web-side: pairing
+   (`TvPairFlow`, `POST /auth/pair/request` + poll `/status` at ~3.5s to stay
+   under the 20/min limit), the account switcher (`TvAccountsView`, sessions in
+   `tv-session.ts` keyed per account, active account drives `api-client.ts`),
+   and D-pad navigation (`useTvKeyboardNav` in `apps/web/src/ui/tv-keys.ts` —
+   TV focusables are real `button`/`a`/`[tabindex]` elements, and the media grid
+   already is). The shell only hosts the SPA and forwards `KEYCODE_BACK`.
+4. **Downloads UI** — `DownloadsView` + `apps/web/src/downloads.ts`: enumerate
+   files (`GET /media-items/:id/files`) → `POST /downloads` → poll `GET
+   /downloads/:id` until `READY` → `GET /downloads/:id/artifact` →
+   `bridge.downloads.save(url, filename)` → native bytes land in
+   `~/Downloads/hokago/` (desktop), `Documents/hokago/` (iOS), or
+   `Download/hokago/` (Android). Downloads are hidden on TV platforms and in a
+   plain browser.
 
-1. **Base URL** — where the API lives. All API calls go through
-   `createHokagoClient(baseUrl, { fetch })` (`packages/contract/src/client.ts`);
-   the shell injects `baseUrl` (via query param, `localStorage` seed, or a
-   `window.hokagoConfig` bridge).
-2. **Token store** — `apps/web/src/api-client.ts` persists tokens in
-   `localStorage` + a cookie mirror. In a shell these must be swapped for the
-   native secure store (Keychain/Keystore/`keytar`): implement the
-   `Storage`/`SecureStorage` bridge and wire it into `api-client.ts`. The
-   cookie mirror is web-only (media elements can't send headers) — a native
-   player sends `Authorization: Bearer` itself, so no cookie is needed.
-3. **Embedded relative URLs** — the API emits origin-relative paths
-   (`posterUrl`, `playlistUrl`, `streamUrl`, download artifact URLs). Clients
-   resolve them against the configured base URL. No client code may assume
-   same-origin or a fixed host.
+## Update policy
 
-## The platform bridge interface (to build)
+`packages/native-bridge/src/versions.ts` holds `MIN_NATIVE_VERSION` (the
+minimum *shell* version the current web UI requires) plus per-platform store
+URLs. The web app compares `window.hokagoNative.appVersion` against it and
+renders `NativeUpdateGate` when the shell is too old. Bump `MIN_NATIVE_VERSION`
+only when a change touches native-level capability (a new bridge method, a
+player/font API the old webview can't run). Pure web changes never require a
+store update — the next launch just fetches the new SPA.
 
-Define one typed bridge (`packages/client-core` or similar; web app imports it
-with a no-op browser implementation). Suggested surface:
+## Shell implementations
 
-- `storage` / `secureStorage` (get/set/delete) — `api-client.ts`, `track-prefs.ts`, `useTheme.tsx`
-- `baseUrl` (+ `resolveUrl(relative)` for every `src`/`url` the web app embeds)
-- `nativePlayer` — swap vidstack+hls.js+JASSUB for AVPlayer/ExoPlayer/libmpv. The **protocol** to reimplement is `WatchPage.tsx`'s contract: `POST /playback/start` → decide DIRECT_PLAY (play `/media-files/:id/direct`), REMUX (`streamUrl`, progressive MP4), or TRANSCODE (`playlistUrl`, HLS); the timeline-offset math (`actualStartMs`/`resumePositionMs`), the seek/audio/quality restart pump, heartbeat at 10s, and `POST /playback/:sessionId/stop`.
-- `downloadManager` — orchestrate `/downloads`, persist bytes to app sandbox storage, track per-item progress, serve the local file to the player, register subtitles/fonts for the offline renderer.
-- `watchState` — offline progress queue; on reconnect `POST /watch-state/sync`.
-- TV: `keyMapper` (D-pad/back/OK → DOM `keydown`), and `pairFlow` (request/status polling).
-- Deep links / router: the web app's router uses `history.pushState` — shells map app-link URIs (e.g. `hokago://title/...`) into `location` before load.
+- **Tauri desktop** (`native/tauri`) — Tauri 2, wry webview, config +
+  clientKey in `src-tauri/src/config.rs`, bridge + keyring mirror + reqwest
+  downloads in `src-tauri/src/bridge.rs`. Remote origins (`http(s)://**`) get
+  core IPC via the capability in `src-tauri/capabilities/main.json`. Icon: a
+  committed 1024px `icon.png`; CI runs `tauri icon` to derive `.icns`/`.ico`.
+- **iOS** (`native/ios`) — raw WKWebView, no Capacitor. Xcode project generated
+  from `project.yml` with XcodeGen (committed; CI runs `brew install xcodegen
+  && xcodegen generate`). Bridge: `WKUserScript` at document start + a
+  `WKScriptMessageHandler`; tokens in the Keychain; downloads via
+  `URLSession.downloadTask` with the Bearer header.
+- **Android** (`native/android`) — raw WebView with a synchronous
+  `addJavascriptInterface` bridge; phone + TV product flavors; AES-GCM
+  Keystore-backed secure store; downloads via `HttpURLConnection` into public
+  Downloads (opened with a FileProvider). Gradle wrapper is **not** committed —
+  CI uses `gradle/actions/setup-gradle` with `gradle-version` and invokes
+  `gradle` directly.
+
+## CI delivery (`.github/workflows/native.yml`)
+
+On every `v*` tag: `tauri-macos` (arm64 .dmg), `tauri-windows` (x64 .msi),
+`tauri-linux` (AppImage/deb), `ios` (simulator .zip; signed device build when
+`IOS_CERT_P12_BASE64` is present), `android` (phone + TV release APKs). Each job
+strips the leading `v` and bakes the tag into the app version (Cargo.toml +
+tauri.conf.json for Tauri, project.yml for XcodeGen, `-PappVersion*` for
+Gradle); tauri-action and `gh release upload` attach artifacts to a draft
+GitHub Release named `hokago <tag>`. `release.yml` (GHCR image) and
+`native.yml` (clients) both trigger on the same tag; neither needs the other to
+run.
 
 ## Backend plumbing — DONE (do not rebuild)
 
 Everything below is implemented and working; build on it, don't replace it.
 
 ### Auth & devices
-- **Persistent sessions** already existed (15m access JWT + 30d sliding opaque refresh token, hashed in the revocable `sessions` table). Native clients log in once, store the refresh token in the secure store, and refresh silently forever.
-- **Device registration**: `POST /auth/login` accepts `clientKey` (stable per-install UUID) + `deviceName` + `platform`; the server upserts a `Device` row and binds the session to it (`Device` model). `GET /auth/devices`, `DELETE /auth/devices/:id` (revokes every session bound to it and cascades its downloads).
-- **TV pairing** (no password entry on TVs): `POST /auth/pair/request` (TV, unauthenticated, rate-limited) → 6-digit code; `POST /auth/pair/verify` (logged-in phone/PC) approves it and registers the TV's `Device`; `POST /auth/pair/status` (TV polls) mints the session **exactly once** (atomic APPROVED→COMPLETE claim) and returns tokens + `deviceId`.
-- **Liveness re-check**: access tokens carry `sessionId`; `authenticate` re-checks the session isn't revoked and the account isn't disabled (30s in-memory cache; revoke/logout invalidate it immediately). Revoked/disabled accounts lose access within seconds, not 15m.
-- **Login/pairing rate limiting**: in-memory sliding window, per real client IP and per username (`HOKAGO_LOGIN_RATE_LIMIT_IP`, `HOKAGO_LOGIN_RATE_LIMIT_USERNAME`).
+- **Persistent sessions** already existed (15m access JWT + 30d sliding opaque
+  refresh token, hashed in the revocable `sessions` table). Native clients log
+  in once, store the refresh token in the secure store, and refresh silently
+  forever.
+- **Device registration**: `POST /auth/login` accepts `clientKey` (stable
+  per-install UUID) + `deviceName` + `platform`; the server upserts a `Device`
+  row and binds the session to it. `GET /auth/devices`, `DELETE /auth/devices/:id`
+  (revokes every session bound to it and cascades its downloads).
+- **Multi-account devices**: a device may be paired to many accounts via the
+  `DeviceAccount` join model. The device list shows owned **and** linked
+  devices; deleting a device is allowed by the owner *or* any linked account.
+  This is what makes TV account switching possible without re-pairing.
+- **TV pairing** (no password entry on TVs): `POST /auth/pair/request` (TV,
+  unauthenticated, rate-limited) → 6-digit code; `POST /auth/pair/verify`
+  (logged-in phone/PC) approves it and registers the TV's `Device`;
+  `POST /auth/pair/status` (TV polls) mints the session **exactly once**
+  (atomic APPROVED→COMPLETE claim) and returns tokens + `deviceId` + `username`
+  (so the TV can label the newly added account).
+- **Liveness re-check**: access tokens carry `sessionId`; `authenticate`
+  re-checks the session isn't revoked and the account isn't disabled (30s
+  in-memory cache; revoke/logout invalidate it immediately). Revoked/disabled
+  accounts lose access within seconds, not 15m.
+- **Login/pairing rate limiting**: in-memory sliding window, per real client IP
+  and per username (`HOKAGO_LOGIN_RATE_LIMIT_IP`,
+  `HOKAGO_LOGIN_RATE_LIMIT_USERNAME`).
 
 ### Network topology support
-- **Real client IP**: `clientIp()` (`apps/api/src/rate-limit.ts`) prefers `CF-Connecting-IP` (always trusted — Cloudflare), otherwise the resolvers on Fastify `req.ip` backed by `trustProxy` configured from `HOKAGO_TRUST_PROXY` — `true`, a hop count (`1`/`2`), or a comma-separated proxy IP list (opts in; a mis-set trust flag lets anyone forge their rate-limit bucket). Set it when behind nginx/caddy/CF Tunnel.
-- **Proxy-friendly URLs**: the API only ever emits origin-relative paths; proxies at any prefix that preserves paths work. **Sub-path hosting** (`/hokago/...`) is deliberately out of scope — a host should own its root (subdomain per service), and the app is not base-path aware. Never add `HOKAGO_BASE_PATH`/`basePath` plumbing.
-- **WebSockets** (watch party `/ws/party/*`, presence `/ws/presence`) authenticate via JWT query param; reverse proxies must forward the `Upgrade`/`Connection` headers (Cloudflare Tunnel does; nginx needs `proxy_set_header Upgrade $http_upgrade;`).
-- **Streaming through proxies**: preserve `Range`/206, do not buffer long responses, set generous timeouts (HLS segments are on-demand ffmpeg; REMUX blocks until the remux completes). COOP/COEP headers (set by `web-routes.ts`) must pass through or JASSUB offline fonts break.
+- **Real client IP**: `clientIp()` (`apps/api/src/rate-limit.ts`) prefers
+  `CF-Connecting-IP` (always trusted — Cloudflare), otherwise the resolvers on
+  Fastify `req.ip` backed by `trustProxy` configured from `HOKAGO_TRUST_PROXY` —
+  `true`, a hop count (`1`/`2`), or a comma-separated proxy IP list. Set it when
+  behind nginx/caddy/CF Tunnel.
+- **Proxy-friendly URLs**: the API only ever emits origin-relative paths;
+  proxies at any prefix that preserves paths work. **Sub-path hosting**
+  (`/hokago/...`) is deliberately out of scope — a host should own its root, and
+  the app is not base-path aware. Never add `HOKAGO_BASE_PATH`/`basePath`
+  plumbing.
+- **WebSockets** (watch party `/ws/party/*`, presence `/ws/presence`)
+  authenticate via JWT query param; reverse proxies must forward the
+  `Upgrade`/`Connection` headers.
+- **Streaming through proxies**: preserve `Range`/206, do not buffer long
+  responses, set generous timeouts (HLS segments are on-demand ffmpeg; REMUX
+  blocks until the remux completes). COOP/COEP headers (set by `web-routes.ts`)
+  must pass through or JASSUB offline fonts break.
 
 ### Offline downloads
-- `POST /downloads` (`{mediaItemId, mediaFileId, deviceId, variant, subtitleTrackIds?}`).
+- `POST /downloads` (`{mediaItemId, mediaFileId, deviceId, variant,
+  subtitleTrackIds?}`).
   - `variant: {kind: "original"}` — the raw file, copied.
-  - `variant: {kind: "transcode", maxHeight?, maxBitrateKbps?}` — ffmpeg to a self-contained **faststart MP4** (h264 8-bit 4:2:0, AAC, `buildDownloadArgs` in `packages/ffmpeg/src/download.ts`). Caps are clamped like playback.
-  - Text subtitle tracks (SRT/VTT/ASS) are packaged as sidecars for either variant; a bitmap track (PGS/VOBSUB/DVBSUB) on `original` is rejected (422) and on `transcode` is burned into the encode. ASS tracks pull the file's fonts (`MediaFileFont` → `/config/fonts/<hash>`) into the artifact.
-- Worker job (`download` BullMQ queue, `HOKAGO_DOWNLOAD_CONCURRENCY` default 2) builds the artifact in `configDir()/downloads/<id>` **atomically** (tmp dir → rename), writes `manifest.json`, and flips the `Download` row to `READY`.
+  - `variant: {kind: "transcode", maxHeight?, maxBitrateKbps?}` — ffmpeg to a
+    self-contained **faststart MP4** (h264 8-bit 4:2:0, AAC, `buildDownloadArgs`
+    in `packages/ffmpeg/src/download.ts`). Caps are clamped like playback.
+  - Text subtitle tracks (SRT/VTT/ASS) are packaged as sidecars for either
+    variant; a bitmap track (PGS/VOBSUB/DVBSUB) on `original` is rejected (422)
+    and on `transcode` is burned into the encode. ASS tracks pull the file's
+    fonts (`MediaFileFont` → `/config/fonts/<hash>`) into the artifact.
+- Worker job (`download` BullMQ queue, `HOKAGO_DOWNLOAD_CONCURRENCY` default 2)
+  builds the artifact in `configDir()/downloads/<id>` **atomically** (tmp dir →
+  rename), writes `manifest.json`, and flips the `Download` row to `READY`.
 - Serving (all authenticated, all origin-relative):
   - `GET /downloads` · `GET /downloads/:id` · `DELETE /downloads/:id`
   - `GET /downloads/:id/artifact` — manifest (media + subtitle sidecars + fonts)
-  - `GET /downloads/:id/artifact/media` (Range/206) · `.../subtitles/:trackId` · `.../fonts/:hash`
-- A client's download flow: enumerate files via `GET /media-items/:id/files` → create the download → poll `GET /downloads/:id` until `READY` → fetch the artifact → store locally → delete the server copy when confirmed on-device (or keep for other devices). Downloads are per-device (device-scoped) and server-tracked.
-- **Offline playback state**: play locally, queue progress, then `POST /watch-state/sync` (`{profileId, entries[]}`) on reconnect — upserts the same `PlaybackState` rows heartbeats write (continue-watching/resume just work). No `WatchDay` credit for offline time (live-heartbeat only, by design).
+  - `GET /downloads/:id/artifact/media` (Range/206) · `.../subtitles/:trackId` ·
+    `.../fonts/:hash`
+- A client's download flow: enumerate files via `GET /media-items/:id/files` →
+  create the download → poll `GET /downloads/:id` until `READY` → fetch the
+  artifact → store locally → delete the server copy when confirmed on-device.
+  Downloads are per-device and device-scoped; a device may be owned or linked
+  (multi-account). `watch-state/sync` covers offline playback progress.
 
 ### Files manifest
-`GET /media-items/:id/files` lists **all** of an item's playable files (browse only ever exposed the first): container, duration, size, bitrate, video stream summary, full audio/subtitle track lists, and `isPrimary`. This is what the download/version picker uses.
+`GET /media-items/:id/files` lists **all** of an item's playable files (browse
+only ever exposed the first): container, duration, size, bitrate, video stream
+summary, full audio/subtitle track lists, and `isPrimary`. This is what the
+download/version picker uses.
 
 ### Typed client
-All new routes are in the OpenAPI doc; binary routes (direct file, subtitle text, fonts, trickplay sheets, HLS playlist/segments, download artifacts) are now registered too (typed as strings — `openapi-fetch` returns a `Response` regardless). Regenerate with `pnpm --filter @hokago/contract generate` after contract changes.
+All new routes are in the OpenAPI doc; binary routes (direct file, subtitle
+text, fonts, trickplay sheets, HLS playlist/segments, download artifacts) are
+registered too (typed as strings — `openapi-fetch` returns a `Response`
+regardless). Regenerate with `pnpm --filter @hokago/contract generate` after
+contract changes.
 
 ## Client auth flows
 
-1. **First launch (mobile/desktop)**: username/password once → store `refreshToken` + `sessionId` in the secure store → silent refresh forever. Send `clientKey` (persisted UUID) + `deviceName` + `platform` on login so the device appears in the account's device list.
-2. **TV**: `pair/request` → show 6-digit code + a "enter code at <server>/pair" hint → poll `pair/status` (every ~5s) → on `COMPLETE`, store the returned tokens exactly like login. Handle `EXPIRED` by re-requesting.
-3. **Logout**: `POST /auth/logout` with the refresh token (revokes the session server-side), clear the secure store.
-4. **Token refresh**: mirror `api-client.ts` (single in-flight refresh mutex, refresh when <60s left, one 401 retry). A failed refresh = session over → clear → login/pair UI.
+1. **First launch (mobile/desktop)**: username/password once → store
+   `refreshToken` + `sessionId` in the secure store → silent refresh forever.
+   Send `clientKey` (persisted UUID) + `deviceName` + `platform` on login so
+   the device appears in the account's device list.
+2. **TV**: `pair/request` → show 6-digit code + a "enter code at <server>/pair"
+   hint → poll `pair/status` (every ~3.5s; 20/min limit) → on `COMPLETE`, store
+   the returned tokens as a new account (label it with the returned `username`)
+   and switch to it. Handle `EXPIRED` by re-requesting.
+3. **TV account switching**: `TvAccountsView` lists the accounts paired to this
+   device (`GET /auth/devices` + `DeviceAccount` links); switching sets the
+   active account (`tv-session.ts`) and reloads — no password needed.
+4. **Logout**: `POST /auth/logout` with the refresh token (revokes the session
+   server-side), clear the secure store.
+5. **Token refresh**: mirror `api-client.ts` (single in-flight refresh mutex,
+   refresh when <60s left, one 401 retry). A failed refresh = session over →
+   clear → login/pair UI.
 
 ## Deployment topologies the clients must tolerate
 
-- **Tailscale**: works with no special handling — the client just needs a base URL (`http://<tailscale-host>:3000` or a tailnet HTTPS hostname).
-- **Cloudflare Tunnel**: enable WebSockets (on by default in `cloudflared`); rate limiting uses `CF-Connecting-IP` automatically.
-- **Cloudflare Zero Trust (Access) in front**: interactive SSO can't run inside a native app, and hokago has its own auth. The recommended setup: a Cloudflare Access policy that does **not** require identity for the hokago hostname (IP/tunnel-allow only), leaving hokago's JWT auth as the single auth layer. If policy-level auth is required, use an Access **service token** (client-id/secret headers) baked into the native client — but hokago's API is not Access-aware and won't consume Access headers itself.
-- **nginx/caddy/other**: `HOKAGO_TRUST_PROXY` (`true` for a single proxy hop, a hop count for chains, or a comma-separated proxy IP list) + forward `X-Forwarded-For`/`X-Forwarded-Proto`; forward WebSocket `Upgrade`; keep `Range` + COOP/COEP headers; raise buffering/timeouts for streaming.
-- **With or without a proxy**: the API binds `0.0.0.0:3000` and serves the SPA itself. No proxy config is ever required; everything is origin-relative so subdomain-proxying works out of the box.
+- **Tailscale**: works with no special handling — the client just needs a base
+  URL (`http://<tailscale-host>:3000` or a tailnet HTTPS hostname).
+- **Cloudflare Tunnel**: enable WebSockets (on by default in `cloudflared`);
+  rate limiting uses `CF-Connecting-IP` automatically.
+- **Cloudflare Zero Trust (Access) in front**: interactive SSO can't run inside
+  a native app, and hokago has its own auth. Recommended: a Cloudflare Access
+  policy that does **not** require identity for the hokago hostname
+  (IP/tunnel-allow only), leaving hokago's JWT auth as the single auth layer.
+  If policy-level auth is required, use an Access **service token**
+  (client-id/secret headers) baked into the native client — but hokago's API is
+  not Access-aware and won't consume Access headers itself.
+- **nginx/caddy/other**: `HOKAGO_TRUST_PROXY` + forward
+  `X-Forwarded-For`/`X-Forwarded-Proto`; forward WebSocket `Upgrade`; keep
+  `Range` + COOP/COEP headers; raise buffering/timeouts for streaming.
+- **With or without a proxy**: the API binds `0.0.0.0:3000` and serves the SPA
+  itself. Everything is origin-relative so subdomain-proxying works out of the
+  box.
 
-## Seams in the web app to refactor (when building the shell)
+## Where the web app touches the bridge
 
-- `apps/web/src/api-client.ts` — `localStorage`/`document.cookie`/`location.assign` are the only web-isms; extract behind the bridge.
-- `apps/web/src/router.tsx` — `history.pushState`/`popstate`; shells seed `location` from deep links.
-- `apps/web/src/WatchPage.tsx` — the entire player is browser-media-coupled (vidstack, hls.js, JASSUB-wasm, `HTMLVideoElement.audioTracks`, `requestVideoFrameCallback`, autoplay policy). Its *protocol* is the portable part; the renderer is replaced per platform. Do not port vidstack/hls.js/JASSUB to a native player — implement the protocol with AVPlayer/ExoPlayer/libmpv.
-- `apps/web/src/device-profile.ts` — `BROWSER_DEVICE_PROFILE`; each native platform declares its own profile (`supportedContainers`/codecs/subtitleMode) and passes it to `/playback/start`. `subtitleMode: "external"` for players that render soft subs natively, `"burn"` otherwise.
-- Fonts: the web app fetches `@font-face` rules from `/fonts` at boot; native players render their own text but ASS offline subtitles need the packaged fonts (`/downloads/:id/artifact/fonts/*`) wired to the subtitle renderer the same way JASSUB's `availableFonts` maps hashes.
+- `apps/web/src/api-client.ts` — token read/write/erase through
+  `bridge.storage` (fallback `localStorage`), `storeAuthResult`, TV account
+  routing.
+- `apps/web/src/native.ts` — `shellPlatform`, `clientKey`, `getDeviceId`,
+  `startTokenWarmth` (4-min token refresh in shells), `loginPlatform`.
+- `apps/web/src/tv-session.ts` — per-account sessions for TV switchers.
+- `apps/web/src/views/TvAccountsView.tsx`, `ui/TvPairFlow.tsx` — TV account
+  switcher + pairing flow.
+- `apps/web/src/views/DownloadsView.tsx`, `src/downloads.ts`, the DetailView
+  download button — downloads UI (native-only).
+- `apps/web/src/views/NativeUpdateGate.tsx` — stale-shell gate.
+- `apps/web/src/ui/tv-keys.ts` — D-pad → DOM keydown mapping (`useTvKeyboardNav`).
+- `apps/web/src/views/LoginView.tsx` — sends `clientKey`/`deviceName`/`platform`
+  and calls `storeAuthResult`.
+- `apps/web/src/router.tsx` / `App.tsx` / `TopNav.tsx` — TV routes (`/accounts`),
+  downloads route, update gate, TV-gated shell.
 
 ## Open items (deliberately not done yet)
 
-- **Offline subtitle burn-in on TV** and full image-subtitle offline (only burn-in-on-transcode + text sidecars exist).
-- **`POST /watch-state/sync` doesn't write `WatchDay`** — offline time is not credited to history stats. Revisit if clients want it.
-- **Download resume**: the server artifact is idempotent per download, but a client that loses its partial file must restart. Range-resumable client-side downloading is a client concern; the API supports Range on `/artifact/media`.
+- **Offline subtitle burn-in on TV** and full image-subtitle offline (only
+  burn-in-on-transcode + text sidecars exist).
+- **`POST /watch-state/sync` doesn't write `WatchDay`** — offline time is not
+  credited to history stats. Revisit if clients want it.
+- **Download resume**: the server artifact is idempotent per download, but a
+  client that loses its partial file must restart. Range-resumable client-side
+  downloading is a client concern; the API supports Range on `/artifact/media`.
 - **Download space/cleanup UI**, per-device download quotas.
-- **Offline self-updating shells** (bundle the SPA in the app, update from the server).
+- **Desktop native downloads UI polish** (progress reporting into the web
+  promise; currently the web polls the server `Download` row instead).
+- **TV home-screen deep linking** (leanback intent → route) and Android TV
+  content rows; the webview currently just launches at the SPA root.
+- **Store signing/notarization** for the store distributions (ad-hoc device
+  builds ship; macOS notarization + Apple/Play signing are future work).
+- **`git log`/docs**: verify AGENTS.md build-order "Next" line once native
+  shells land.
 
 ## Non-negotiable guardrails
 
-- Never fork the web UI for a platform. UI changes happen in `apps/web` once.
-- Never add a second auth system. The JWT/refresh/device/pairing layer is the only one.
+- Never fork the web UI or the player for a platform. Changes happen in
+  `apps/web` once.
+- Never add a second auth system. The JWT/refresh/device/pairing layer is the
+  only one.
+- Never add a native media player (AVPlayer/ExoPlayer/libmpv) — the web player
+  runs in the webview; a native player is a second renderer to keep in sync.
 - Chromecast: never. AirPlay only as a native playback target.
-- No third-party font/artwork URLs ever served to a client — everything from our origin (COOP/COEP depends on it).
-- Keep every new API route in the contract (`packages/contract`) + OpenAPI doc, or generated clients won't see it.
+- No third-party font/artwork URLs ever served to a client — everything from
+  our origin (COOP/COEP depends on it).
+- Keep every new API route in the contract (`packages/contract`) + OpenAPI doc,
+  or generated clients won't see it.
+- Never break `window.hokagoNative` compat without bumping `MIN_NATIVE_VERSION`.

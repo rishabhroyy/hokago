@@ -123,10 +123,12 @@ function readEncoders(): Promise<Set<string>> {
 /**
  * Picks the device for a capability: the env override when set (validated to
  * exist for vaapi/qsv), else the detected node. For nvenc an override is a
- * CUDA index (no node to validate — the driver names the device).
+ * CUDA index; with no override the driver's default device 0 is used — a
+ * nvenc capability was already gated on /dev/nvidia0 existing, so "no
+ * device" must never reject it (that silently demoted auto to qsv/vaapi).
  */
 async function deviceFor(cap: HwaccelCapability, override: string | null): Promise<string | null> {
-  if (cap.method === "nvenc") return override;
+  if (cap.method === "nvenc") return override ?? "0";
   const device = override ?? cap.device;
   if (device === null) return null;
   return (await exists(device)) ? device : null;

@@ -91,11 +91,13 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
   // ── Libraries ──────────────────────────────────────────────────────────────
   /** Sum of MediaFile bytes under a library (raw join — Prisma can't group across relations). */
   async function libraryStorageBytes(libraryId: string): Promise<number> {
+    // PG17 dropped the implicit uuid = text operator — bind the id with an
+    // explicit cast or every PATCH /admin-api/libraries/:id 500s.
     const rows = await db.$queryRaw<{ bytes: bigint }[]>`
       SELECT COALESCE(SUM(f."sizeBytes"), 0) AS bytes
       FROM media_files f
       JOIN media_items i ON i.id = f."mediaItemId"
-      WHERE i."libraryId" = ${libraryId}`;
+      WHERE i."libraryId" = ${libraryId}::uuid`;
     return Number(rows[0]?.bytes ?? 0n);
   }
 

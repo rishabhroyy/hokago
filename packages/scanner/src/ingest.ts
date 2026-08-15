@@ -158,19 +158,49 @@ async function ingestLeafItem(
   const title =
     kind === "EPISODE" ? `Episode ${episodeNumber ?? "?"}` : (parsed.title ?? path.basename(file.path));
 
-  // Path first (common case, cheap unique lookup). If the path moved, fall
+// Path first (common case, cheap unique lookup). If the path moved, fall
   // back to inode within this library — a rename/move must reuse the same
- // MediaItem/MediaFile, not re-import .
-  let existingFile = await db.mediaFile.findUnique({ where: { path: file.path } });
+  // MediaItem/MediaFile, not re-import .
+  let existingFile = await db.mediaFile.findUnique({
+    where: { path: file.path },
+    include: { mediaItem: { select: { kind: true, parentId: true } } },
+  });
   if (!existingFile) {
     existingFile = await db.mediaFile.findFirst({
       where: { inode: file.inode, mediaItem: { libraryId } },
+      include: { mediaItem: { select: { kind: true, parentId: true } } },
     });
   }
   let mediaItemId: string;
 
   if (existingFile) {
     mediaItemId = existingFile.mediaItemId;
+    // Identity is only ever set at creation — nothing else below re-parents.
+    // A row that re-parses as a different shape (e.g. an episode that runtime
+    // clustering previously flung out as a root-level movie) must be reset in
+    // place, or corrected scans leave stale root items behind forever.
+    if (existingFile.mediaItem.kind !== kind || existingFile.mediaItem.parentId !== parentId) {
+      await db.mediaItem.update({
+        where: { id: existingFile.mediaItemId },
+        data: {
+          kind,
+          parentId,
+          title,
+          sortTitle: title.toLowerCase(),
+          year: parsed.year,
+          seasonNumber,
+          episodeNumber,
+        },
+      });
+      // Scanner-made franchise links (relationType MOVIE) only mean anything
+      // while the item is an outlier movie — drop them when it reverts to a
+      // plain leaf. Hand-built/derived-as-collection links are untouched.
+      if (kind === "EPISODE") {
+        await db.collectionEntry.deleteMany({
+          where: { mediaItemId: existingFile.mediaItemId, relationType: "MOVIE", collection: { derived: true } },
+        });
+      }
+    }
   } else {
     const item = await db.mediaItem.create({
       data: {
@@ -445,8 +475,15 @@ export async function ingestLibrary(
     // aggregated title agreement count from every file first.
     const outcomes = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
       const ctx: FileContext = { file, dir, probe: probes.get(file.path) ?? null };
-      const isOutlier = outliers.includes(file.path);
-      const isMain = main.includes(file.path);
+      const parsed = parseFilename(path.basename(file.path), profile);
+      // Runtime clustering exists only for the Mugen Train shape — movies
+      // whose names don't parse as episodes. A file that PARSES as a numbered
+      // episode is an episode, full stop: wide runtime spread (short ONA
+      // episodes like Alien Stage, double-length finales) must never fling
+      // an episode out of its season as a root-level movie.
+      const isEpisodeNamed = parsed.episode !== null;
+      const isOutlier = !isEpisodeNamed && outliers.includes(file.path);
+      const isMain = isEpisodeNamed || main.includes(file.path);
       let result: LeafResult | null = null;
       if (isOutlier) {
         result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", null, null, deferArtwork, deferTrickplay, profile);
@@ -462,8 +499,8 @@ export async function ingestLibrary(
           await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
         }
       }
-      const parsedTitle = parseFilename(path.basename(file.path), profile).title;
-      return { result, isOutlier, isMain, agrees: parsedTitle !== null && parsedTitle.toLowerCase() === seriesTitle.toLowerCase() };
+      const agrees = parsed.title !== null && parsed.title.toLowerCase() === seriesTitle.toLowerCase();
+      return { result, isOutlier, isMain, agrees };
     });
 
     const outlierMediaItemIds: string[] = [];

@@ -2,6 +2,16 @@ target/
 node_modules/
 src-tauri/gen/schemas/
 web-dist/
+# Platform icons are generated from icon.png by `tauri icon` (CI does this);
+# keep the source PNG but ignore the derived sets.
 *.icns
 *.ico
 !src-tauri/icons/icon.png
+src-tauri/icons/128x128.png
+src-tauri/icons/128x128@2x.png
+src-tauri/icons/32x32.png
+src-tauri/icons/64x64.png
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/Square*.png
+src-tauri/icons/StoreLogo.png

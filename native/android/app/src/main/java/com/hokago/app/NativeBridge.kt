@@ -3,6 +3,7 @@ package com.hokago.app
 import android.os.Environment
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection

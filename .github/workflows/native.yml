@@ -63,6 +63,9 @@ jobs:
       - name: Install Tauri CLI
         working-directory: native/tauri
         run: npm install --no-package-lock --no-save
+      - name: Generate platform icons
+        working-directory: native/tauri
+        run: ./node_modules/.bin/tauri icon src-tauri/icons/icon.png
       - name: Bake version
         run: |
           sed -i '' "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml
@@ -109,6 +112,9 @@ jobs:
       - name: Install Tauri CLI
         working-directory: native/tauri
         run: npm install --no-package-lock --no-save
+      - name: Generate platform icons
+        working-directory: native/tauri
+        run: ./node_modules/.bin/tauri icon src-tauri/icons/icon.png
       - name: Bake version
         shell: bash
         run: |
@@ -157,6 +163,9 @@ jobs:
       - name: Install Tauri CLI
         working-directory: native/tauri
         run: npm install --no-package-lock --no-save
+      - name: Generate platform icons
+        working-directory: native/tauri
+        run: ./node_modules/.bin/tauri icon src-tauri/icons/icon.png
       - name: Bake version
         run: |
           sed -i "s/^version = .*/version = \"${APP_VERSION}\"/" native/tauri/src-tauri/Cargo.toml

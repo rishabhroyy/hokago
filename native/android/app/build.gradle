@@ -3,12 +3,6 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
-// Versions are injected by CI from the git tag; local/dev builds use
-// gradle.properties defaults. (Named hokago* so they don't shadow the typed
-// accessors Gradle generates from the gradle.properties keys themselves.)
-val hokagoVersionName: String = providers.gradleProperty("appVersionName").getOrElse("0.2.0")
-val hokagoVersionCode: Int = providers.gradleProperty("appVersionCode").getOrElse("1").toInt()
-
 android {
     namespace = "com.hokago.app"
     compileSdk = 35
@@ -17,8 +11,12 @@ android {
         applicationId = "com.hokago.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = hokagoVersionCode
-        versionName = hokagoVersionName
+        // Versions come from CI (-PappVersionName / -PappVersionCode); the
+        // gradle.properties keys are the local defaults. Read via
+        // project.findProperty — top-level `val` declarations with explicit
+        // types trip Gradle's generated-accessor conflict in the Kotlin DSL.
+        versionCode = (project.findProperty("appVersionCode") as? String)?.toIntOrNull() ?: 1
+        versionName = project.findProperty("appVersionName") as? String ?: "0.2.0"
     }
 
     flavorDimensions += "form"

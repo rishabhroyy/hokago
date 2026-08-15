@@ -4,6 +4,9 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+  # XcodeGen 2.4x defaults to projectFormat xcode16_0 (objectVersion 77),
+  # which Xcode 15.4 can't read — pin the format to Xcode 15.3.
+  projectFormat: xcode15_3
 settings:
   base:
     MARKETING_VERSION: "0.2.0"

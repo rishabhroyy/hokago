@@ -71,6 +71,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         with:
           projectPath: native/tauri
+          tauriScript: pnpm tauri
           tagName: ${{ needs.versions.outputs.tag }}
           releaseName: "hokago ${{ needs.versions.outputs.tag }}"
           releaseDraft: true
@@ -117,6 +118,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         with:
           projectPath: native/tauri
+          tauriScript: pnpm tauri
           tagName: ${{ needs.versions.outputs.tag }}
           releaseName: "hokago ${{ needs.versions.outputs.tag }}"
           releaseDraft: true
@@ -163,6 +165,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         with:
           projectPath: native/tauri
+          tauriScript: pnpm tauri
           tagName: ${{ needs.versions.outputs.tag }}
           releaseName: "hokago ${{ needs.versions.outputs.tag }}"
           releaseDraft: true

@@ -248,6 +248,7 @@ model Account {
   sessions     Session[]
   invitesMade  Invite[]  @relation("InviteCreator")
   devices      Device[]  @relation("AccountDevices")
+  deviceAccounts DeviceAccount[]
   pairingCodes PairingCode[] @relation("PairingAccount")
   downloads    Download[] @relation("AccountDownloads")
 
@@ -317,6 +318,10 @@ model Invite {
 /// the server recognizes a device across sessions. Sessions created by a
 /// client that identifies itself get bound here, so "revoke this device"
 /// revokes everything it ever had. Web (no clientKey) never creates one.
+///
+/// `accountId` is the FIRST account that registered it (its owner); every
+/// account a shared device (a TV household) has been paired to also gets a
+/// DeviceAccount row, so "revoke this device" revokes it for everyone.
 model Device {
   id         String         @id @default(uuid()) @db.Uuid
   accountId  String         @db.Uuid
@@ -329,11 +334,27 @@ model Device {
   lastSeenAt DateTime?
   createdAt  DateTime       @default(now())
 
-  sessions  Session[]  @relation("authDevice")
-  downloads Download[]
+  sessions       Session[]       @relation("authDevice")
+  downloads      Download[]
+  accountLinks   DeviceAccount[]
 
   @@index([accountId])
   @@map("devices")
+}
+
+/// Join row: a shared device (TV) paired to an additional account. One device,
+/// many accounts; the client picks which account is active locally, so
+/// switching profiles on a TV needs no re-auth at all.
+model DeviceAccount {
+  deviceId  String    @db.Uuid
+  device    Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  accountId String    @db.Uuid
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  pairedAt  DateTime  @default(now())
+
+  @@id([deviceId, accountId])
+  @@index([accountId])
+  @@map("device_accounts")
 }
 
 /// TV-style code pairing. The unauthenticated TV creates a PENDING code and

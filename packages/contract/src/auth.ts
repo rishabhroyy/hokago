@@ -129,6 +129,11 @@ export const PairingStatusResponse = z.object({
   refreshToken: z.string().optional(),
   sessionId: z.string().optional(),
   deviceId: z.string().optional(),
+  /**
+   * The approving account's username — lets the TV label the new profile in
+   * its account switcher before any authenticated call is made.
+   */
+  username: z.string().optional(),
 });
 
 export const CreateInviteBody = z.object({ expiresInDays: z.number().optional() });

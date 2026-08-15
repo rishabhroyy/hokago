@@ -69,6 +69,11 @@ async function ensurePrimaryProfile(accountId: string, username: string): Promis
  * account (app reinstalled, handed-off device) is moved, so a re-login heals
  * it rather than erroring. Returns the device id, or null when no clientKey
  * was provided (the web client).
+ *
+ * Every pairing also writes a DeviceAccount link row — a shared device (a TV
+ * household) keeps every account it was ever approved for, so the client can
+ * switch between them without re-auth. The Device.accountId owner moves to
+ * the newest pairer, but links are never dropped by pairing.
  */
 async function upsertDevice(opts: {
   accountId: string;
@@ -77,23 +82,32 @@ async function upsertDevice(opts: {
   platform: "WEB" | "IOS" | "IPADOS" | "ANDROID" | "MACOS" | "WINDOWS" | "LINUX" | "TVOS" | "ANDROIDTV" | "GOOGLETV";
 }): Promise<string> {
   const existing = await db.device.findUnique({ where: { clientKey: opts.clientKey } });
-  if (existing) {
-    const updated = await db.device.update({
-      where: { id: existing.id },
-      data: { accountId: opts.accountId, name: opts.name, platform: opts.platform, lastSeenAt: new Date() },
-    });
-    return updated.id;
-  }
-  const created = await db.device.create({
-    data: {
-      accountId: opts.accountId,
-      clientKey: opts.clientKey,
-      name: opts.name,
-      platform: opts.platform,
-      lastSeenAt: new Date(),
-    },
-  });
-  return created.id;
+  const deviceId = existing
+    ? (
+        await db.device.update({
+          where: { id: existing.id },
+          data: { accountId: opts.accountId, name: opts.name, platform: opts.platform, lastSeenAt: new Date() },
+        })
+      ).id
+    : (
+        await db.device.create({
+          data: {
+            accountId: opts.accountId,
+            clientKey: opts.clientKey,
+            name: opts.name,
+            platform: opts.platform,
+            lastSeenAt: new Date(),
+          },
+        })
+      ).id;
+  await db.deviceAccount
+    .upsert({
+      where: { deviceId_accountId: { deviceId, accountId: opts.accountId } },
+      create: { deviceId, accountId: opts.accountId },
+      update: {},
+    })
+    .catch(() => {});
+  return deviceId;
 }
 
 /** username/password auth, argon2id, JWT access + opaque refresh token, sessions table makes tokens genuinely revocable. */
@@ -284,11 +298,26 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
     "/auth/devices",
     { preHandler: app.authenticate, schema: { response: { 200: z.array(DeviceSummary) } } },
     async (req) => {
-      return db.device.findMany({
-        where: { accountId: req.accountId },
-        select: { id: true, name: true, platform: true, createdAt: true, lastSeenAt: true },
-        orderBy: { createdAt: "desc" },
-      });
+      // The devices list is the union of: devices this account owns, and
+      // shared devices (TVs) it was paired to (DeviceAccount links). A
+      // shared TV shows up for every household member, not just its owner.
+      const [owned, linked] = await Promise.all([
+        db.device.findMany({
+          where: { accountId: req.accountId },
+          select: { id: true, name: true, platform: true, createdAt: true, lastSeenAt: true },
+          orderBy: { createdAt: "desc" },
+        }),
+        db.deviceAccount.findMany({
+          where: { accountId: req.accountId },
+          include: { device: { select: { id: true, name: true, platform: true, createdAt: true, lastSeenAt: true } } },
+        }),
+      ]);
+      const ownedIds = new Set(owned.map((d) => d.id));
+      const merged = [...owned];
+      for (const link of linked) {
+        if (!ownedIds.has(link.device.id)) merged.push(link.device);
+      }
+      return merged;
     },
   );
 
@@ -300,12 +329,18 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
     },
     async (req, reply) => {
       const device = await db.device.findUnique({ where: { id: req.params.id } });
-      if (!device || device.accountId !== req.accountId) {
+      const linked = device
+        ? await db.deviceAccount.findUnique({
+            where: { deviceId_accountId: { deviceId: device.id, accountId: req.accountId! } },
+          })
+        : null;
+      // Either the owner or any paired account may revoke a shared device.
+      if (!device || (device.accountId !== req.accountId && !linked)) {
         return reply.code(404).send({ error: "device not found" });
       }
       // Revoke every session bound to the device, then drop the device (which
-      // cascades its downloads). Sessions would otherwise survive the delete
-      // (ON DELETE SET NULL) as orphaned-but-live sessions.
+      // cascades its downloads and account links). Sessions would otherwise
+      // survive the delete (ON DELETE SET NULL) as orphaned-but-live sessions.
       const sessions = await db.session.findMany({ where: { deviceId: device.id, revokedAt: null }, select: { id: true } });
       await db.$transaction([
         db.session.updateMany({ where: { deviceId: device.id }, data: { revokedAt: new Date() } }),
@@ -450,6 +485,7 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
         refreshToken,
         sessionId: session.id,
         deviceId: device?.id ?? undefined,
+        username: account.username,
       };
     },
   );

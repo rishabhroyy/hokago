@@ -144,7 +144,12 @@ export async function registerDownloadRoutes(app: ZodFastifyInstance): Promise<v
       const { mediaItemId, mediaFileId, deviceId, variant, subtitleTrackIds } = req.body;
 
       const device = await db.device.findUnique({ where: { id: deviceId } });
-      if (!device || device.accountId !== req.accountId) {
+      const linked = device
+        ? await db.deviceAccount.findUnique({
+            where: { deviceId_accountId: { deviceId: device.id, accountId: req.accountId! } },
+          })
+        : null;
+      if (!device || (device.accountId !== req.accountId && !linked)) {
         return reply.code(404).send({ error: "device not found" });
       }
       const mediaFile = await db.mediaFile.findUnique({ where: { id: mediaFileId } });

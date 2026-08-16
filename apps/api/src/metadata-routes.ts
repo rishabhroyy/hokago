@@ -109,6 +109,40 @@ export async function registerMetadataRoutes(app: ZodFastifyInstance): Promise<v
     },
   );
 
+  // ── Artwork preview proxy ──────────────────────────────────────────────
+  // The fix-match panel shows candidate posters, but the SPA is served with
+  // COEP require-corp — hotlinked provider CDN images are blocked outright,
+  // and the repo rule is no third-party artwork links ever hit the browser.
+  // Same pattern as /external-artwork/:hash in home-routes: fetch server-side,
+  // serve from our own origin.
+  app.get<{ Querystring: { u?: string } }>(
+    "/metadata/artwork-proxy",
+    { preHandler: app.authenticate },
+    async (req, reply) => {
+      const raw = req.query.u;
+      let url: URL;
+      try {
+        url = new URL(raw ?? "");
+      } catch {
+        return reply.code(400).send({ error: "invalid url" });
+      }
+      if (url.protocol !== "https:" && url.protocol !== "http:") {
+        return reply.code(400).send({ error: "invalid url" });
+      }
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) return reply.code(404).send({ error: "artwork not found" });
+        const bytes = Buffer.from(await res.arrayBuffer());
+        reply.header("Cross-Origin-Resource-Policy", "cross-origin");
+        reply.header("Cache-Control", "public, max-age=86400");
+        reply.type(res.headers.get("content-type") ?? "image/jpeg");
+        return reply.send(bytes);
+      } catch {
+        return reply.code(404).send({ error: "artwork not found" });
+      }
+    },
+  );
+
   // ── Pin ──────────────────────────────────────────────────────────────────
   app.post(
     "/media-items/:id/metadata-match",

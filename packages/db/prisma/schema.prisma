@@ -953,6 +953,10 @@ model Trickplay {
   tileHeight   Int
   intervalMs   Int       @default(10000)
   tilesPerSheet Int
+ /// Total tiles across all sheets, captured at generation time — the serving
+ /// route must NOT recompute this from MediaFile.durationMs (a later failed
+ /// probe nulls the duration and the sheet tile counts desync from disk).
+  totalTiles  Int?
  /// Sprite sheet paths under /config/cache — disposable, regenerable .
   sheetPaths   String[]
  /// MediaFile.hash the sheets were generated from — mismatch means regenerate .

@@ -150,7 +150,7 @@ export async function extractEmbeddedArt(
   const first = attachedPics[0];
   if (!first) return null;
 
-  const tmpOut = path.join(artworkStoreDir(), `.tmp-${Date.now()}.jpg`);
+  const tmpOut = path.join(artworkStoreDir(), `.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`);
   await mkdir(artworkStoreDir(), { recursive: true });
   try {
     await extractAttachedPic(filePath, first.streamIndex, tmpOut);
@@ -220,14 +220,19 @@ export async function generateArt(filePath: string, durationMs: number): Promise
  * local-file resolution path (`storeArtwork` in ingest.ts) and the network
  * provider path (`resolveMetadata` in metadata.ts) so the self-healing
  * `deleteMany` logic exists in exactly one place.
+ *
+ * The cleanup is priority-aware (lower number wins): only strictly-lower-
+ * priority sources lose the slot. A GENERATED fallback landing after the
+ * provider fetch must never evict the PROVIDER rows — priority-blind
+ * deletion made every rescan destroy provider posters on movies.
  */
 export async function upsertArtworkDescriptor(
   db: PrismaClient,
   mediaItemId: string,
   art: ArtworkDescriptor,
 ): Promise<void> {
-  await db.artwork
-    .upsert({
+  try {
+    await db.artwork.upsert({
       where: { mediaItemId_kind_source: { mediaItemId, kind: art.kind, source: art.source } },
       create: {
         mediaItemId,
@@ -245,10 +250,16 @@ export async function upsertArtworkDescriptor(
         sizeBytes: art.sizeBytes,
         meta: (art.meta as Prisma.InputJsonValue) ?? undefined,
       },
-    })
-    .catch(() => {});
+    });
+  } catch {
+    // A failed upsert must not be followed by the cleanup delete — that
+    // would leave the kind slot completely empty instead of keeping old art.
+    return;
+  }
 
-  await db.artwork.deleteMany({ where: { mediaItemId, kind: art.kind, source: { not: art.source } } });
+  await db.artwork.deleteMany({
+    where: { mediaItemId, kind: art.kind, source: { not: art.source }, priority: { gt: art.priority } },
+  });
 }
 
 /** Full artwork resolution for one media item: sidecar > embedded > generated, in priority order. */

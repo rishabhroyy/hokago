@@ -165,7 +165,11 @@ function AbsoluteTimeSlider({
     if (!sheet) return null;
     const inSheet = i % trickplay.tilesPerSheet;
     const col = inSheet % trickplay.cols;
-    const rows = Math.ceil(sheet.tiles / trickplay.cols);
+    // Every sheet image is the FULL grid (the tile filter emits empty black
+    // cells for a partial tail sheet) — the row denominator is the fixed
+    // grid row count, never ceil(tiles/cols). Deriving it from the tile
+    // count mis-crops/black-screens the last sheet of nearly every video.
+    const rows = Math.ceil(trickplay.tilesPerSheet / trickplay.cols);
     const row = Math.floor(inSheet / trickplay.cols);
     return {
       sheet,

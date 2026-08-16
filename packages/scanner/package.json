@@ -12,6 +12,7 @@
     "./generate-art": "./dist/generate-art.js",
     "./trickplay": "./dist/trickplay.js",
     "./artwork": "./dist/artwork.js",
+    "./constants": "./dist/constants.js",
     "./evidence": "./dist/evidence.js"
   },
   "scripts": {

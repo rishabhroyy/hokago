@@ -195,7 +195,10 @@ export function FixMatchPanel({
                       >
                         {c.artworkUrl ? (
                           <img
-                            src={c.artworkUrl}
+                            // Proxied through our own origin — hotlinking the
+                            // provider CDN would break under COEP require-corp
+                            // (and violate the no-third-party-links rule).
+                            src={`/metadata/artwork-proxy?u=${encodeURIComponent(c.artworkUrl)}`}
                             alt=""
                             loading="lazy"
                             className="h-14 w-10 shrink-0 rounded-[8px] object-cover"

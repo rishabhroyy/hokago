@@ -129,10 +129,16 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     return reply.send(createReadStream(fontPath));
   });
 
- // Artwork store — bytes fetched once server-side, never a URL.
+ // Artwork store — bytes fetched once server-side, never a URL. Public for
+  // the same reason /fonts is: <img> subresource requests carry no
+  // Authorization header, and the access-token cookie dies at the 15-minute
+  // JWT TTL — an idle page that lazy-loads posters past it would 401 every
+  // image. Ids are unguessable uuids, same exposure model as the font store.
+  // Cache header is deliberately NOT immutable: the row id is stable while
+  // its bytes change (sidecar replaced, provider refresh upserts in place),
+  // so a year-long cache would serve stale posters until a hard cache clear.
   app.get<{ Params: { id: string } }>(
     "/artwork/:id",
-    { preHandler: app.authenticate },
     async (req, reply) => {
     const artwork = await db.artwork.findUnique({ where: { id: req.params.id } });
     // resolveConfigFilePath handles every legacy path shape: host-absolute
@@ -141,7 +147,7 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     if (!bytesPath) return reply.code(404).send({ error: "artwork not found" });
 
     reply.header("Cross-Origin-Resource-Policy", "cross-origin");
-    reply.header("Cache-Control", "public, max-age=31536000, immutable");
+    reply.header("Cache-Control", "public, max-age=3600");
     reply.type(ARTWORK_MIME[path.extname(bytesPath).toLowerCase()] ?? "application/octet-stream");
     return reply.send(createReadStream(bytesPath));
   });
@@ -216,9 +222,11 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
       if (!mediaFile || !row || row.sheetPaths.length === 0) {
         return reply.code(404).send({ error: "trickplay not generated" });
       }
-      // Tiles are exactly floor(duration / interval) + 1: one per 10s
-      // boundary (0, 10, 20…). The last sheet holds the remainder.
-      const totalTiles = Math.max(1, Math.ceil((mediaFile.durationMs ?? 0) / row.intervalMs));
+      // Tiles are exactly ceil(duration / interval): one per 10s boundary.
+      // The count comes from the Trickplay row (captured at generation time)
+      // — recomputing it from MediaFile.durationMs desyncs from the sheets
+      // on disk whenever a later rescan's probe fails and nulls the duration.
+      const totalTiles = row.totalTiles ?? Math.max(1, Math.ceil((mediaFile.durationMs ?? 0) / row.intervalMs));
       return {
         tileWidth: row.tileWidth,
         tileHeight: row.tileHeight,
@@ -228,17 +236,19 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
         sheets: row.sheetPaths.map((_, index) => ({
           index,
           url: `/media-files/${req.params.id}/trickplay/sheets/${index}`,
-          tiles: Math.min(row.tilesPerSheet, totalTiles - index * row.tilesPerSheet),
+          tiles: Math.max(0, Math.min(row.tilesPerSheet, totalTiles - index * row.tilesPerSheet)),
         })),
       };
     },
   );
 
-  // Trickplay sheet bytes — content-addressed by (mediaFile, index), so the
-  // response is safe to cache forever. Same COOP/COEP dance as artwork.
+  // Trickplay sheet bytes. Public for the same reason /artwork is (the
+  // scrubber <img> carries no token; the cookie dies at the 15-min JWT TTL).
+  // NOT immutable-cached: the URL is keyed by mediaFile id, which survives
+  // content change by design (rename/same-path replacement) — regenerated
+  // sheets serve at identical URLs, so a year-long cache would go stale.
   app.get<{ Params: { id: string; index: string } }>(
     "/media-files/:id/trickplay/sheets/:index",
-    { preHandler: app.authenticate },
     async (req, reply) => {
       const row = await db.trickplay.findUnique({ where: { mediaFileId: req.params.id } });
       const index = Number.parseInt(req.params.index, 10);
@@ -246,7 +256,7 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
       if (!sheetPath) return reply.code(404).send({ error: "trickplay sheet not found" });
 
       reply.header("Cross-Origin-Resource-Policy", "cross-origin");
-      reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      reply.header("Cache-Control", "public, max-age=3600");
       reply.type("image/jpeg");
       return reply.send(createReadStream(sheetPath));
     },

@@ -68,13 +68,73 @@ body,
   margin: 0;
 }
 
+/* Native-shell safe areas (notches, home indicators, gesture bars) — the
+   shells render the page edge-to-edge, so fixed chrome must clear the
+   system insets. iOS resolves these env() values against viewport-fit=cover;
+   Android shells additionally inject literal pixel overrides of the same
+   vars (inline on <html>) for engines that don't forward env() values.
+   Everything is 0 in a plain browser, so the desktop look is untouched. */
+:root {
+  --hokago-safe-top: env(safe-area-inset-top, 0px);
+  --hokago-safe-right: env(safe-area-inset-right, 0px);
+  --hokago-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --hokago-safe-left: env(safe-area-inset-left, 0px);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  /* Web-app tells the shells must not show: rubber-banding, long-press
+     callouts, double-tap zoom. Selection stays on where it matters. */
+  overscroll-behavior: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+/* Keep text selection on desktop (fine pointers) — media apps lock it on
+   touch input, and it kills the iOS magnifier/long-press selection there. */
+@media (pointer: coarse) {
+  body { user-select: none; -webkit-user-select: none; }
+  input, textarea, [contenteditable] { user-select: text; -webkit-user-select: text; }
+}
+
+img, video { -webkit-user-drag: none; }
+
+/* Scrolling content clears the home indicator / gesture nav; fixed chrome
+   uses --hokago-safe-* explicitly (fixed elements ignore body padding). */
+body {
+  padding-right: var(--hokago-safe-right);
+  padding-bottom: var(--hokago-safe-bottom);
+  padding-left: var(--hokago-safe-left);
+}
+
+/* Dynamic viewport height: 100dvh where supported (iOS WKWebView 15.4+,
+   Android Chrome 108+), 100vh otherwise — h-screen / min-h-screen utilities
+   compile to 100vh, so override them here to dodge collapsed URL-bar
+   letterboxing in shells that show system chrome. */
+.h-screen { height: 100vh; height: 100dvh; }
+.min-h-screen { min-height: 100vh; min-height: 100dvh; }
+
 body {
   color: #35302B;
   font-family: "Plus Jakarta Sans", sans-serif;
   -webkit-font-smoothing: antialiased;
   /* wii-dream wallpaper: warm paper, blue dot
      grid, soft top light, and three huge out-of-focus pastel auras — vivid
-     blue top-right, coral left, gold low-center */
+     blue top-right, coral left, gold low-center. The gradient layer lives on
+     a fixed ::before plane so scrolling never repaints it (background-attachment:
+     fixed repaints per frame on iOS). */
+  background-color: #F5EFE4;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background-color: #F5EFE4;
   background-image:
     radial-gradient(130% 70% at 50% -10%, rgba(255, 248, 233, 0.95), transparent 52%),
@@ -84,12 +144,14 @@ body {
     radial-gradient(rgba(79, 184, 224, 0.09) 1px, transparent 1.3px);
   background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
   background-repeat: no-repeat;
-  background-attachment: fixed;
 }
 
 /* dark wallpaper: same aura composition, dimmed into the espresso base */
 .dark body {
   color: var(--ink);
+  background-color: #171410;
+}
+.dark body::before {
   background-color: #171410;
   background-image:
     radial-gradient(130% 70% at 50% -10%, rgba(255, 244, 224, 0.05), transparent 52%),
@@ -99,7 +161,6 @@ body {
     radial-gradient(rgba(143, 224, 245, 0.05) 1px, transparent 1.3px);
   background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
   background-repeat: no-repeat;
-  background-attachment: fixed;
 }
 
 ::selection { background: rgba(79, 184, 224, 0.35); }

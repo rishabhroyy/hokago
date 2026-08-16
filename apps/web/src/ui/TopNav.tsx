@@ -75,7 +75,7 @@ export function TopNav() {
     }`;
 
   return (
-    <nav className="panel fixed inset-x-12 top-3 z-[60] flex h-[58px] items-center justify-between rounded-full pl-5 pr-3.5 max-[820px]:inset-x-3">
+    <nav className="panel fixed inset-x-[max(3rem,var(--hokago-safe-left),var(--hokago-safe-right))] top-[calc(var(--hokago-safe-top)+0.75rem)] z-[60] flex h-[58px] items-center justify-between rounded-full pl-5 pr-3.5 max-[820px]:inset-x-[max(0.75rem,var(--hokago-safe-left),var(--hokago-safe-right))]">
       <div className="flex items-center gap-7">
         <button
           className="brand relative flex items-center gap-2.5 overflow-hidden rounded-xl px-2 py-1.5 font-display text-[19px] font-bold transition-transform duration-150 ease-snap hover:scale-[1.04] active:scale-[.94]"

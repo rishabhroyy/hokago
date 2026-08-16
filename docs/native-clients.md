@@ -97,6 +97,12 @@ interface NativeBridge {
   `type: "back"` is the one consumed by the web app (TV/remote back at router
   root). Download completion uses an internal `downloadResult` correlation id
   that the injected shim resolves into the `downloads.save` promise.
+- **Web → native events**: the SPA dispatches the same `hokago-native` event
+  with `type: "route"` (detail: `{ view: route.view }`) on every route change
+  while in a shell. Shells use it to flip native chrome for the player:
+  iOS hides the status bar + home indicator on player/offlineWatch routes,
+  Android hides the system bars (immersive) the same way. Old shells that
+  don't listen are unaffected; plain browsers never dispatch it.
 - **Downloads never see tokens in JS.** The web hands the shell a resolved
   artifact URL + filename; the native side attaches `Authorization: Bearer
   <token>` from its own secure-store mirror (`hokago_access_token`). The web
@@ -115,7 +121,15 @@ interface NativeBridge {
    (`{config_dir}/hokago/server.json` on desktop, `UserDefaults`/prefs elsewhere).
    Desktop exposes a "Change Server…" menu item that navigates back to the setup
    page (`show_setup` command).
-2. **Token store** — `apps/web/src/api-client.ts` writes through the bridge
+2. **Safe areas** — the SPA viewport is `viewport-fit=cover` and all fixed
+   chrome (top nav, player buttons, banners/toasts) pads itself with
+   `--hokago-safe-*` CSS vars (`env(safe-area-inset-*)` at :root). iOS
+   resolves those natively; Android shells re-inject the same vars as literal
+   pixels from their window insets (`displayCutout` + `systemBars`) so even
+   WebView engines that don't forward env() values land in the right place.
+   The shells render edge-to-edge (`.ignoresSafeArea()` / `decorFitsSystemWindows
+   = false`) and the web page owns all inset math.
+3. **Token store** — `apps/web/src/api-client.ts` writes through the bridge
    (`read`/`write`/`erase` in `api-client.ts`), falling back to `localStorage`
    in a browser. The cookie mirror (`hokago_access`, SameSite=Lax) stays for the
    web player's subresource fetches (`<video>`/`<img>`/fonts can't send headers);
@@ -198,13 +212,23 @@ SPA and the web app gets an offline library.
   `WKScriptMessageHandler`; tokens in the Keychain; downloads via
   `URLSession.downloadTask` with the Bearer header; `hokago-file://` served by
   a `WKURLSchemeHandler`, `hokago-spa://` likewise (`SpaSchemeHandler`).
-  App icon lives in `hokago/Assets.xcassets` (1024px, no alpha). AirPlay is on.
+  App icon lives in `hokago/Assets.xcassets` (1024px, no alpha); the launch
+  screen is a black `LaunchBackground` color (no white flash). Webview
+  chrome: no bounce, black under-page background. The `route` event hides
+  the status bar + home indicator (`statusBarHidden` +
+  `persistentSystemOverlays`) on player routes. AirPlay is on.
 - **Android** (`native/android`) — raw WebView with a synchronous
   `addJavascriptInterface` bridge; phone + TV product flavors; AES-GCM
   Keystore-backed secure store; downloads via `HttpURLConnection` into the
   app's external downloads dir (opened with a FileProvider); `hokago-file://`
   intercepted in `shouldInterceptRequest` with Range support, as are the
-  `web-dist` assets behind the fake `http://hokago-app.local` origin. Release builds are signed
+  `web-dist` assets behind the fake `http://hokago-app.local` origin.
+  `WebChromeClient` implements `onShowCustomView`/`onHideCustomView`, so the
+  player's fullscreen button gets a real native fullscreen view (immersive
+  bars, phones lock to landscape — the same in-webview renderer, just
+  chromeless). The `route` event hides the system bars on player routes.
+  Window insets are forwarded into the page as `--hokago-safe-*` CSS vars
+  (edge-to-edge on every API level; short-edges cutout mode). Release builds are signed
   in CI with a key held in **repo secrets** — never committed: the APK
   signature is Android's trust anchor, and a leaked key lets anyone ship
   malicious updates over the install base. The secrets are

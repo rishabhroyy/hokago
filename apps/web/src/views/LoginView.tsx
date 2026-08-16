@@ -78,7 +78,7 @@ export function LoginView() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center px-6">
-      <div className="panel fixed right-6 top-6 z-50 rounded-full p-1.5">
+      <div className="panel fixed right-[max(1.5rem,var(--hokago-safe-right))] top-[calc(var(--hokago-safe-top)+1.5rem)] z-50 rounded-full p-1.5">
         <ThemeToggle />
       </div>
       {/* floating channel-art decorations */}

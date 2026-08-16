@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { RouterProvider, useRouter, type Route } from "./router";
 import { paths } from "./router";
 import { SoundProvider } from "./ui/useWiiSound";
@@ -21,7 +22,7 @@ import { NativeUpdateGate } from "./views/NativeUpdateGate";
 import { WatchPage } from "./WatchPage";
 import { AdminView } from "./admin/AdminView";
 import { getSetupState } from "./setup-state";
-import { isTvShell } from "./native";
+import { isNative, isTvShell } from "./native";
 import { getActiveAccount, hasActiveAccount } from "./tv-session";
 import { useConnectivity } from "./useConnectivity";
 import { useProfileId } from "./profile";
@@ -97,6 +98,15 @@ function Chrome() {
   const profileId = useProfileId();
   const { online, justReconnected } = useConnectivity(profileId);
   useTvKeyboardNav();
+  // Shells flip native chrome for the player (iOS status bar + home
+  // indicator, Android immersive system bars) from the route. Plain browsers
+  // have no shell and skip this; old shells ignore the event.
+  useEffect(() => {
+    if (!isNative()) return;
+    window.dispatchEvent(
+      new CustomEvent("hokago-native", { detail: { type: "route", view: route.view } })
+    );
+  }, [route.view]);
   return (
     <>
       {route.view !== "admin" && <TopNav />}
@@ -104,7 +114,7 @@ function Chrome() {
         <OfflineBanner />
       )}
       {justReconnected && route.view !== "admin" && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--hokago-safe-bottom)+1.5rem)] z-50 flex justify-center">
           <div className="pointer-events-auto rounded-full border border-emerald-500/40 bg-emerald-500/90 px-5 py-2.5 text-meta font-bold text-white shadow-panel backdrop-blur">
             back online — watch progress synced
           </div>
@@ -120,7 +130,7 @@ function OfflineBanner() {
   return (
     <button
       onClick={() => navigate(paths.offline())}
-      className="fixed inset-x-0 top-0 z-40 flex items-center justify-center gap-2 bg-amber-500/90 px-4 py-2 text-small font-bold text-black shadow-panel backdrop-blur"
+      className="fixed inset-x-0 top-0 z-40 flex items-center justify-center gap-2 bg-amber-500/90 px-4 pb-2 pt-[calc(var(--hokago-safe-top)+0.5rem)] text-small font-bold text-black shadow-panel backdrop-blur"
     >
       <Icon name="wifi-off" className="h-3.5 w-3.5" />
       server unreachable — watching offline · open offline library

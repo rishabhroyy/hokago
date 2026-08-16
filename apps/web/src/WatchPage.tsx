@@ -1526,7 +1526,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   return (
     <div className="fixed inset-0 h-screen w-screen overflow-hidden bg-black text-white">
       <button
-        className="absolute left-5 top-5 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-colors hover:bg-black/65"
+        className="absolute left-[max(1.25rem,var(--hokago-safe-left))] top-[calc(var(--hokago-safe-top)+1.25rem)] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-colors hover:bg-black/65"
         onClick={() => {
           // A reloaded or deep-linked player has no in-app page to go back to —
           // fall back to the title page instead of dropping out of the app.
@@ -1567,7 +1567,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             </div>
           )}
           {subtitleError && (
-            <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full bg-black/70 px-4 py-2 text-xs text-white/80 backdrop-blur">
+            <div className="absolute bottom-[calc(var(--hokago-safe-bottom)+1rem)] left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full bg-black/70 px-4 py-2 text-xs text-white/80 backdrop-blur">
               Couldn’t load the subtitle track.
               <button
                 className="text-white/60 underline transition-colors hover:text-white"
@@ -1755,7 +1755,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       </>
     )}
     {party.party?.state === "ENDED" && !dismissedEnded && (
-      <div className="absolute left-1/2 top-5 z-40 -translate-x-1/2 rounded-full bg-red-950/90 px-4 py-2 text-sm text-red-100 shadow-lg ring-1 ring-red-400/30">
+      <div className="absolute left-1/2 top-[calc(var(--hokago-safe-top)+1.25rem)] z-40 -translate-x-1/2 rounded-full bg-red-950/90 px-4 py-2 text-sm text-red-100 shadow-lg ring-1 ring-red-400/30">
         The party ended —{" "}
         {party.party.members.find((m) => m.profileId === party.party!.hostProfileId)?.name ?? "the host"} left.
         <button className="ml-3 text-red-300 underline underline-offset-2 hover:text-white" onClick={() => setDismissedEnded(true)}>
@@ -1921,7 +1921,7 @@ function PartyPill({
   return (
     <button
       onClick={onToggle}
-      className={`absolute left-16 top-5 z-40 flex items-center gap-2 rounded-full px-3 py-1.5 shadow-lg ring-1 transition hover:brightness-110 ${
+      className={`absolute left-[calc(max(1.25rem,var(--hokago-safe-left))+2.75rem)] top-[calc(var(--hokago-safe-top)+1.25rem)] z-40 flex items-center gap-2 rounded-full px-3 py-1.5 shadow-lg ring-1 transition hover:brightness-110 ${
         open
           ? "bg-white/95 text-wii-ink ring-line dark:bg-wii-deep/95 dark:text-white dark:ring-white/20"
           : "bg-wii-deep/95 text-white ring-white/20 dark:bg-paper/95 dark:text-wii-ink dark:ring-line"
@@ -1970,7 +1970,7 @@ function PartyPanel({
   onCopy: () => void;
 }) {
   return (
-    <div className="absolute left-16 top-[4.75rem] z-40 w-[min(88vw,340px)] rounded-2xl bg-wii-deep/95 p-4 text-white shadow-2xl ring-1 ring-white/15 dark:bg-paper dark:text-wii-ink dark:ring-line">
+    <div className="absolute left-[calc(max(1.25rem,var(--hokago-safe-left))+2.75rem)] top-[calc(var(--hokago-safe-top)+4.75rem)] z-40 w-[min(88vw,340px)] rounded-2xl bg-wii-deep/95 p-4 text-white shadow-2xl ring-1 ring-white/15 dark:bg-paper dark:text-wii-ink dark:ring-line">
       <div className="flex items-center justify-between">
         <h3 className="font-display text-card-head font-bold">Party</h3>
         <button onClick={onClose} className="text-white/50 transition hover:text-white dark:text-wii-ink/50 dark:hover:text-wii-ink" title="Close">

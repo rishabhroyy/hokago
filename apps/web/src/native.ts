@@ -6,6 +6,7 @@
  */
 import {
   getNativeBridge,
+  isNative,
   isTvShell,
   supportsDownloads,
   needsNativeUpdate,
@@ -46,7 +47,7 @@ export function startTokenWarmth(): void {
   }, 4 * 60_000);
 }
 
-export { getNativeBridge, isTvShell, supportsDownloads, needsNativeUpdate };
+export { getNativeBridge, isNative, isTvShell, supportsDownloads, needsNativeUpdate };
 
 /** Resolve a native-download-capable platform's name for display. */
 export function platformLabel(platform: NativePlatform): string {

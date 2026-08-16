@@ -53,12 +53,15 @@ final class ServerSetupViewController: UIViewController {
             view.addSubview(v)
         }
 
+        // Center the card, but never below the software keyboard — the
+        // centerY tie is soft (750) so the keyboard constraint can lift
+        // the card instead of letting the keyboard cover the field.
+        let centerY = titleLabel.topAnchor.constraint(equalTo: view.centerYAnchor, constant: -150)
+        centerY.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
-            // Center the card, but never below the software keyboard — the
-            // centerY tie is soft (750) so the keyboard constraint can lift
-            // the card instead of letting the keyboard cover the field.
             titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            titleLabel.topAnchor.constraint(equalTo: view.centerYAnchor, constant: -150).priority(.defaultHigh),
+            centerY,
             titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 32),
             titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
 

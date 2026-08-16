@@ -34,11 +34,16 @@ export function clusterByRuntime(files: RuntimeClusterInput[]): RuntimeClusterRe
   }
 
   const med = median(known.map((f) => f.durationMs));
+  // With fewer than 4 known runtimes the median sits *between* the cluster
+  // and the outlier (2 files: 24min ep + 108min movie → median 66 → the
+  // movie isn't 1.8x it and stays an "Episode ?"). The minimum is the honest
+  // episode baseline at that sample size.
+  const baseline = known.length >= 4 ? med : Math.min(...known.map((f) => f.durationMs));
   const main: string[] = [];
   const outliers: string[] = [];
 
   for (const f of known) {
-    if (f.durationMs > med * 1.8) outliers.push(f.path);
+    if (f.durationMs > baseline * 1.8) outliers.push(f.path);
     else main.push(f.path);
   }
   for (const f of unknown) main.push(f.path);

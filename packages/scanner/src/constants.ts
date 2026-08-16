@@ -7,6 +7,13 @@ export const VIDEO_EXTENSIONS = new Set([
   ".m2ts",
   ".mov",
   ".webm",
+  ".wmv",
+  ".mpg",
+  ".mpeg",
+  ".flv",
+  ".vob",
+  ".divx",
+  ".ogm",
 ]);
 
 // Kodi + Radarr/Sonarr sidecar art conventions . Radarr's bare
@@ -102,12 +109,22 @@ export const SELF_HEALING_RETRY_BACKOFF_MS = 24 * 60 * 60 * 1000;
 export const PROBE_CONCURRENCY = 8;
 export const INGEST_CONCURRENCY = 8;
 
-const SEASON_DIR = /^season\s*0*(\d{1,3})$/i;
-const SEASON_DIR_SHORT = /^s0*(\d{1,3})$/i;
-const SPECIALS_DIR = /^specials?$/i;
-
+/**
+ * Recognized season-directory names. Beyond "Season 01"/"S01": the UK
+ * "Series 1" convention, dot/underscore separators ("Season.01"), trailing
+ * year brackets ("Season 1 (2019)"), German "Staffel 1", and the specials
+ * family (specials/extras/OVAs/ONAs → season 0). An unrecognized name would
+ * otherwise become its own SERIES ("Series 1", "OVA") — splitting one show
+ * into several top-level series, or merging every show's "OVA" folder into
+ * one shared fake series.
+ */
 export function parseSeasonDirName(name: string): number | null {
-  if (SPECIALS_DIR.test(name)) return 0;
-  const m = SEASON_DIR.exec(name) ?? SEASON_DIR_SHORT.exec(name);
+  const cleaned = name
+    .replace(/[([][^\])]*[\])]/g, "")
+    .replace(/[._]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/^(?:specials?|extras?|ovas?|onas?)$/i.test(cleaned)) return 0;
+  const m = /^(?:season|series|staffel|s)\s*0*(\d{1,3})$/i.exec(cleaned);
   return m ? Number(m[1]) : null;
 }

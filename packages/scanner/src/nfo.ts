@@ -62,10 +62,15 @@ export function parseNfo(xml: string): ParsedNfo | null {
 }
 
 /** Candidate NFO paths for a given video file, per conventions. */
-export async function findNfoForFile(filePath: string): Promise<ParsedNfo | null> {
+export async function findNfoForFile(filePath: string, kind: "movie" | "episode" = "movie"): Promise<ParsedNfo | null> {
   const dir = path.dirname(filePath);
   const base = filePath.replace(/\.[^.]+$/, "");
-  const candidates = [`${base}.nfo`, path.join(dir, "movie.nfo"), path.join(dir, "tvshow.nfo")];
+  // Directory-level fallbacks are movie-only: in a flat show folder every
+  // episode would otherwise inherit tvshow.nfo's uniqueIds (the SERIES'
+  // identity upserted onto each episode at 0.99 confidence) and its plot as
+  // the episode overview — and a movie.nfo sitting next to episodes (the
+  // Mugen Train shape) would stamp the movie's ids onto every episode.
+  const candidates = kind === "episode" ? [`${base}.nfo`] : [`${base}.nfo`, path.join(dir, "movie.nfo")];
 
   for (const candidate of candidates) {
     try {

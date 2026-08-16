@@ -16,6 +16,16 @@ export function parseAnime(filename: string): ParsedFilename {
 
   const season = result.season ? Number(result.season) : null;
   let episode = result.episode.number ?? null;
+  let year = result.year ?? null;
+  // anitomy reads a trailing bare 4-digit number as an episode number
+  // ("Movie Name 2019.mkv" → episode 2019) — that's a year, not an episode.
+  // Left alone it turns a folder of movies into a fake SERIES whose episodes
+  // are all "Episode 2019" (the folder flips season-like on the episode
+  // marker), so demote it here.
+  if (episode !== null && episode >= 1900 && episode <= 2099) {
+    year = year ?? episode;
+    episode = null;
+  }
   let leadingFallback = false;
   if (episode === null) {
     // "01. Departure.mp4" (episode-name style, no series part in the file —
@@ -31,14 +41,16 @@ export function parseAnime(filename: string): ParsedFilename {
   }
   // No season token means "Series - 38" style absolute numbering — the same
   // number is the absolute number too, until episode_offset resolution
-  // can tell us otherwise against a real season structure.
-  const absoluteNumber = result.episode.numberAlt ?? (season === null ? episode : null);
+  // can tell us otherwise against a real season structure. (numberAlt is the
+  // second number of a multi-episode "01-02" shape, not an absolute number —
+  // never consult it here.)
+  const absoluteNumber = season === null ? episode : null;
 
   return {
     // The fallback case has no series name in the file — the folder is the
     // show — so anitomy's "01  Departure" title is garbage; null it.
     title: leadingFallback ? null : (result.title ?? null),
-    year: result.year ?? null,
+    year,
     season,
     episode,
     absoluteNumber,

@@ -13,6 +13,7 @@ import { partialHash } from "./hash.js";
 import { mapLimit } from "./limit.js";
 import { findNfoForFile } from "./nfo.js";
 import { parseFilename } from "./parse-filename.js";
+import { cleanFolderTitle } from "./parsers/scene.js";
 import { probeFile, type ProbeResult } from "./probe.js";
 import { syncMediaStreams, syncSubtitleTracks } from "./streams.js";
 import { type DiscoveredFile, groupByDirectory, walkVideoFiles } from "./walk.js";
@@ -122,8 +123,10 @@ async function transferSeriesIdentity(db: PrismaClient, oldParentId: string, new
 
   const transferred = await db.externalId.findMany({ where: { mediaItemId: oldRoot.id } });
   if (transferred.length === 0) return;
-  if ((await db.externalId.count({ where: { mediaItemId: newRoot.id } })) > 0) return;
-
+  // Merge, don't gate: the new series may already hold provider rows of its
+  // own (its resolve job can land before this transfer runs) — skipDuplicates
+  // keeps those and fills in whatever the old series had that it lacks.
+  // All-or-nothing here used to lose the pinned identity entirely.
   await db.externalId.createMany({
     data: transferred.map((e) => ({
       mediaItemId: newRoot.id,
@@ -250,8 +253,17 @@ async function ingestLeafItem(
   // 13..24) — normalize to season-relative (1..12) so ordering, titles, and
   // provider episode lists agree. The base is the prior seasons' episode
   // count; files already relative (episode <= base) are left untouched.
+  // Gated on the filename carrying NO explicit season token: an S02E09 parse
+  // is already season-relative, and subtracting the prior-season count from
+  // it would renumber it to "Episode 1" and collide with the real S02E01.
   let episodeNumber: number | null = kind === "EPISODE" ? (parsed.episode ?? null) : null;
-  if (kind === "EPISODE" && episodeNumber !== null && seasonNumber !== null && seasonNumber > 1) {
+  if (
+    kind === "EPISODE" &&
+    episodeNumber !== null &&
+    seasonNumber !== null &&
+    seasonNumber > 1 &&
+    parsed.season === null
+  ) {
     const seasonRow = await db.mediaItem.findUnique({ where: { id: parentId as string }, select: { parentId: true } });
     if (seasonRow?.parentId) {
       const prior = await db.mediaItem.count({
@@ -266,14 +278,16 @@ async function ingestLeafItem(
   const title =
     kind === "EPISODE" ? `Episode ${episodeNumber ?? "?"}` : (parsed.title ?? path.basename(file.path));
 
-// Path first (common case, cheap unique lookup). If the path moved, fall
+  // Path first (common case, cheap unique lookup). If the path moved, fall
   // back to inode within this library — a rename/move must reuse the same
-  // MediaItem/MediaFile, not re-import .
+  // MediaItem/MediaFile, not re-import. inode 0 means the filesystem doesn't
+  // report real inodes (SMB/some network mounts) — every file shares it, so
+  // matching on it would attach this file to an arbitrary wrong item.
   let existingFile = await db.mediaFile.findUnique({
     where: { path: file.path },
     include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
   });
-  if (!existingFile) {
+  if (!existingFile && file.inode !== 0n) {
     existingFile = await db.mediaFile.findFirst({
       where: { inode: file.inode, mediaItem: { libraryId } },
       include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
@@ -327,7 +341,7 @@ async function ingestLeafItem(
     }
   }
 
-  const nfo = await findNfoForFile(file.path);
+  const nfo = await findNfoForFile(file.path, kind === "EPISODE" ? "episode" : "movie");
 
   const fileFields = {
     path: file.path,
@@ -347,12 +361,15 @@ async function ingestLeafItem(
     // Update by id, not by path — the path itself may be what changed (rename/move).
     mediaFileId = existingFile.id;
     await db.mediaFile.update({ where: { id: mediaFileId }, data: fileFields });
-    // Shape changed (kind/parent/reparse) or a MOVIE retitled — reset in
-    // place, or corrected scans leave stale root items behind forever.
+    // Shape changed (kind/parent/reparse) or the item retitled — reset in
+    // place, or corrected scans leave stale rows behind forever. The title
+    // compare doubles as the episode-renumber check ("Episode N" encodes the
+    // episode number): a parse/normalization fix that changes the computed
+    // number must rewrite the row, not keep the stale one.
     if (
       existingFile.mediaItem.kind !== kind ||
       existingFile.mediaItem.parentId !== parentId ||
-      (kind === "MOVIE" && existingFile.mediaItem.title !== title)
+      existingFile.mediaItem.title !== title
     ) {
       await reparentItem(db, {
         mediaItemId: existingFile.mediaItemId,
@@ -388,7 +405,12 @@ async function ingestLeafItem(
   await syncSubtitleTracks(db, mediaFileId, probe?.streams ?? []);
   await extractFonts(db, mediaFileId, file.path, dir);
 
-  const evidence: EvidenceInput[] = [{ signalType: "FOLDER_NAME", source: dir, value: { title } }];
+  // FOLDER_NAME carries the folder's identity, not the item's synthetic
+  // display title — for episodes `title` is "Episode N", which would record
+  // nonsense as the folder signal.
+  const evidence: EvidenceInput[] = [
+    { signalType: "FOLDER_NAME", source: dir, value: { title: kind === "EPISODE" ? path.basename(dir) : title } },
+  ];
   if (parsed.episode !== null || parsed.title) {
     evidence.push({ signalType: "FILENAME_PARSE", source: file.path, value: { ...parsed } });
   }
@@ -541,12 +563,20 @@ export async function ingestLibrary(
       LOCAL_SIGNAL_TYPES,
     );
     summary.seriesCreated += 1;
-    await opts.onMetadataNeeded?.({ mediaItemId: created.id, libraryId, kind: "SERIES", title: entry.name, year: null });
+    // The folder basename is the on-disk identity; the provider query gets
+    // the cleaned view ("Attack on Titan (2013)" → title + year), or the
+    // year/tags poison the title and the match gate rejects everything.
+    const folderQuery = cleanFolderTitle(entry.name);
+    await opts.onMetadataNeeded?.({ mediaItemId: created.id, libraryId, kind: "SERIES", title: folderQuery.title, year: folderQuery.year });
   }
 
   // Global, deterministic order independent of filesystem readdir order —
-  // required for scanCursor resume to mean anything.
-  const sortedDirs = Array.from(byDir.keys()).sort();
+  // required for scanCursor resume to mean anything. Numeric-aware, so
+  // "Season 2" sorts before "Season 10" (plain string sort inverts them,
+  // which also skews the prior-season episode counts used for absolute-
+  // number normalization).
+  const comparePaths = (a: string, b: string): number => a.localeCompare(b, undefined, { numeric: true });
+  const sortedDirs = Array.from(byDir.keys()).sort(comparePaths);
   const totalDirs = sortedDirs.length;
 
   // Progress is reported per committed directory (matching the resumeCursor
@@ -559,7 +589,7 @@ export async function ingestLibrary(
   };
 
   for (const dir of sortedDirs) {
-    if (opts.resumeFromCursor && dir <= opts.resumeFromCursor) {
+    if (opts.resumeFromCursor && comparePaths(dir, opts.resumeFromCursor) <= 0) {
       await reportProgress();
       continue;
     }
@@ -597,19 +627,52 @@ export async function ingestLibrary(
 
     const seasonDirNumber = parseSeasonDirName(path.basename(dir));
     const seriesDir = seasonDirNumber !== null ? path.dirname(dir) : dir;
-    const seriesTitle = path.basename(seriesDir);
-    const seasonNumber = seasonDirNumber ?? 1;
+    let seriesTitle = path.basename(seriesDir);
+
+    const parsedByPath = new Map(dirFiles.map((f) => [f.path, parseFilename(path.basename(f.path), profile)] as const));
+
+    if (seriesDir === rootPath) {
+      // Files sitting loose at the library root: the root's own name ("tv",
+      // "anime") is not a show — parenting under it merges unrelated series
+      // into one fake SERIES. Fall back to the files' own parsed title.
+      const counts = new Map<string, number>();
+      for (const p of parsedByPath.values()) {
+        if (!p.title) continue;
+        counts.set(p.title, (counts.get(p.title) ?? 0) + 1);
+      }
+      const mode = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (mode) seriesTitle = mode;
+    }
 
     const series = await findOrCreateChild(db, { libraryId, parentId: null, kind: "SERIES", title: seriesTitle });
     if (series.wasCreated) summary.seriesCreated += 1;
 
-    const season = await findOrCreateChild(db, {
-      libraryId,
-      parentId: series.id,
-      kind: "SEASON",
-      title: `Season ${seasonNumber}`,
-      seasonNumber,
-    });
+    // The directory name wins the season number when it carries one; in a
+    // flat (non-season) show folder an explicit per-file season token
+    // ("Show.S02E05.mkv" next to S01 files) wins instead — dumping it into
+    // Season 1 would collide episode numbers and silently renumber the file.
+    // Season rows are created serially up front: the concurrent leaf loop
+    // below must never race findOrCreateChild.
+    const dirSeasonNumber = seasonDirNumber ?? 1;
+    const seasonNumbers = new Set<number>([dirSeasonNumber]);
+    if (seasonDirNumber === null) {
+      for (const p of parsedByPath.values()) {
+        if (p.season !== null) seasonNumbers.add(p.season);
+      }
+    }
+    const seasonRows = new Map<number, { id: string }>();
+    for (const n of seasonNumbers) {
+      seasonRows.set(
+        n,
+        await findOrCreateChild(db, { libraryId, parentId: series.id, kind: "SEASON", title: `Season ${n}`, seasonNumber: n }),
+      );
+    }
+    const season = seasonRows.get(dirSeasonNumber)!;
+    const seasonForFile = (filePath: string): { seasonId: string; seasonNumber: number } => {
+      const parsedSeason = seasonDirNumber === null ? (parsedByPath.get(filePath)?.season ?? null) : null;
+      const n = parsedSeason ?? dirSeasonNumber;
+      return { seasonId: seasonRows.get(n)!.id, seasonNumber: n };
+    };
 
     const { main, outliers } = clusterByRuntime(
       dirFiles.map((f) => ({ path: f.path, durationMs: probes.get(f.path)?.durationMs ?? null })),
@@ -621,7 +684,8 @@ export async function ingestLibrary(
     // aggregated title agreement count from every file first.
     const outcomes = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
       const ctx: FileContext = { file, dir, probe: probes.get(file.path) ?? null };
-      const parsed = parseFilename(path.basename(file.path), profile);
+      const parsed = parsedByPath.get(file.path)!;
+      const { seasonId, seasonNumber } = seasonForFile(file.path);
       // Runtime clustering exists only for the Mugen Train shape — movies
       // whose names don't parse as episodes. A file that PARSES as a numbered
       // episode is an episode, full stop: wide runtime spread (short ONA
@@ -638,9 +702,9 @@ export async function ingestLibrary(
         // standalone movie. Only files in a *flat* (non-season) directory are
         // ever root-level movies; a movie inside a show folder is part of that
         // show, full stop.
-        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", season.id, seasonNumber, deferArtwork, deferTrickplay, profile);
+        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", seasonId, seasonNumber, deferArtwork, deferTrickplay, profile);
       } else if (isMain) {
-        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", season.id, seasonNumber, deferArtwork, deferTrickplay, profile);
+        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", seasonId, seasonNumber, deferArtwork, deferTrickplay, profile);
       }
       if (result) {
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
@@ -679,12 +743,16 @@ export async function ingestLibrary(
       [{ signalType: "FOLDER_NAME", source: seriesDir, value: { title: seriesTitle } }],
       LOCAL_SIGNAL_TYPES,
     );
-    await opts.onMetadataNeeded?.({ mediaItemId: series.id, libraryId, kind: "SERIES", title: seriesTitle, year: null });
+    // The folder basename is the on-disk identity; the provider query gets
+    // the cleaned view ("Attack on Titan (2013)" → title + year), or the
+    // year/tags poison the title and the match gate rejects everything.
+    const seriesQuery = cleanFolderTitle(seriesTitle);
+    await opts.onMetadataNeeded?.({ mediaItemId: series.id, libraryId, kind: "SERIES", title: seriesQuery.title, year: seriesQuery.year });
     await syncEvidenceAndConfidence(
       db,
       season.id,
       [
-        { signalType: "FOLDER_NAME", source: dir, value: { title: `Season ${seasonNumber}` } },
+        { signalType: "FOLDER_NAME", source: dir, value: { title: `Season ${dirSeasonNumber}` } },
         {
           signalType: "SIBLING_CONSISTENCY",
           source: dir,

@@ -200,7 +200,10 @@ async function dueForSelfHealing(db: PrismaClient, mediaItemId: string, lastReso
   if (latestEvidence && latestEvidence.observedAt > lastResolvedAt) return true;
 
   const dueForBackoffRetry = Date.now() - lastResolvedAt.getTime() > SELF_HEALING_RETRY_BACKOFF_MS;
-  return item.confidence < SELF_HEALING_CONFIDENCE_THRESHOLD && dueForBackoffRetry;
+  // <= is deliberate: a bare PROVIDER_MATCH with zero local corroboration
+  // computes to exactly the threshold, and that is precisely the case the
+  // periodic re-check exists for (see the threshold's comment in constants).
+  return item.confidence <= SELF_HEALING_CONFIDENCE_THRESHOLD && dueForBackoffRetry;
 }
 
 async function touchLastResolvedAt(db: PrismaClient, mediaItemId: string, providerName: string): Promise<void> {
@@ -294,12 +297,14 @@ async function enrichEpisodeTitles(
     }
     if (!source) {
       // No direct episode source — Jikan is the MAL API and re-uses its id.
-      const jikan = providers["JIKAN"];
+      // (Every providers map in the codebase is keyed "MAL" — the Jikan
+      // provider's own `provider` field — so look it up under that key.)
+      const jikan = providers["MAL"];
       if (jikan?.episodes) {
         const malRow = (await db.externalId.findMany({ where: { mediaItemId: seriesId } })).find(
-          (r) => r.provider === "MAL" || r.provider === "JIKAN",
+          (r) => r.provider === "MAL",
         );
-        if (malRow) source = { provider: jikan, providerName: "JIKAN", providerId: malRow.providerId };
+        if (malRow) source = { provider: jikan, providerName: "MAL", providerId: malRow.providerId };
       }
     }
     if (!source) return;
@@ -361,12 +366,19 @@ async function enrichEpisodeTitles(
     for (const list of lists) {
       for (const ep of list.episodes) {
         if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
-        byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
+        // Lists are sorted broadest-coverage first; first-write-wins so the
+        // narrowest list (e.g. MAL's single-cour S1) can't clobber the
+        // broadest (TVmaze S1-S2) on conflicts.
+        const key = `${ep.seasonNumber}:${ep.episodeNumber}`;
+        if (!byKey.has(key)) byKey.set(key, ep.title);
       }
     }
     // Rank-based index: provider and local numbering can disagree (absolute
     // vs season-relative), so keep per-season ordered title lists too — the
-    // nth local episode maps to the nth provider episode.
+    // nth local episode maps to the nth provider episode. One list per
+    // season (broadest first): concatenating every list's titles would read
+    // into the *next* list's ep-1 title once a season outgrows the first
+    // list's length — silently shifted titles.
     const titlesBySeason = new Map<number, string[]>();
     for (const list of lists) {
       const bySeasonPairs = new Map<number, { n: number; title: string }[]>();
@@ -377,9 +389,8 @@ async function enrichEpisodeTitles(
         bySeasonPairs.set(ep.seasonNumber, arr);
       }
       for (const [season, pairs] of bySeasonPairs) {
-        const arr = titlesBySeason.get(season) ?? [];
-        arr.push(...pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
-        titlesBySeason.set(season, arr);
+        if (titlesBySeason.has(season)) continue;
+        titlesBySeason.set(season, pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
       }
     }
     const locals = await db.mediaItem.findMany({
@@ -412,18 +423,23 @@ async function enrichEpisodeTitles(
     const tvMaze = providers["TVMAZE"] as MetadataProvider | undefined;
     if (gapSeasons.length > 0 && tvMaze?.search && tvMaze.episodes) {
       const series = await db.mediaItem.findUnique({ where: { id: seriesId }, select: { title: true } });
-      if (series?.title) {
-        const results = (await tvMaze.search({ title: series.title, kind: "SERIES" })).matches;
-        // Exact-normalized equality, or containment in the provider title
-        // (short local name vs fuller provider title). Never fall back to a
-        // blind first hit — a *wrong* show's episode list is worse than no
-        // titles at all, and it would poison every episode's display.
-        const hit = results.find(
-          (r) =>
-            normalizeTitle(r.title) === normalizeTitle(series.title) ||
-            normalizeTitle(r.title).includes(normalizeTitle(series.title)),
-        );
-        if (!hit) return;
+      // Exact-normalized equality, or containment in the provider title
+      // (short local name vs fuller provider title). Never fall back to a
+      // blind first hit — a *wrong* show's episode list is worse than no
+      // titles at all, and it would poison every episode's display. An
+      // empty-normalized local title (all-CJK folder name) would make
+      // `.includes("")` vacuously true — same blind hit, so skip instead.
+      const seriesNorm = series?.title ? normalizeTitle(series.title) : "";
+      const hit =
+        seriesNorm.length > 0
+          ? (await tvMaze.search({ title: series!.title, kind: "SERIES" })).matches.find((r) => {
+              const candidateNorm = normalizeTitle(r.title);
+              return candidateNorm === seriesNorm || candidateNorm.includes(seriesNorm);
+            })
+          : undefined;
+      // A backfill miss must only skip the backfill — the primary source's
+      // titles (already fetched above) still apply below.
+      if (hit) {
         const backfill = await tvMaze.episodes(hit.providerId);
         if (backfill.length > 0) {
           const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(
@@ -447,15 +463,17 @@ async function enrichEpisodeTitles(
           const backfillBySeason = new Map<number, { n: number; title: string }[]>();
           for (const ep of backfill) {
             if (ep.seasonNumber == null || ep.episodeNumber == null) continue;
-            byKey.set(`${ep.seasonNumber}:${ep.episodeNumber}`, ep.title);
+            // Gap-fill only — never overwrite a title the primary/
+            // broader-coverage sources already supplied.
+            const key = `${ep.seasonNumber}:${ep.episodeNumber}`;
+            if (!byKey.has(key)) byKey.set(key, ep.title);
             const arr = backfillBySeason.get(ep.seasonNumber) ?? [];
             arr.push({ n: ep.episodeNumber, title: ep.title });
             backfillBySeason.set(ep.seasonNumber, arr);
           }
           for (const [season, pairs] of backfillBySeason) {
-            const arr = titlesBySeason.get(season) ?? [];
-            arr.push(...pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
-            titlesBySeason.set(season, arr);
+            if (titlesBySeason.has(season)) continue;
+            titlesBySeason.set(season, pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
           }
         }
       }
@@ -639,6 +657,22 @@ export async function resolveMetadataStep(
       await touchLastResolvedAt(db, target.mediaItemId, providerName);
       return false; // no longer confirmed — caller tries the next provider
     }
+
+    // A held id with no cache row — the manual "fix match" pin writes only
+    // the ExternalId, so it lands here. Revalidate the held id exactly (same
+    // as the cached path): a bare fuzzy title search would re-reject the very
+    // title mismatch the pin exists to override, and the pin would stay inert
+    // — no artwork, no descriptive fields, no episode titles, forever.
+    const result = await provider.search(query, { existingProviderId: existing.providerId });
+    const confirmed =
+      findAcceptedMatch(query, result.matches) ?? result.matches.find((m) => m.providerId === existing.providerId);
+    if (confirmed) {
+      await applyMatch(db, target, providerName, confirmed, result.lastModified, wikidataBridge);
+      await enrichEpisodeTitles(db, target.mediaItemId, providerName, provider, confirmed.providerId, providers);
+      return true;
+    }
+    await touchLastResolvedAt(db, target.mediaItemId, providerName);
+    return false;
   }
 
   const result = await provider.search(query);

@@ -42,6 +42,10 @@ function isOrderedSubsequence(needle: string, haystack: string): boolean {
  */
 export function acceptMatch(query: MetadataQuery, candidate: MetadataMatch): boolean {
   const queryNorm = normalizeTitle(query.title);
+  // An all-CJK (or punctuation-only) query normalizes to "" — and so does
+  // every candidate's native title, making "" === "" a vacuous "exact match"
+  // that accepts the first search hit unconditionally.
+  if (queryNorm.length === 0) return false;
   const candidateTitles = [candidate.title, ...(candidate.titles?.map((t) => t.value) ?? [])];
 
   const exact = candidateTitles.some((t) => normalizeTitle(t) === queryNorm);

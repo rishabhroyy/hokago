@@ -28,7 +28,8 @@ import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadat
 import { probeFile } from "@hokago/scanner/probe";
 import { generateTrickplaySheets, isNothingWrittenError } from "@hokago/scanner/trickplay";
 import { killTrackedChildren, trackedPidCount, trackPid, untrackPid } from "@hokago/scanner/child-registry";
-import { configDir, probeConfigDir } from "@hokago/scanner/artwork";
+import { configDir, probeConfigDir, findSidecarArt, upsertArtworkDescriptor } from "@hokago/scanner/artwork";
+import { ARTWORK_SOURCE_PRIORITY } from "@hokago/scanner/constants";
 import { setArtworkHwaccel } from "@hokago/scanner/generate-art";
 import { buildDownloadArgs } from "@hokago/ffmpeg/download";
 import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
@@ -194,7 +195,9 @@ async function enqueueTrickplay(job: TrickplayJobData): Promise<void> {
       where: { id: job.mediaFileId },
       select: { hash: true, trickplay: { select: { sourceHash: true } } },
     });
-    if (file?.trickplay && file.trickplay.sourceHash === file.hash) return;
+    // null === null is not "up to date": a missing content hash means the
+    // hash gate can't vouch for the sheets — enqueue and let the job decide.
+    if (file?.trickplay && file.hash !== null && file.trickplay.sourceHash === file.hash) return;
     await trickplayQueue.add(QUEUE_NAMES.TRICKPLAY, job, { jobId: trickplayJobId(job.mediaFileId) });
   } catch (err) {
     console.error(`enqueueTrickplay failed for ${job.mediaFileId}, will be re-derived on next reconcile:`, err);
@@ -264,10 +267,35 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
 }
 
 async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
-  const { mediaItemId, filePath, dir, durationMs } = job.data;
+  const { mediaItemId, durationMs } = job.data;
   try {
+    // The payload path was captured at scan time; a rename between enqueue
+    // and run leaves it stale (ffmpeg ENOENTs against the old path). The DB
+    // row is the truth — re-derive, don't accumulate.
+    const file = await db.mediaFile.findFirst({ where: { mediaItemId } });
+    const filePath = file?.path ?? job.data.filePath;
+    const dir = file ? path.dirname(file.path) : job.data.dir;
+
+    // A scan enqueues artwork for every leaf. If the item already has
+    // sidecar/provider-grade poster AND backdrop on disk, only re-check for
+    // (cheap, higher-priority) sidecars — regenerating ffmpeg fallbacks is
+    // pure churn, and historically the priority-blind slot cleanup deleted
+    // the PROVIDER rows when the GENERATED job landed after them.
+    const existing = await db.artwork.findMany({
+      where: { mediaItemId, kind: { in: ["POSTER", "BACKDROP"] } },
+      select: { kind: true, priority: true, bytesPath: true },
+    });
+    const covered = (kind: "POSTER" | "BACKDROP"): boolean =>
+      existing.some((a) => a.kind === kind && a.priority <= ARTWORK_SOURCE_PRIORITY.PROVIDER! && existsSync(a.bytesPath));
+    if (covered("POSTER") && covered("BACKDROP")) {
+      const sidecars = await findSidecarArt(dir, filePath);
+      for (const art of sidecars) await upsertArtworkDescriptor(db, mediaItemId, art);
+      await db.jobFailure.deleteMany({ where: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK } });
+      return;
+    }
+
     // Re-probe rather than trust anything carried across the queue boundary
- // (re-derive, don't accumulate) — attachedPics never crossed the
+    // (re-derive, don't accumulate) — attachedPics never crossed the
     // wire in ArtworkJobData, so this is also the only correct way to get them.
     const probe = await probeFile(filePath);
     await storeArtwork(db, mediaItemId, dir, filePath, probe?.attachedPics ?? [], durationMs ?? probe?.durationMs ?? null);
@@ -286,8 +314,10 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
       update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
     });
     if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
-      // Poison pill: stop retrying, stay playable, surface to admins.
-      await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } });
+      // Poison pill: stop retrying, stay playable, surface to admins. The
+      // row may already be pruned (file deleted mid-retries) — never let the
+      // state flip itself throw an unhandled job failure on a dead item.
+      await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } }).catch(() => {});
       return; // swallow — no rethrow, so BullMQ won't keep retrying a dead job
     }
     throw err; // let BullMQ retry with backoff until the threshold is hit
@@ -295,14 +325,18 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
 }
 
 async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
-  const { mediaItemId, mediaFileId, filePath, durationMs } = job.data;
+  const { mediaItemId, mediaFileId, durationMs } = job.data;
   try {
+    // Re-fetch the row first: the payload path was captured at scan time and
+    // a rename between enqueue and run leaves it stale — the DB row's path is
+    // the truth (re-derive, don't accumulate).
+    const mediaFile = await db.mediaFile.findUnique({ where: { id: mediaFileId } });
+    const filePath = mediaFile?.path ?? job.data.filePath;
     // Re-probe rather than trust anything carried across the queue boundary
     // (re-derive, don't accumulate) — no probe result, or a file the probe
     // couldn't read, means "no sheets", not a poisoned item.
     const probe = await probeFile(filePath);
     const duration = durationMs ?? probe?.durationMs ?? null;
-    const mediaFile = await db.mediaFile.findUnique({ where: { id: mediaFileId } });
     if (duration === null || !mediaFile) {
       await db.jobFailure.deleteMany({ where: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } });
       return;
@@ -317,6 +351,7 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
         tileHeight: result.tileHeight,
         intervalMs: result.intervalMs,
         tilesPerSheet: result.tilesPerSheet,
+        totalTiles: result.totalTiles,
         sheetPaths: result.sheetPaths,
         sourceHash: mediaFile.hash,
       },
@@ -325,6 +360,7 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
         tileHeight: result.tileHeight,
         intervalMs: result.intervalMs,
         tilesPerSheet: result.tilesPerSheet,
+        totalTiles: result.totalTiles,
         sheetPaths: result.sheetPaths,
         sourceHash: mediaFile.hash,
         generatedAt: new Date(),
@@ -345,8 +381,10 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
       update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
     });
     if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
-      // Poison pill: stop retrying, stay playable, surface to admins.
-      await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } });
+      // Poison pill: stop retrying, stay playable, surface to admins. The
+      // row may already be pruned (file deleted mid-retries) — never let the
+      // state flip itself throw an unhandled job failure on a dead item.
+      await db.mediaItem.update({ where: { id: mediaItemId }, data: { state: "NEEDS_ATTENTION" } }).catch(() => {});
       return; // swallow — no rethrow, so BullMQ won't keep retrying a dead job
     }
     throw err; // let BullMQ retry with backoff until the threshold is hit
@@ -579,9 +617,27 @@ function isTransientError(err: unknown): boolean {
  */
 function isTransientFfmpegError(err: unknown): boolean {
   const msg = err instanceof Error ? `${err.message} ${String(err.cause ?? "")}` : String(err);
-  return /timed?\s?out|timeout|killed|signal|emfile|enfile|enospc|eio|eintr|epipe|econnreset|too\s?many\s?open\s?files|no\s?space\s?left|device\s?or\s?resource\s?busy|spawn\s?\w+\s?emfile/i.test(
+  return /timed?\s?out|timeout|killed|signal|emfile|enfile|enospc|eio|eintr|epipe|econnreset|enoent|no\s?such\s?file|too\s?many\s?open\s?files|no\s?space\s?left|device\s?or\s?resource\s?busy|spawn\s?\w+\s?emfile/i.test(
     msg,
   );
+}
+
+/**
+ * Advances an item to the next provider in its chain. Called on a clean miss,
+ * on a transient provider failure (a degraded provider must not block the
+ * healthy fallback for hours while the sweep keeps re-hitting chain[0]), and
+ * on a deterministic failure (retrying a query the provider definitively
+ * rejected is pointless — try the next provider instead). findUnique, not
+ * findUniqueOrThrow: a deleted library must not turn into a poison-counted
+ * job failure.
+ */
+async function enqueueNextInChain(providerName: string, data: MetadataJobData): Promise<void> {
+  const library = await db.library.findUnique({ where: { id: data.libraryId } });
+  if (!library) return;
+  const chain = buildProviderChain(data.kind, library.contentProfile, library.providerOrder);
+  const idx = chain.indexOf(providerName);
+  const next = idx >= 0 ? chain[idx + 1] : undefined;
+  if (next) await enqueueMetadata(next, data);
 }
 
 /**
@@ -606,29 +662,32 @@ function makeProcessMetadata(providerName: string) {
         METADATA_PROVIDERS,
       );
       await db.jobFailure.deleteMany({ where: { mediaItemId, jobType } });
-      if (!matched) {
-        const library = await db.library.findUniqueOrThrow({ where: { id: libraryId } });
-        const chain = buildProviderChain(kind, library.contentProfile, library.providerOrder);
-        const next = chain[chain.indexOf(providerName) + 1];
-        if (next) await enqueueMetadata(next, job.data);
-      }
+      if (!matched) await enqueueNextInChain(providerName, job.data);
     } catch (err) {
-      // Transient (429 / 5xx / network blip): let the job complete without
-      // recording a failure — the metadata sweep keeps re-driving unresolved
-      // items until the provider recovers, and the counter stays honest so a
-      // later deterministic error still reaches the threshold on its own.
-      if (isTransientError(err)) return;
+      // Transient (429 / 5xx / network blip): complete without recording a
+      // failure, but still advance the chain — the fallback provider may be
+      // healthy even while this one is down. The sweep keeps re-driving
+      // unresolved items from chain[0], so this provider gets retried once
+      // it recovers.
+      if (isTransientError(err)) {
+        await enqueueNextInChain(providerName, job.data);
+        return;
+      }
       const failure = await db.jobFailure.upsert({
         where: { mediaItemId_jobType: { mediaItemId, jobType } },
         create: { mediaItemId, jobType, attempts: 1, lastError: String(err) },
         update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
       });
       if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
- // Poison pill : stop retrying this provider, stay playable —
+        // Poison pill : stop retrying this provider, stay playable —
         // the item just keeps whatever confidence/metadata it already has.
         return;
       }
-      throw err; // let BullMQ retry with backoff until the threshold is hit
+      // Deterministic failure below the poison threshold: don't burn BullMQ
+      // retries re-running a query this provider definitively rejected —
+      // advance the chain. The sweep re-drives this provider later (the
+      // failure row only excludes the item once the threshold is hit).
+      await enqueueNextInChain(providerName, job.data);
     }
   };
 }
@@ -777,10 +836,26 @@ async function reconcile(): Promise<void> {
   }
 
   // Trickplay leg two: the file changed (content hash differs from the hash
-  // the current sheets were generated from) — stale sheets, regenerate.
+  // the current sheets were generated from) — stale sheets, regenerate. Also
+  // regenerate when the sheets are simply gone from disk (config dir lost,
+  // DB-only backup restore) even though the hash still matches — otherwise
+  // every scrubber preview 404s forever with no self-heal. Poisoned items
+  // stay parked (the hash gate alone would re-drive them into the same
+  // deterministic failure every boot).
+  const trickplayPoisoned = new Set(
+    (
+      await db.jobFailure.findMany({
+        where: { jobType: QUEUE_NAMES.TRICKPLAY, attempts: { gte: JOB_FAILURE_THRESHOLD } },
+        select: { mediaItemId: true },
+      })
+    ).map((r) => r.mediaItemId),
+  );
+  const sheetOnDisk = (stored: string): boolean => existsSync(stored) || existsSync(path.join(configDir(), stored));
   const staleTrickplay = await db.trickplay.findMany({ include: { mediaFile: true } });
   for (const row of staleTrickplay) {
-    if (row.sourceHash === row.mediaFile.hash) continue;
+    const sheetsMissing = row.sheetPaths.length > 0 && !row.sheetPaths.every(sheetOnDisk);
+    if (!sheetsMissing && row.mediaFile.hash !== null && row.sourceHash === row.mediaFile.hash) continue;
+    if (trickplayPoisoned.has(row.mediaFile.mediaItemId)) continue;
     await enqueueTrickplay({
       mediaItemId: row.mediaFile.mediaItemId,
       mediaFileId: row.mediaFile.id,

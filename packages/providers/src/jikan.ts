@@ -13,7 +13,9 @@ const BASE_URL = process.env.HOKAGO_JIKAN_BASE_URL ?? "https://api.jikan.moe/v4"
 interface JikanAnime {
   mal_id: number;
   title: string;
+  title_english: string | null;
   title_japanese: string | null;
+  title_synonyms: string[] | null;
   aired: { from: string | null } | null;
   status: string | null;
   synopsis: string | null;
@@ -51,9 +53,18 @@ function lifecycleFromStatus(status: string | null): MetadataLifecycleState {
 }
 
 function toMatch(anime: JikanAnime): MetadataMatch {
+  // The match gate checks every known title variant — without title_english/
+  // synonyms an English-named folder can never match a romaji-primary MAL
+  // entry ("March Comes in Like a Lion" vs "3-gatsu no Lion").
+  const titles = [
+    ...(anime.title_english ? [{ type: "ENGLISH" as const, value: anime.title_english }] : []),
+    ...(anime.title_japanese ? [{ type: "NATIVE" as const, value: anime.title_japanese }] : []),
+    ...(anime.title_synonyms ?? []).map((value) => ({ type: "SYNONYM" as const, value })),
+  ];
   return {
     providerId: String(anime.mal_id),
     title: anime.title,
+    titles: titles.length > 0 ? titles : undefined,
     year: anime.aired?.from ? Number(anime.aired.from.slice(0, 4)) : undefined,
     overview: anime.synopsis ?? undefined,
     premieredAt: anime.aired?.from ?? undefined,
@@ -84,8 +95,11 @@ export class JikanProvider implements MetadataProvider {
       const res = await fetch(`${BASE_URL}/anime/${encodeURIComponent(options.existingProviderId)}`);
       if (res.status === 404) return { matches: [] };
       if (!res.ok) throw new Error(`Jikan id lookup failed: ${res.status} ${res.statusText}`);
-      const anime = (await res.json()) as JikanAnime;
-      return { matches: [toMatch(anime)] };
+      // v4 wraps single-resource responses in { data: {...} }, same as search
+      // — reading the bare body here produced an all-undefined match whose
+      // title crashed the gate's normalizeTitle as a "deterministic" failure.
+      const body = (await res.json()) as { data: JikanAnime };
+      return { matches: [toMatch(body.data)] };
     }
 
     const url = `${BASE_URL}/anime?q=${encodeURIComponent(query.title)}&limit=10`;

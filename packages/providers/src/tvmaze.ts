@@ -97,11 +97,16 @@ export class TvMazeProvider implements MetadataProvider {
     const updates = (await updatesRes.json()) as Record<string, number>;
     const updatedAt = updates[showId];
 
-    if (updatedAt === undefined || (lastModified && String(updatedAt) <= lastModified)) {
+    // Numeric compare — a lexicographic string compare of epoch seconds
+    // silently inverts freshness the moment the two operands differ in length.
+    if (updatedAt === undefined || (lastModified && Number(updatedAt) <= Number(lastModified))) {
       return { matches: [], notModified: true, lastModified: lastModified ?? String(Math.floor(Date.now() / 1000)) };
     }
 
     const showRes = await fetch(`${BASE_URL}/shows/${showId}`);
+    // A show deleted from TVmaze is a clean "identity gone", not a job
+    // failure — throwing here would count a 404 against the poison counter.
+    if (showRes.status === 404) return { matches: [] };
     if (!showRes.ok) throw new Error(`TVmaze show fetch failed: ${showRes.status} ${showRes.statusText}`);
     const show = (await showRes.json()) as TvMazeShow;
     return { matches: [toMatch(show)], lastModified: String(updatedAt) };

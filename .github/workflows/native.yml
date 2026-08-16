@@ -289,11 +289,14 @@ jobs:
         run: |
           gradle -PappVersionName="$APP_VERSION" assemblePhoneRelease assembleTvRelease
       - name: Upload APKs
+        shell: bash
         run: |
+          ls -la app/build/outputs/apk/phone/release/ app/build/outputs/apk/tv/release/
           gh release upload "$TAG" \
-            native/android/app/build/outputs/apk/phone/release/app-phone-release.apk \
-            native/android/app/build/outputs/apk/tv/release/app-tv-release.apk \
+            app/build/outputs/apk/phone/release/*.apk \
+            app/build/outputs/apk/tv/release/*.apk \
             --clobber
+        working-directory: native/android
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.versions.outputs.tag }}

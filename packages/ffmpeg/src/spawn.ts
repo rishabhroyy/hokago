@@ -31,6 +31,17 @@ const STDERR_TAIL_BYTES = 8192;
  */
 export function spawnFfmpeg(args: string[], onExit?: (result: TranscodeExit) => void, input?: Readable): RunningTranscode {
   const child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
+  // A failed exec emits 'error' instead of 'exit' — without a listener that
+  // becomes an uncaught exception (taking the whole API down), and the slot/
+  // job accounting that onExit performs would never run. Pre-pid errors
+  // (ENOENT/EMFILE at spawn) are handled by the throw below; this catches
+  // anything async that slips past it.
+  child.on("error", (err) => {
+    if (child.pid !== undefined && child.pid !== null) {
+      untrackPid(child.pid);
+      onExit?.({ code: -1, stderr: `spawn error: ${err.message}` });
+    }
+  });
   if (!child.pid) throw new Error("ffmpeg failed to spawn");
   const pid = child.pid;
   trackPid(pid);

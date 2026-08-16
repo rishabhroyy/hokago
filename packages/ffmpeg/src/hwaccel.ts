@@ -167,7 +167,13 @@ async function detect(): Promise<HwaccelState> {
   if (requested === "none") {
     note = "hardware acceleration disabled by config";
   } else if (capabilities.length === 0) {
-    note = "no hardware acceleration detected — using CPU (mount /dev/dri or the nvidia runtime to enable)";
+    // Nothing usable in this container. For an NVIDIA host this is almost
+    // always a grant problem (the host GPU exists, the container never got
+    // it): nvidia-container-toolkit not installed, or the `gpus: all` line
+    // in docker-compose.yml still commented out — /dev/nvidia0 then doesn't
+    // exist inside the container and every title transcodes on CPU.
+    note =
+      "no hardware acceleration detected — using CPU (NVIDIA: install nvidia-container-toolkit and uncomment `gpus: all` in docker-compose.yml; Intel/AMD: mount /dev/dri)";
   } else if (requested === "auto") {
     for (const candidate of AUTO_PRIORITY) {
       if (await pickFrom(candidate, `auto-detected ${candidate}`)) break;

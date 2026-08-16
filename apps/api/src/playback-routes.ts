@@ -436,7 +436,16 @@ async function attemptHwFallback(sessionId: string, outDir: string): Promise<voi
 
   const lastSegment = await lastWrittenSegment(outDir);
   const targetMs = (lastSegment + 1) * HLS_SEGMENT_SECONDS * 1000;
-  const restarted = await restartTranscode(sessionId, live, targetMs);
+  let restarted: Awaited<ReturnType<typeof restartTranscode>>;
+  try {
+    restarted = await restartTranscode(sessionId, live, targetMs);
+  } catch (e) {
+    // The session is left truncated at the last written segment (the
+    // playlist rewrite below never ran) — the client stops at the surviving
+    // boundary and can reload. Never let a respawn hiccup take the API down.
+    console.warn(`hwaccel: CPU fallback restart for session ${sessionId} failed: ${String(e).slice(0, 300)}`);
+    return;
+  }
   if ("cancelled" in restarted) return;
   const { transcode, jobId, startMs, segmentFrom } = restarted;
 
@@ -496,10 +505,19 @@ async function spawnTranscodeJob(
     void setTranscodeJobTerminal(job.id, result.code === 0 ? "DONE" : "FAILED", result.code === 0 ? null : result.stderr.slice(0, 2000))
       .catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
     void (async () => {
-      await truncatePlaylistOnExit(sessionId, transcode.pid, outDir, durationMs, segmentFrom);
-      // A real (non-signalled) hw-transcode failure gets one CPU retry —
-      // after this the session either runs software or dies for real.
-      if (result.code !== 0 && hwaccel) await attemptHwFallback(sessionId, outDir);
+      // This runs off the request stack — a throw here is an unhandled
+      // rejection, which by default takes the whole API process down (the
+      // "crashed the server" report: a db blip while respawning hw→CPU
+      // after a failed transcode). Everything below is best-effort recovery;
+      // log and keep serving.
+      try {
+        await truncatePlaylistOnExit(sessionId, transcode.pid, outDir, durationMs, segmentFrom);
+        // A real (non-signalled) hw-transcode failure gets one CPU retry —
+        // after this the session either runs software or dies for real.
+        if (result.code !== 0 && hwaccel) await attemptHwFallback(sessionId, outDir);
+      } catch (e) {
+        console.warn(`session ${sessionId}: post-exit fallback failed: ${String(e).slice(0, 300)}`);
+      }
     })();
   }, input);
   await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
@@ -630,9 +648,15 @@ async function restartTranscode(
       ).catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
       // Truthful playlist for the *session's current* outDir — the caller's
       // spread object (fresh per-track/per-quality dir) is what's live.
+      // Same unhandled-rejection guard as spawnTranscodeJob: this callback
+      // runs off the request stack, a throw would kill the API process.
       void (async () => {
-        await truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
-        if (result.code !== 0 && live.hwaccel) await attemptHwFallback(sessionId, live.outDir);
+        try {
+          await truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
+          if (result.code !== 0 && live.hwaccel) await attemptHwFallback(sessionId, live.outDir);
+        } catch (e) {
+          console.warn(`session ${sessionId}: post-exit fallback failed: ${String(e).slice(0, 300)}`);
+        }
       })();
     }, resumeInput?.input);
     await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });

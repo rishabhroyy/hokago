@@ -25,8 +25,13 @@ export function acquireTranscodeSlot(timeoutMs = 60_000): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const release = () => {
       clearTimeout(timer);
-      // The slot handoff happens here — the waiter takes over the freed slot.
-      active++;
+      // NOTE: no `active++` here. A handoff transfers the *releaser's* slot
+      // to this waiter — that acquisition was already counted when the
+      // releaser came in, so the counter must not change. Incrementing here
+      // (while releaseTranscodeSlot skips its decrement for waiters) bumped
+      // the counter by one per handoff, wedging it toward MAX_TRANSCODES:
+      // a few seeks with a secondary session queued were enough to make
+      // every later session 503 "transcoder busy" with no ffmpeg running.
       resolve(true);
     };
     const timer = setTimeout(() => {

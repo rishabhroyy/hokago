@@ -152,13 +152,46 @@ function escapeFilterPath(p: string): string {
  * the playlist already promised. `-loglevel error` keeps stderr to
  * failures only (the tail that TranscodeJob.lastError captures).
  */
+/**
+ * Full-GPU (residual-frame) path for nvenc — the pipeline that makes a GPU
+ * transcode actually fast. Default nvenc mode decodes on the GPU but
+ * downloads every frame to system memory (`-hwaccel_output_format nv12`),
+ * runs scale/format on the CPU, then uploads again for the encoder: a 4K→1080p
+ * transcode pays a CPU resize plus two PCIe round-trips per frame, which is
+ * exactly the "GPU should be fast but transcoding is slow" report. NVIDIA's
+ * documented fast path keeps the frames on-GPU end-to-end: decode with
+ * `-hwaccel_output_format cuda`, scale + 10→8-bit conversion via NPP's
+ * scale_npp, straight into h264_nvenc (which consumes CUDA frames directly).
+ *
+ * Gated to the cases where nothing forces a CPU stage: no tone map (the
+ * zscale chain needs system frames) and no subtitle burn-in (libass /
+ * overlay also run on CPU). Anything else keeps the existing nv12-download
+ * pipeline, same as vaapi/qsv — and a runtime failure on this path falls
+ * back to CPU via the usual reportHwFailure retry, so the worst case is the
+ * behavior we have today.
+ */
 export function buildFfmpegArgs(input: SegmentJobInput): string[] {
+  // True only for the nvenc residual path: hardware decode, GPU-resident
+  // scale, no CPU-only stage — frames never leave video memory.
+  const gpuResidentNvenc =
+    input.hwaccel?.method === "nvenc" &&
+    !input.toneMap &&
+    !input.subtitleBurnIn &&
+    input.maxWidth !== undefined &&
+    input.maxHeight !== undefined;
   const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
   // hw init devices first (the named device the upload filters reference),
-  // then the hw decode flags that also carry the -i argument.
-  if (input.hwaccel) args.push(...hwEncodeInitArgs(input.hwaccel), ...hwDecodeArgs(input.hwaccel));
+  // then the hw decode flags that also carry the -i argument. nvenc needs no
+  // init device; the residual path keeps decoded frames in GPU memory.
+  if (input.hwaccel) {
+    if (gpuResidentNvenc) {
+      args.push("-hwaccel", "cuda", "-hwaccel_output_format", "cuda");
+    } else {
+      args.push(...hwEncodeInitArgs(input.hwaccel), ...hwDecodeArgs(input.hwaccel));
+    }
+  }
   args.push("-i", input.inputPath);
   // Accurate seek. A 100ms trim on a fresh start (seekMs absent → segment
   // grid ~0) drops the source pre-roll (leading keyframe lands ~1.4s in
@@ -169,13 +202,25 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
 
   const videoFilters: string[] = [];
   if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);
-  if (input.maxWidth !== undefined || input.maxHeight !== undefined) {
+  if (gpuResidentNvenc) {
+    // Same min() semantics as the CPU scale below, evaluated in the GPU
+    // device context instead. format=nv12 makes NPP convert 10-bit sources
+    // (HEVC Main 10) to 8-bit 4:2:0 on-GPU — the 10→8-bit step the CPU path
+    // does via format=yuv420p. Odd-dimension sources fail here and ride the
+    // hw→CPU fallback; every real-world resolution is even. The w/h
+    // expressions resolve once at init (eval=init default).
+    videoFilters.push(
+      `scale_npp=w='min(${input.maxWidth},iw)':h='min(${input.maxHeight},ih)':format=nv12`,
+    );
+  } else if (input.maxWidth !== undefined || input.maxHeight !== undefined) {
     videoFilters.push(`scale='min(${input.maxWidth ?? -2},iw)':'min(${input.maxHeight ?? -2},ih)'`);
   }
   // Browsers can't decode high-bit-depth h264 — scale preserves the input
   // pix_fmt, so a 10-bit source (HEVC Main 10) would come out as h264 High
-  // 10 and every MSE append would be rejected. Force 8-bit 4:2:0.
-  videoFilters.push("format=yuv420p");
+  // 10 and every MSE append would be rejected. Force 8-bit 4:2:0. Skipped on
+  // the residual nvenc path: scale_npp's format=nv12 already did the 10→8-bit
+  // conversion on-GPU, and `format` can't touch CUDA frames anyway.
+  if (!gpuResidentNvenc) videoFilters.push("format=yuv420p");
   // hw encoders take hw-frames (vaapi/qsv): upload the filtered CPU frames
   // at the end of the chain. nvenc accepts system frames — no tail.
   const hwTail = input.hwaccel ? hwEncodeFilterTail(input.hwaccel) : [];

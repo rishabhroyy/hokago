@@ -15,7 +15,7 @@
  * contains the change. It must never exceed the version of a shell built
  * from the same tag, so keep it ≤ the tag of the release it ships in.
  */
-export const MIN_NATIVE_VERSION = "0.2.0";
+export const MIN_NATIVE_VERSION = "0.3.0";
 
 /** Where to send someone who must update their shell. */
 export const STORE_URLS: Record<string, string> = {

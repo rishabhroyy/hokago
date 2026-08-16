@@ -73,6 +73,12 @@ fn fallback_file(key: &str) -> std::io::Result<Option<String>> {
 /// The script injected into every page load (local setup page AND the remote
 /// SPA) — declares `window.hokagoNative` backed by the Tauri IPC bridge.
 /// Per-app versions are baked in so the web's MIN_NATIVE_VERSION gate works.
+///
+/// Storage follows the iOS/Android pattern: synchronous reads come from the
+/// webview's localStorage, writes mirror through to the OS keyring, and on
+/// boot the keyring re-seeds localStorage (a webview data wipe never kills a
+/// session). Tauri IPC is async-only, so a localStorage facade is the only
+/// way to satisfy the contract's synchronous `storage.get`.
 pub fn injected_script(app_version: &str, app_build: &str) -> String {
     format!(
         r#"(function(){{
@@ -80,16 +86,35 @@ pub fn injected_script(app_version: &str, app_build: &str) -> String {
   window.__hokagoBridge = true;
   const inv = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) ? window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__) : null;
   if (!inv) return;
+  // Re-seed localStorage from the keyring for the keys the web app persists
+  // (sessions + the offline library manifest survive webview data wipes).
+  inv("storage_hydrate").then(function (map) {{
+    try {{
+      Object.keys(map || {{}}).forEach(function (k) {{
+        if (localStorage.getItem(k) === null) localStorage.setItem(k, map[k]);
+      }});
+    }} catch (e) {{}}
+  }}).catch(function () {{}});
   inv("bridge_info").then(function (info) {{
     window.hokagoNative = {{
       platform: info.platform,
       appVersion: "{app_version}",
       appBuild: "{app_build}",
       clientKey: info.clientKey,
+      serverUrl: info.serverUrl || null,
       storage: {{
-        get: function (k) {{ return inv("storage_get", {{ key: k }}); }},
-        set: function (k, v) {{ try {{ inv("storage_set", {{ key: k, value: v }}); }} catch (e) {{}} }},
-        delete: function (k) {{ try {{ inv("storage_delete", {{ key: k }}); }} catch (e) {{}} }}
+        get: function (k) {{
+          const v = localStorage.getItem(k);
+          return v === null ? null : v;
+        }},
+        set: function (k, v) {{
+          try {{ localStorage.setItem(k, v); }} catch (e) {{}}
+          try {{ inv("storage_set", {{ key: k, value: v }}); }} catch (e) {{}}
+        }},
+        delete: function (k) {{
+          try {{ localStorage.removeItem(k); }} catch (e) {{}}
+          try {{ inv("storage_delete", {{ key: k }}); }} catch (e) {{}}
+        }}
       }},
       downloads: {{
         save: function (url, filename) {{
@@ -100,7 +125,11 @@ pub fn injected_script(app_version: &str, app_build: &str) -> String {
           }});
         }},
         list: function () {{ return inv("downloads_list"); }},
-        localUrl: function (localPath) {{ return inv("downloads_local_url", {{ path: localPath }}); }},
+        // Synchronous (the contract requires a plain string): the URL is
+        // purely derived — hokago-file:// + the encoded absolute path.
+        localUrl: function (localPath) {{
+          return "hokago-file://" + String(localPath).split("/").map(encodeURIComponent).join("/");
+        }},
         readText: function (localPath) {{ return inv("downloads_read_text", {{ path: localPath }}); }},
         open: function (localPath) {{ try {{ inv("open_path", {{ path: localPath }}); }} catch (e) {{}} }}
       }}
@@ -133,6 +162,37 @@ pub fn storage_get(key: String) -> serde_json::Value {
     }
 }
 
+/// The keys the web app persists through the bridge (mirrors the iOS hydrate
+/// list). Keyring entries can't be enumerated, so hydration is name-based.
+const HYDRATE_KEYS: &[&str] = &[
+    "hokago_access_token",
+    "hokago_refresh_token",
+    "hokago_device_id",
+    "hokago_user_id",
+    "hokago_username",
+    "hokago_user_is_admin",
+    "hokago_theme",
+    "hokago_offline_library",
+    "hokago_offline_watch_queue",
+    "hokago_offline_viewed",
+    "hokago_local_downloads",
+    "hokago_tv_accounts",
+    "hokago_tv_active",
+];
+
+/// Returns every mirrored key still present in the secure store, so the
+/// injected script can re-seed localStorage after a webview data wipe.
+#[tauri::command]
+pub fn storage_hydrate() -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for key in HYDRATE_KEYS {
+        if let Some(v) = get_secure(key) {
+            map.insert(key.to_string(), json!(v));
+        }
+    }
+    serde_json::Value::Object(map)
+}
+
 #[tauri::command]
 pub fn storage_set(key: String, value: String) {
     set_secure(&key, &value);
@@ -148,6 +208,25 @@ pub fn get_server_url() -> Option<String> {
     crate::config::server_url()
 }
 
+/// Rust-side reachability probe (GET /health). The webview can't do this
+/// itself: a fetch from the tauri:// origin to the server is cross-origin and
+/// dies on CORS before it can tell "up" from "down".
+#[tauri::command]
+pub async fn probe_server(url: String) -> bool {
+    let base = url.trim_end_matches('/');
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    matches!(
+        client.get(format!("{base}/health")).send().await,
+        Ok(resp) if resp.status().is_success()
+    )
+}
+
 #[tauri::command]
 pub fn save_server_url(url: String) -> Result<(), String> {
     crate::config::save_server_url(&url)
@@ -158,10 +237,16 @@ pub fn open_path(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| e.to_string())
 }
 
-/// Navigate the window back to the local server-setup page.
+/// Navigate the window back to the local server-setup page. The app origin is
+/// platform-dependent in Tauri v2: tauri://localhost on macOS/Linux,
+/// http://tauri.localhost on Windows.
 #[tauri::command]
 pub fn show_setup(window: tauri::WebviewWindow) -> Result<(), String> {
-    let url: tauri::Url = "tauri://localhost/index.html".parse().map_err(|_| "invalid url")?;
+    #[cfg(target_os = "windows")]
+    const SETUP_URL: &str = "http://tauri.localhost/index.html";
+    #[cfg(not(target_os = "windows"))]
+    const SETUP_URL: &str = "tauri://localhost/index.html";
+    let url: tauri::Url = SETUP_URL.parse().map_err(|_| "invalid url")?;
     window.navigate(url).map_err(|e| e.to_string())
 }
 

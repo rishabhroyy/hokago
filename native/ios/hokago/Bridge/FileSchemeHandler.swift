@@ -46,7 +46,8 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
         try? handle.close()
 
         var headers: [String: String] = [
-            "Content-Type": "video/mp4",
+            "Content-Type": SpaSchemeHandler.mime(for: fileURL),
+            "Content-Length": "\(data.count)",
             "Accept-Ranges": "bytes",
             "Cross-Origin-Resource-Policy": "cross-origin",
             "Cache-Control": "no-store",

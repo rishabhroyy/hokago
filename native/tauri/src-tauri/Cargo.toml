@@ -1,6 +1,6 @@
 [package]
 name = "hokago"
-version = "0.2.0"
+version = "0.3.0"
 description = "hokago desktop — the web app in a shell"
 edition = "2021"
 

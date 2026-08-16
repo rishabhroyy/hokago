@@ -29,9 +29,11 @@ final class BrowserViewController: UIViewController, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         config.userContentController = controller
         config.setURLSchemeHandler(FileSchemeHandler(), forURLScheme: "hokago-file")
+        config.setURLSchemeHandler(SpaSchemeHandler(), forURLScheme: "hokago-spa")
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        config.allowsAirPlayForMediaPlayback = false
+        // AirPlay rides along with the native client.
+        config.allowsAirPlayForMediaPlayback = true
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
         webView = WKWebView(frame: .zero, configuration: config)
@@ -82,9 +84,13 @@ final class BrowserViewController: UIViewController, WKNavigationDelegate {
     }
 
     /// Offline fallback: the app bundles a copy of the SPA (web-dist) and
-    /// loads it from the bundle when the configured server can't be reached.
+    /// serves it from hokago-spa://localhost/ (see SpaSchemeHandler) when the
+    /// configured server can't be reached. loadHTMLString with that base URL
+    /// gives the SPA a proper origin root — file:// breaks its absolute asset
+    /// paths and history routing.
     func loadBundledSpa() {
-        guard let bundleURL = Bundle.main.url(forResource: "web-dist", withExtension: nil) else { return }
-        webView.loadFileURL(bundleURL.appendingPathComponent("index.html"), allowingReadAccessTo: bundleURL)
+        guard let bundleURL = Bundle.main.url(forResource: "web-dist", withExtension: nil),
+              let html = try? String(contentsOf: bundleURL.appendingPathComponent("index.html"), encoding: .utf8) else { return }
+        webView.loadHTMLString(html, baseURL: URL(string: "hokago-spa://localhost/"))
     }
 }

@@ -16,7 +16,7 @@ android {
         // project.findProperty — top-level `val` declarations with explicit
         // types trip Gradle's generated-accessor conflict in the Kotlin DSL.
         versionCode = (project.findProperty("appVersionCode") as? String)?.toIntOrNull() ?: 1
-        versionName = project.findProperty("appVersionName") as? String ?: "0.2.0"
+        versionName = project.findProperty("appVersionName") as? String ?: "0.3.0"
     }
 
     flavorDimensions += "form"
@@ -34,6 +34,22 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Self-hosted client distributed as sideload APKs: a committed
+            // keystore keeps signatures stable across CI runs (upgrades must
+            // keep the same signature or Android refuses to install them).
+            // An unsigned release APK won't install at all.
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("hokago-release.keystore")
+            storePassword = "hokago-keystore"
+            keyAlias = "hokago"
+            keyPassword = "hokago-keystore"
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 

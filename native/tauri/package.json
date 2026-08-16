@@ -1,7 +1,7 @@
 {
   "name": "hokago-desktop",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "pnpm@11.13.1",
   "scripts": {
     "tauri": "tauri"

@@ -9,7 +9,7 @@ options:
   projectFormat: xcode15_3
 settings:
   base:
-    MARKETING_VERSION: "0.2.0"
+    MARKETING_VERSION: "0.3.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.9"
     CODE_SIGN_STYLE: Automatic
@@ -22,7 +22,6 @@ targets:
       - hokago
     resources:
       - web-dist
-      - path: hokago/Supporting/Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hokago.app
@@ -32,6 +31,8 @@ targets:
       path: hokago/Supporting/Info.plist
       properties:
         CFBundleDisplayName: hokago
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false

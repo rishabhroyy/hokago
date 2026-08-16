@@ -73,6 +73,29 @@ await app.register(fastifyStatic, { serve: false });
 // @fastify/websocket is a fastify-plugin, a second registration throws.
 await app.register(websocketPlugin);
 
+// CORS for the native shells: once connected, the SPA is same-origin with
+// the API — but the shell's local pages (Tauri's tauri:// setup page) and the
+// offline SPA origins (hokago-spa:// / the Android fake origin) must reach
+// /health and /watch-state/sync cross-origin. Auth is Bearer-header based
+// (not cookies), so reflecting the origin without credentials is safe: any
+// origin that can present a valid token could already talk to the server
+// outside a browser. No cookie flows: Access-Control-Allow-Credentials stays
+// unset so browser cross-site cookie POSTs from arbitrary origins can't
+// piggyback the hokago_access cookie mirror.
+app.addHook("onRequest", async (req, reply) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    reply.header("Access-Control-Allow-Origin", origin);
+    reply.header("Vary", "Origin");
+    reply.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type, Range");
+    reply.header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
+    if (req.method === "OPTIONS") {
+      return reply.status(204).send();
+    }
+  }
+});
+
 app.get("/health", { schema: { response: { 200: HealthResponse } } }, async () => ({
   status: "ok" as const,
   version: HOKAGO_VERSION,

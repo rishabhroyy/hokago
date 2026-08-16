@@ -221,12 +221,19 @@ class NativeBridge(private val webView: WebView) {
     fun openPath(path: String) {
         webView.post {
             val context = webView.context
-            val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
+            val file = File(path)
+            val mime = android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(file.extension.lowercase()) ?: "video/*"
+            val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "video/mp4")
+                setDataAndType(uri, mime)
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(intent)
+            try {
+                context.startActivity(intent)
+            } catch (_: android.content.ActivityNotFoundException) {
+                // No handler app — nothing to do.
+            }
         }
     }
 }

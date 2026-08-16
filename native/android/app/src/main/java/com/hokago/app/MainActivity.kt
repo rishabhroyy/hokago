@@ -81,14 +81,17 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                val url = request.url.toString()
-                if (url.startsWith("hokago-file://")) {
-                    val path = Uri.decode(request.url.path ?: "")
-                    val file = File(path)
-                    if (file.exists()) {
-                        return WebResourceResponse("video/mp4", null, FileInputStream(file))
-                    }
-                    return WebResourceResponse("text/plain", "utf-8", "not found".byteInputStream())
+                val uri = request.url
+                // Offline SPA origin: served from app assets. file:// would
+                // break the SPA's absolute asset paths (/assets/...), its
+                // history router (needs a root path) and allowFileAccess=false,
+                // so a real-looking origin is intercepted instead. http:// (not
+                // https) so media/sync back to an http:// server isn't mixed content.
+                if (uri.host == OFFLINE_HOST) {
+                    return serveOfflineAsset(uri.path ?: "/")
+                }
+                if (uri.scheme == "hokago-file") {
+                    return serveLocalFile(uri, request.requestHeaders?.get("Range"))
                 }
                 return super.shouldInterceptRequest(view, request)
             }
@@ -98,9 +101,101 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(b, "androidBridge")
     }
 
-    /** Offline fallback: load the bundled SPA from assets when the server is down. */
+    /** Offline fallback: serve the bundled SPA from the fake origin
+     *  http://$OFFLINE_HOST/ (intercepted by shouldInterceptRequest). */
     private fun loadBundledSpa() {
-        webView.loadUrl("file:///android_asset/web-dist/index.html")
+        webView.loadUrl("http://$OFFLINE_HOST/")
+    }
+
+    /** Serves web-dist from app assets; route fallback to index.html so SPA
+     *  deep links work. */
+    private fun serveOfflineAsset(path: String): WebResourceResponse {
+        val rel = path.trimStart('/').ifEmpty { "index.html" }
+            // No path traversal out of web-dist.
+            .split('/').filter { it.isNotEmpty() && it != "." && it != ".." }.joinToString("/")
+        val candidates = listOf(rel, "$rel/index.html", "index.html")
+        for (candidate in candidates) {
+            val assetPath = "web-dist/$candidate"
+            try {
+                val stream = applicationContext.assets.open(assetPath)
+                return WebResourceResponse(mime(assetPath), null, stream).apply {
+                    responseHeaders = mapOf(
+                        "Cross-Origin-Resource-Policy" to "cross-origin",
+                        "Cross-Origin-Opener-Policy" to "same-origin",
+                        "Cross-Origin-Embedder-Policy" to "require-corp",
+                    )
+                }
+            } catch (_: Exception) { /* next candidate */ }
+        }
+        return WebResourceResponse("text/plain", "utf-8", "not found".byteInputStream())
+    }
+
+    /** Serves a downloaded file with Range support so <video> can seek. */
+    private fun serveLocalFile(uri: Uri, rangeHeader: String?): WebResourceResponse {
+        val path = Uri.decode(uri.path ?: "")
+        val file = File(path)
+        if (!file.isFile) return WebResourceResponse("text/plain", "utf-8", "not found".byteInputStream())
+        val len = file.length()
+        val start: Long
+        val partial: Boolean
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=") && len > 0) {
+            val spec = rangeHeader.removePrefix("bytes=").substringBefore("-")
+            val suffix = rangeHeader.removePrefix("bytes=").substringAfter("-", "")
+            start = when {
+                spec.isEmpty() -> (len - (suffix.toLongOrNull() ?: 0)).coerceAtLeast(0)
+                else -> (spec.toLongOrNull() ?: 0).coerceIn(0, len - 1)
+            }
+            partial = true
+        } else {
+            start = 0
+            partial = false
+        }
+        val stream = FileInputStream(file).apply { skip(start) }
+        return WebResourceResponse(mime(path), null, stream).apply {
+            if (partial) {
+                setStatusCodeAndReasonPhrase(206, "Partial Content")
+                responseHeaders = mapOf(
+                    "Content-Range" to "bytes $start-${len - 1}/$len",
+                    "Accept-Ranges" to "bytes",
+                    "Cross-Origin-Resource-Policy" to "cross-origin",
+                )
+            } else {
+                responseHeaders = mapOf(
+                    "Accept-Ranges" to "bytes",
+                    "Cross-Origin-Resource-Policy" to "cross-origin",
+                )
+            }
+        }
+    }
+
+    private fun mime(path: String): String {
+        return when (path.substringAfterLast('.', "").lowercase()) {
+            "html" -> "text/html"
+            "js", "mjs" -> "text/javascript"
+            "css" -> "text/css"
+            "svg" -> "image/svg+xml"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "webp" -> "image/webp"
+            "avif" -> "image/avif"
+            "gif" -> "image/gif"
+            "woff2" -> "font/woff2"
+            "woff" -> "font/woff"
+            "ttf" -> "font/ttf"
+            "wasm" -> "application/wasm"
+            "json", "map" -> "application/json"
+            "ico" -> "image/x-icon"
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "mov" -> "video/quicktime"
+            "ts", "m2ts" -> "video/mp2t"
+            "mp3" -> "audio/mpeg"
+            "flac" -> "audio/flac"
+            "ogg", "opus" -> "audio/ogg"
+            "ass", "ssa", "srt", "vtt", "txt" -> "text/plain; charset=utf-8"
+            else -> "application/octet-stream"
+        }
     }
 
     private fun load(url: String) {
@@ -186,6 +281,8 @@ class MainActivity : AppCompatActivity() {
     private fun prefs() = getSharedPreferences("hokago_config", 0)
 
     companion object {
+        /** Fake origin the bundled SPA is served from (offline mode). */
+        const val OFFLINE_HOST = "hokago-app.local"
         val isTvForm: Boolean by lazy {
             // BuildConfig.FLAVOR == "tv"
             BuildConfig.FLAVOR == "tv"

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "hokago",
-  "version": "0.2.0",
-  "identifier": "com.hokago.app",
+  "version": "0.3.0",
+  "identifier": "com.hokago.desktop",
   "build": {
     "frontendDist": "../ui"
   },
@@ -31,6 +31,11 @@
     "category": "Entertainment",
     "shortDescription": "hokago media server client",
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
-    "resources": ["../web-dist/**/*"]
+    "resources": {
+      "../web-dist": "web-dist"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

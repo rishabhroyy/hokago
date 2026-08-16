@@ -150,12 +150,16 @@ store update — the next launch just fetches the new SPA.
 Downloads are only useful offline, so the shells bundle a copy of the built
 SPA and the web app gets an offline library.
 
-- **Boot fallback**: each shell bundles `apps/web/dist` (Tauri: a `web-dist`
-  resource served at `hokago-spa://`; iOS: a `web-dist` bundle folder loaded
-  via `loadFileURL`; Android: assets under `web-dist/`). The shell tries the
-  configured server first (Discord-model freshness); when it can't be reached
-  it loads the bundled SPA instead. The bundled SPA is *exactly the same
-  app* — no fork — so offline behaviour is the same code path as online.
+- **Boot fallback**: each shell bundles `apps/web/dist` and serves it from a
+  real origin root (Tauri: the `hokago-spa://` custom scheme; iOS: a
+  `WKURLSchemeHandler` for `hokago-spa://localhost/` loaded via
+  `loadHTMLString` with that base URL; Android: a fake `http://hokago-app.local`
+  origin intercepted in `shouldInterceptRequest`). file:// can't work — the
+  SPA's asset URLs are absolute (/assets/...), its history router needs a root
+  path, and localStorage is origin-scoped. The shell tries the configured
+  server first (Discord-model freshness); when it can't be reached it loads
+  the bundled SPA instead. The bundled SPA is *exactly the same app* — no
+  fork — so offline behaviour is the same code path as online.
 - **Offline library** (`apps/web/src/offline.ts`, `/offline`): a local
   manifest of every saved download, with title/kind/poster metadata captured
   at download time (DetailView). It re-hydrates against `downloads.list()` so
@@ -177,33 +181,47 @@ SPA and the web app gets an offline library.
   clientKey in `src-tauri/src/config.rs`, bridge + keyring mirror + reqwest
   downloads in `src-tauri/src/bridge.rs`. Remote origins (`http(s)://**`) get
   core IPC via the capability in `src-tauri/capabilities/main.json`; the
-  `hokago-file://`/`hokago-spa://` schemes are registered on the builder. Icon:
-  a committed 1024px `icon.png`; CI runs `tauri icon` to derive `.icns`/`.ico`.
+  `hokago-file://`/`hokago-spa://` schemes are registered on the builder. The
+  injected shim is appended to Tauri's IPC init script (document start, not
+  page-load completion, so the SPA always sees the bridge). Storage follows
+  the iOS/Android facade: sync reads from localStorage, write-through to the
+  OS keyring, re-seeded on boot (`storage_hydrate`). The /health probe runs
+  Rust-side (`probe_server`) because a webview fetch from a custom origin is
+  CORS-blocked. Icon: the committed 1024px `icon.png` (hokago logo on white);
+  `tauri icon` derives `.icns`/`.ico` — run it locally and commit the result.
 - **iOS** (`native/ios`) — raw WKWebView, no Capacitor. Xcode project generated
   from `project.yml` with XcodeGen (committed; CI runs `brew install xcodegen
   && xcodegen generate`). Bridge: `WKUserScript` at document start + a
   `WKScriptMessageHandler`; tokens in the Keychain; downloads via
   `URLSession.downloadTask` with the Bearer header; `hokago-file://` served by
-  a `WKURLSchemeHandler`.
+  a `WKURLSchemeHandler`, `hokago-spa://` likewise (`SpaSchemeHandler`).
+  App icon lives in `hokago/Assets.xcassets` (1024px, no alpha). AirPlay is on.
 - **Android** (`native/android`) — raw WebView with a synchronous
   `addJavascriptInterface` bridge; phone + TV product flavors; AES-GCM
   Keystore-backed secure store; downloads via `HttpURLConnection` into public
   Downloads (opened with a FileProvider); `hokago-file://` intercepted in
-  `shouldInterceptRequest`. Gradle wrapper is **not** committed — CI uses
-  `gradle/actions/setup-gradle` with `gradle-version` and invokes `gradle`
-  directly.
+  `shouldInterceptRequest` with Range support, as are the `web-dist` assets
+  behind the fake `http://hokago-app.local` origin. Release builds are signed
+  with the committed `app/hokago-release.keystore` — an unsigned APK can't
+  install, and the signature must stay stable across CI runs for upgrades.
+  Gradle wrapper is **not** committed — CI uses `gradle/actions/setup-gradle`
+  with `gradle-version` and invokes `gradle` directly. Adaptive icon: white
+  background + the logo as foreground; TV banner is `drawable-xhdpi/banner.png`.
 
 ## CI delivery (`.github/workflows/native.yml`)
 
 On every `v*` tag: `tauri-macos` (arm64 .dmg), `tauri-windows` (x64 .msi),
-`tauri-linux` (AppImage/deb), `ios` (simulator .zip; signed device build when
-`IOS_CERT_P12_BASE64` is present), `android` (phone + TV release APKs). Each job
-strips the leading `v` and bakes the tag into the app version (Cargo.toml +
-tauri.conf.json for Tauri, project.yml for XcodeGen, `-PappVersion*` for
-Gradle); tauri-action and `gh release upload` attach artifacts to a draft
-GitHub Release named `hokago <tag>`. `release.yml` (GHCR image) and
-`native.yml` (clients) both trigger on the same tag; neither needs the other to
-run.
+`tauri-linux` (AppImage/deb), `ios` (simulator .zip + unsigned sideload .ipa),
+`android` (phone + TV release APKs, self-signed with the committed keystore).
+Each job strips the leading `v` and bakes the tag into the app version
+(Cargo.toml + tauri.conf.json for Tauri, project.yml for XcodeGen,
+`-PappVersion*` for Gradle). A dedicated `release` job creates **one** draft
+GitHub Release first (with install notes — e.g. the `xattr -cr` Gatekeeper fix
+for ad-hoc-signed macOS builds); every build job `needs:` it and only uploads
+assets (tauri-action reuses the existing release; `gh release upload
+--clobber` likewise). Never race two `gh release create` calls — that was the
+multi-draft bug. `release.yml` (GHCR image) and `native.yml` (clients) both
+trigger on the same tag; neither needs the other to run.
 
 ## Backend plumbing — DONE (do not rebuild)
 

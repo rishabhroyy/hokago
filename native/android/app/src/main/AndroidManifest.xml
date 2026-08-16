@@ -10,8 +10,10 @@
         android:required="${isTv}" />
 
     <application
+        android:name=".HokagoApp"
         android:label="hokago"
         android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/banner"
         android:theme="@style/Theme.Hokago"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"

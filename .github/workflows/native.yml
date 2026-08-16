@@ -3,9 +3,13 @@
 # Gradle) and attach them to a GitHub release. release.yml publishes the
 # server image to GHCR; this workflow is the client delivery pipeline.
 #
-#   git tag v0.2.0 && git push origin v0.2.0
+#   git tag v0.3.0 && git push origin v0.3.0
 #
-# → GitHub Release "hokago v0.2.0" (draft) with the per-platform artifacts.
+# → ONE GitHub Release draft "hokago v0.3.0" with every platform artifact.
+# The draft is created exactly once by the `release` job — every build job
+# depends on it and only uploads assets (tauri-action reuses the existing
+# release; gh upload --clobber likewise). Never let two jobs race `gh release
+# create` again — that was the split into multiple drafts.
 #
 # Version plumbing: each job strips the leading "v" off the tag and bakes it
 # into the app version (Cargo.toml/tauri.conf.json for Tauri, project.yml for
@@ -34,8 +38,27 @@ jobs:
           echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-  tauri-macos:
+  release:
     needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the one draft release
+        run: >
+          printf '%s\n'
+          '## Install notes' ''
+          '**macOS (Apple Silicon)** — the app is ad-hoc signed, not notarized. If macOS says it is "damaged and can'"'"'t be opened", it is the Gatekeeper quarantine attribute:'
+          '```' 'xattr -cr /Applications/hokago.app' '```'
+          'Prefer the .dmg over the raw .app.tar.gz.' ''
+          '**Windows** — unsigned build: SmartScreen → "More info" → "Run anyway".' ''
+          '**iOS** — install the .ipa with Sideloadly/AltStore (re-signs with your Apple ID). The simulator zip is for development only.' ''
+          '**Android** — the APKs are self-signed with the repo'"'"'s committed key (stable signature across releases, so upgrades install cleanly). "Install unknown apps" permission is required on first install. The TV APK targets Android TV.'
+          | gh release create "$TAG" --draft --title "hokago $TAG" --notes-file -
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.versions.outputs.tag }}
+
+  tauri-macos:
+    needs: [versions, release]
     runs-on: macos-14
     env:
       APP_VERSION: ${{ needs.versions.outputs.version }}
@@ -83,7 +106,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   tauri-windows:
-    needs: versions
+    needs: [versions, release]
     runs-on: windows-latest
     env:
       APP_VERSION: ${{ needs.versions.outputs.version }}
@@ -133,7 +156,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   tauri-linux:
-    needs: versions
+    needs: [versions, release]
     runs-on: ubuntu-22.04
     env:
       APP_VERSION: ${{ needs.versions.outputs.version }}
@@ -182,7 +205,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   ios:
-    needs: versions
+    needs: [versions, release]
     runs-on: macos-14
     env:
       APP_VERSION: ${{ needs.versions.outputs.version }}
@@ -212,12 +235,6 @@ jobs:
       - name: Generate project
         working-directory: native/ios
         run: xcodegen generate
-      - name: Ensure release exists
-        run: |
-          gh release create "$TAG" --draft --title "hokago $TAG" || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.versions.outputs.tag }}
       - name: Build simulator app
         working-directory: native/ios
         run: |
@@ -249,7 +266,7 @@ jobs:
           TAG: ${{ needs.versions.outputs.tag }}
 
   android:
-    needs: versions
+    needs: [versions, release]
     runs-on: ubuntu-latest
     env:
       APP_VERSION: ${{ needs.versions.outputs.version }}
@@ -278,16 +295,12 @@ jobs:
           rm -rf native/android/app/src/main/assets/web-dist
           mkdir -p native/android/app/src/main/assets/web-dist
           cp -R apps/web/dist/. native/android/app/src/main/assets/web-dist/
-      - name: Ensure release exists
-        run: |
-          gh release create "$TAG" --draft --title "hokago $TAG" || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.versions.outputs.tag }}
       - name: Build APKs
         working-directory: native/android
         run: |
-          gradle -PappVersionName="$APP_VERSION" assemblePhoneRelease assembleTvRelease
+          # run_number is monotonic per-repo — a stable, ever-increasing
+          # versionCode so upgrades always install over older builds.
+          gradle -PappVersionName="$APP_VERSION" -PappVersionCode="${{ github.run_number }}" assemblePhoneRelease assembleTvRelease
       - name: Upload APKs
         shell: bash
         run: |

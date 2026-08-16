@@ -95,12 +95,25 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     }
 
     /// Re-seed localStorage from the secure store (webview storage wipe).
+    /// Keychain entries can't be enumerated, so hydration is name-based —
+    /// keep this list in sync with the web app's persisted keys (sessions,
+    /// device id, theme, and the offline library manifest).
     private func hydrate() {
-        let keys = ["hokago_access_token", "hokago_refresh_token", "hokago_user_id", "hokago_username", "hokago_user_is_admin", "hokago_device_id"]
+        let keys = [
+            "hokago_access_token", "hokago_refresh_token", "hokago_device_id",
+            "hokago_user_id", "hokago_username", "hokago_user_is_admin",
+            "hokago_theme",
+            "hokago_offline_library", "hokago_offline_watch_queue", "hokago_offline_viewed",
+            "hokago_local_downloads", "hokago_tv_accounts", "hokago_tv_active",
+        ]
         for key in keys {
             guard let value = SecureStore.get(key) else { continue }
-            let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
-            let script = "try { localStorage.setItem('\(key)', '\(escaped)'); } catch (e) {}"
+            let escaped = value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .replacingOccurrences(of: "\r", with: "\\r")
+            let script = "try { if (localStorage.getItem('\(key)') === null) localStorage.setItem('\(key)', '\(escaped)'); } catch (e) {}"
             webView?.evaluateJavaScript(script, completionHandler: nil)
         }
     }

@@ -38,6 +38,10 @@
       delete pending[d.id];
       if (d.ok) p.resolve(d.text);
       else p.reject(new Error(d.error || "could not read subtitle"));
+    } else if (d.type === "route") {
+      // The SPA announces player/non-player routes so the shell can hide the
+      // status bar + home indicator while watching.
+      send({ type: "route", view: d.view || "" });
     }
   });
 

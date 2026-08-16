@@ -68,6 +68,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             } else {
                 post(event: "readTextResult", payload: ["id": id, "ok": false, "error": "could not read subtitle"])
             }
+        case "route":
+            let view = body["view"] as? String ?? ""
+            PlayerRouteState.shared.inPlayer = (view == "player" || view == "offlineWatch")
         case "open":
             if let path = body["localPath"] as? String {
                 let url = URL(fileURLWithPath: path)

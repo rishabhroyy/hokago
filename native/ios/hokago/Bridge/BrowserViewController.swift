@@ -40,7 +40,12 @@ final class BrowserViewController: UIViewController, WKNavigationDelegate {
         webView.navigationDelegate = self
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsBackForwardNavigationGestures = true
+        // The app is deliberately black — no white flash on load, and no
+        // rubber-band gap showing anything but black when the page bounces.
         webView.backgroundColor = .black
+        webView.underPageBackgroundColor = .black
+        webView.scrollView.backgroundColor = .black
+        webView.scrollView.bounces = false
         bridge.webView = webView
         view = webView
     }

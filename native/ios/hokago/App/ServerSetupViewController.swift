@@ -37,6 +37,7 @@ final class ServerSetupViewController: UIViewController {
         field.backgroundColor = UIColor(white: 0.13, alpha: 1)
         field.textColor = .white
         field.returnKeyType = .go
+        field.addTarget(self, action: #selector(connectTapped), for: .editingDidEndOnExit)
 
         button.setTitle("Connect", for: .normal)
         button.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
@@ -53,8 +54,11 @@ final class ServerSetupViewController: UIViewController {
         }
 
         NSLayoutConstraint.activate([
+            // Center the card, but never below the software keyboard — the
+            // centerY tie is soft (750) so the keyboard constraint can lift
+            // the card instead of letting the keyboard cover the field.
             titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            titleLabel.topAnchor.constraint(equalTo: view.centerYAnchor, constant: -150),
+            titleLabel.topAnchor.constraint(equalTo: view.centerYAnchor, constant: -150).priority(.defaultHigh),
             titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 32),
             titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
 
@@ -71,6 +75,7 @@ final class ServerSetupViewController: UIViewController {
             button.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             button.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
             button.heightAnchor.constraint(equalToConstant: 44),
+            button.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor, constant: -16),
 
             errorLabel.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 12),
             errorLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),

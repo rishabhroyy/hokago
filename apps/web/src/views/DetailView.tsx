@@ -41,12 +41,14 @@ function SeasonGrid({
   onOpen,
   onParty,
   onContextMenu,
+  label,
 }: {
   season: number | null;
   eps: EpisodeCard[];
   onOpen: (ep: EpisodeCard, el: HTMLElement) => void;
   onParty?: (ep: EpisodeCard, el: HTMLElement) => void;
   onContextMenu?: (ep: EpisodeCard, x: number, y: number) => void;
+  label?: string;
 }) {
   const s = useWiiSound();
   const gridRef = useRef<HTMLDivElement>(null);
@@ -55,7 +57,7 @@ function SeasonGrid({
   return (
     <div>
       <h3 className="mb-[18px] mt-9 flex items-baseline gap-3 font-display text-section font-bold tracking-[0.01em]">
-        {seasonLabel(season)}
+        {label ?? seasonLabel(season)}
         <span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-kicker font-bold text-wii-ink ring-1 ring-line">
           {eps.length}
         </span>
@@ -238,15 +240,14 @@ export function DetailView({ itemId }: { itemId: string }) {
   const watchedCount = item.episodes.filter((e) => e.watched).length;
   // The hero button targets the next thing to watch: an episode in progress
   // (Continue), else the first unwatched one, else (everything watched) the
-  // first episode again for a rewatch. A MOVIE child (the Mugen Train
-  // shape — a film inside the show folder) is never the auto-target: it's an
-  // extra, not the next episode.
-  const seriesEpisodes = item.episodes.filter((e) => e.kind !== "MOVIE");
+  // first episode again for a rewatch. A series with no episodes falls back to
+  // its first show-scoped movie.
+  const seriesEpisodes = item.episodes;
   const nextEpisode =
     seriesEpisodes.find((e) => !e.watched && e.positionMs > 0) ??
     seriesEpisodes.find((e) => !e.watched) ??
     seriesEpisodes[0] ??
-    item.episodes[0] ??
+    item.movies[0] ??
     null;
   const isContinue = nextEpisode !== null && !nextEpisode.watched && nextEpisode.positionMs > 0;
   const playMediaFileId = item.kind === "SERIES" ? (nextEpisode?.mediaFileId ?? null) : item.mediaFileId;
@@ -282,13 +283,13 @@ export function DetailView({ itemId }: { itemId: string }) {
       // Offline manifest: title/kind/poster captured now, while the server's
       // detail data is in hand — the offline library renders from this.
       const isEpisode = itemId_ !== item.id;
-      const ep = isEpisode ? item.episodes.find((e) => e.id === itemId_) : null;
+      const ep = item.episodes.find((e) => e.id === itemId_) ?? item.movies.find((e) => e.id === itemId_) ?? null;
       recordOfflineEntry({
         downloadId: id,
         mediaItemId: itemId_,
         mediaFileId: fileId,
         title: item.title,
-        kind: item.kind === "SERIES" ? "EPISODE" : "MOVIE",
+        kind: item.kind === "SERIES" ? (ep?.kind === "MOVIE" ? "MOVIE" : "EPISODE") : "MOVIE",
         subtitle: ep?.title ?? (item.kind === "SERIES" ? `Episode ${ep?.episodeNumber ?? "?"}` : undefined),
         posterUrl: item.posterUrl ?? undefined,
         backdropUrl: item.backdropUrl ?? undefined,
@@ -463,7 +464,9 @@ export function DetailView({ itemId }: { itemId: string }) {
                     >
                       <Icon name="play" className="h-4 w-4" />
                       {item.kind === "SERIES"
-                        ? `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} · E${nextEpisode?.episodeNumber ?? 1}`
+                        ? nextEpisode?.kind === "MOVIE"
+                          ? `${isContinue ? "Continue" : "Play"}`
+                          : `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} · E${nextEpisode?.episodeNumber ?? 1}`
                         : "Play"}
                     </button>
                     <button className="btn btn-ghost" onClick={(e) => startPartyFor(nextEpisode ?? item, e.currentTarget, e.clientX, e.clientY)}>
@@ -548,19 +551,19 @@ export function DetailView({ itemId }: { itemId: string }) {
               onContextMenu={(ep, x, y) => setMenu({ x, y, ep })}
             />
           ))}
+
+          {item.movies.length > 0 && (
+            <SeasonGrid
+              season={null}
+              label="Movies"
+              eps={item.movies}
+              onOpen={openEpisode}
+              onParty={(ep, el) => startPartyFor(ep, el, el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2, el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2)}
+              onContextMenu={(ep, x, y) => setMenu({ x, y, ep })}
+            />
+          )}
         </div>
       </div>
-
- {/* movie-series children — TV children are SEASONs, already
-          represented by the season grids above, so don't double them up */}
-      {item.children.some((c) => c.kind === "MOVIE") && (
-        <Row
-          title="In this series"
-          items={item.children.filter((c) => c.kind === "MOVIE").map(cardToTile)}
-          onOpen={openTile}
-          onPrefetch={prefetchTile}
-        />
-      )}
 
       {item.collections.map((collection) => (
         <Row

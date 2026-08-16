@@ -131,8 +131,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
               },
             },
           },
-        },
-      },
+        },      },
     });
     if (!item) return reply.code(404).send({ error: "media item not found" });
 
@@ -141,9 +140,19 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
     const episodes =
       item.kind === "SERIES"
         ? await db.mediaItem.findMany({
-            where: { parent: { parentId: item.id } },
+            where: { parent: { parentId: item.id }, kind: "EPISODE" },
             select: episodeSelect,
             orderBy: [{ seasonNumber: "asc" }, { episodeNumber: "asc" }],
+          })
+        : [];
+    // Show-scoped movies: direct MOVIE children of the series (scanner's
+    // anchor rule) plus legacy season-grandchild movies.
+    const movies =
+      item.kind === "SERIES"
+        ? await db.mediaItem.findMany({
+            where: { kind: "MOVIE", OR: [{ parentId: item.id }, { parent: { parentId: item.id } }] },
+            select: episodeSelect,
+            orderBy: { sortTitle: "asc" },
           })
         : [];
     const audioTracks = item.files[0]
@@ -165,7 +174,10 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       });
       if (owned) {
         const allStates = await db.playbackState.findMany({
-          where: { profileId: owned.id, mediaItemId: { in: [item.id, ...episodes.map((e) => e.id)] } },
+          where: {
+            profileId: owned.id,
+            mediaItemId: { in: [item.id, ...episodes.map((e) => e.id), ...movies.map((m) => m.id)] },
+          },
           select: { mediaItemId: true, watched: true, positionMs: true, durationMs: true, playCount: true, lastWatchedAt: true },
         });
         const self = allStates.find((s) => s.mediaItemId === item.id);
@@ -196,10 +208,28 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
           positionMs: state?.positionMs ?? 0,
         };
       }),
+      movies: movies.map((mv) => {
+        const card = toCard(mv);
+        const state = stateByItemId.get(mv.id);
+        return {
+          ...card,
+          watched: state?.watched ?? false,
+          positionMs: state?.positionMs ?? 0,
+        };
+      }),
       audioTracks,
       watch,
       externalIds: externalIds.map((e) => ({ provider: e.provider, providerId: e.providerId })),
-      collections: collectionEntries.map((entry) => ({
+      // A derived franchise is noise on a series detail page when it only
+      // contains the series itself (plus its episodes/movies) — that's just
+      // "this series". Drop it there; movie details keep their "Part of" row.
+      collections: collectionEntries
+        .filter((entry) => {
+          if (item.kind !== "SERIES" || !entry.collection.derived || entry.collection.kind !== "FRANCHISE") return true;
+          const known = new Set([item.id, ...episodes.map((e) => e.id), ...movies.map((m) => m.id)]);
+          return entry.collection.entries.some((e) => !known.has(e.mediaItem.id));
+        })
+        .map((entry) => ({
         id: entry.collection.id,
         name: entry.collection.name,
         kind: entry.collection.kind,

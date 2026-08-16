@@ -92,6 +92,8 @@ export const MediaItemDetail = MediaCard.extend({
   children: z.array(MediaCard),
   /** Flattened grandchildren (episodes across all seasons) — empty unless kind === SERIES. */
   episodes: z.array(EpisodeCard),
+  /** Show-scoped movies parented to this series (direct MOVIE children + legacy season-grandchild movies) — empty unless kind === SERIES. */
+  movies: z.array(EpisodeCard),
   /** Primary file's audio streams — empty for SERIES/SEASON (no file of their own). */
   audioTracks: z.array(AudioTrackInfo),
   /** Watch summary for the requesting profile — null when no profileId was passed. */

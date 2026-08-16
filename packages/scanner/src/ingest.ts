@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
-import { PrismaClient, type ContentProfile } from "@hokago/db";
+import { Prisma, PrismaClient, type ContentProfile } from "@hokago/db";
 
 import { resolveArtwork, upsertArtworkDescriptor } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
@@ -34,9 +34,13 @@ export interface IngestSummary {
  * registry (forked by the library's content profile). If a majority
  * carry a season/episode marker, the directory is a season worth of a
  * series (explicit "Season 01"-style dirname, or implicit Season 1 if not).
- * Runtime-cluster outliers within that group become standalone movies —
- * the Mugen Train shape (c). Otherwise every file in the
- * directory is independently a movie (covers both one-movie-per-folder and
+ * Runtime-cluster outliers within that group are movies that live inside
+ * the show — parented to the series and shown under its Movies section
+ * (the Mugen Train shape). A non-season directory still belongs to a show
+ * when an ancestor anchors it (a season dir, a season-named folder, or a
+ * season-named child — "Show/Movies/", loose files in "Show/"); its files
+ * are series-parented movies too. Otherwise every file in the directory is
+ * independently a root-level movie (covers both one-movie-per-folder and
  * flat scene-style dumps of unrelated files in one folder).
  */
 function isSeasonLikeDirectory(files: DiscoveredFile[], profile: ContentProfile): boolean {
@@ -86,6 +90,63 @@ async function findOrCreateCollection(
     data: { name: params.name, sortTitle: params.name.toLowerCase(), kind: params.kind, derived: true },
   });
   return { id: created.id };
+}
+
+/**
+ * Show anchor for a directory: a folder belongs to a show when it (or an
+ * ancestor) is a season directory, parses as a season ("Season 1", "Specials")
+ * or contains a season-named/season-like child. The anchor names the series:
+ * basename(anchor), or dirname(anchor) when the anchor itself is season-named
+ * ("Show/Season 1" → "Show"). Walk-up stops at the library root — a flat
+ * folder with no anchoring show anywhere above it is a standalone movie
+ * folder, not a show.
+ */
+function findSeriesAnchor(
+  rootPath: string,
+  dir: string,
+  seasonNamedDirs: ReadonlySet<string>,
+  seasonLikeDirs: ReadonlySet<string>,
+): { seriesDir: string; title: string } | null {
+  let d = dir;
+  for (;;) {
+    if (d === rootPath) return null;
+    const seasonNumber = parseSeasonDirName(path.basename(d));
+    if (seasonNumber !== null) {
+      // A season-named dir directly under the library root has no show above
+      // it — its files are root-level movies, not a fake series named after
+      // the library ("anime").
+      if (path.dirname(d) === rootPath) return null;
+      return { seriesDir: path.dirname(d), title: path.basename(path.dirname(d)) };
+    }
+    if (seasonLikeDirs.has(d)) return { seriesDir: d, title: path.basename(d) };
+    const hasSeasonChild =
+      [...seasonNamedDirs].some((child) => path.dirname(child) === d) ||
+      [...seasonLikeDirs].some((child) => path.dirname(child) === d);
+    if (hasSeasonChild) return { seriesDir: d, title: path.basename(d) };
+    d = path.dirname(d);
+  }
+}
+
+/** Links show-scoped movies and their series into one franchise collection (Mugen Train shape). */
+async function linkFranchise(
+  db: PrismaClient,
+  seriesId: string,
+  seriesTitle: string,
+  movieIds: string[],
+): Promise<void> {
+  const collection = await findOrCreateCollection(db, { name: seriesTitle, kind: "FRANCHISE" });
+  await db.collectionEntry.upsert({
+    where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId: seriesId } },
+    create: { collectionId: collection.id, mediaItemId: seriesId, relationType: "MAIN" },
+    update: {},
+  });
+  for (const mediaItemId of movieIds) {
+    await db.collectionEntry.upsert({
+      where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId } },
+      create: { collectionId: collection.id, mediaItemId, relationType: "MOVIE" },
+      update: {},
+    });
+  }
 }
 
 /** Walk a child's parent chain to the root — finds the series an item (re)parents under. */
@@ -201,7 +262,15 @@ interface FileContext {
   file: DiscoveredFile;
   dir: string;
   probe: ProbeResult | null;
+  /** The library's stored row for this file (bulk-fetched once per scan) — null for brand-new files. */
+  stored: StoredFile | null;
+  /** EMBEDDED_TAG evidence from a previous scan — re-added verbatim when the file is unchanged so the full-snapshot sync doesn't drop it. */
+  preservedEmbeddedTag: EvidenceInput | null;
 }
+
+type StoredFile = Prisma.MediaFileGetPayload<{
+  include: { mediaItem: { select: { kind: true; parentId: true; title: true } } };
+}>;
 
 export interface ArtworkNeeded {
   mediaItemId: string;
@@ -247,7 +316,7 @@ async function ingestLeafItem(
   deferTrickplay: boolean,
   profile: ContentProfile,
 ): Promise<LeafResult> {
-  const { file, dir, probe } = ctx;
+  const { file, dir, probe, stored, preservedEmbeddedTag } = ctx;
   const parsed = parseFilename(path.basename(file.path), profile);
   // Season folders keep anime's absolute numbering ("Season 2" holding files
   // 13..24) — normalize to season-relative (1..12) so ordering, titles, and
@@ -278,21 +347,11 @@ async function ingestLeafItem(
   const title =
     kind === "EPISODE" ? `Episode ${episodeNumber ?? "?"}` : (parsed.title ?? path.basename(file.path));
 
-  // Path first (common case, cheap unique lookup). If the path moved, fall
-  // back to inode within this library — a rename/move must reuse the same
-  // MediaItem/MediaFile, not re-import. inode 0 means the filesystem doesn't
-  // report real inodes (SMB/some network mounts) — every file shares it, so
-  // matching on it would attach this file to an arbitrary wrong item.
-  let existingFile = await db.mediaFile.findUnique({
-    where: { path: file.path },
-    include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
-  });
-  if (!existingFile && file.inode !== 0n) {
-    existingFile = await db.mediaFile.findFirst({
-      where: { inode: file.inode, mediaItem: { libraryId } },
-      include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
-    });
-  }
+  // The stored row comes from the scan's one bulk fetch (path first, inode
+  // fallback within the library) — no per-file query here. A row matched by
+  // inode means the file moved: the row's probe data stays valid, only the
+  // path is rewritten below.
+  let existingFile = stored ?? null;
   let mediaItemId: string;
   let oldParentId: string | null = null;
   let huskItemId: string | null = null;
@@ -318,7 +377,21 @@ async function ingestLeafItem(
     huskItemId = item.id;
   }
 
-  const hash = await partialHash(file.path, file.sizeBytes);
+  // Immutable snapshot — existingFile may be replaced by the twin steal
+  // below, and TS won't narrow a reassigned `let` through the unchanged gate.
+  const existing = existingFile;
+
+  // Rescan gate: size + mtime match means the file never changed since its
+  // stored probe — skip the probe spawn, the 2MiB partial hash, and the
+  // stream/font re-derivation entirely. Classification (kind/parent/title),
+  // NFO, and evidence are still re-derived from the (unchanged) on-disk
+  // signals below — that's what makes a plain rescan heal re-classifications.
+  const unchanged =
+    existing !== null &&
+    existing.sizeBytes === file.sizeBytes &&
+    existing.mtime.getTime() === file.mtime.getTime();
+
+  const hash = unchanged ? existing.hash : await partialHash(file.path, file.sizeBytes);
 
   // Content-identity steal: no path/inode match, but a row with the identical
   // content hash (size + first/last MiB — partialHash) whose own file has
@@ -343,18 +416,34 @@ async function ingestLeafItem(
 
   const nfo = await findNfoForFile(file.path, kind === "EPISODE" ? "episode" : "movie");
 
-  const fileFields = {
-    path: file.path,
-    sizeBytes: BigInt(file.sizeBytes),
-    mtime: file.mtime,
-    inode: file.inode,
-    hash,
-    container: probe?.container ?? null,
-    durationMs: probe?.durationMs ?? null,
-    bitrate: probe?.bitrate ?? null,
-    probedAt: probe ? new Date() : null,
-    probeFailed: probe === null,
-  };
+  // Unchanged files keep their stored probe fields (probedAt untouched — the
+  // probe is still the one that produced them); changed/new files take the
+  // fresh probe.
+  const fileFields = unchanged
+    ? {
+        path: file.path,
+        sizeBytes: file.sizeBytes,
+        mtime: file.mtime,
+        inode: file.inode,
+        hash,
+        container: existing.container,
+        durationMs: existing.durationMs,
+        bitrate: existing.bitrate,
+        probedAt: existing.probedAt,
+        probeFailed: existing.probeFailed,
+      }
+    : {
+        path: file.path,
+        sizeBytes: file.sizeBytes,
+        mtime: file.mtime,
+        inode: file.inode,
+        hash,
+        container: probe?.container ?? null,
+        durationMs: probe?.durationMs ?? null,
+        bitrate: probe?.bitrate ?? null,
+        probedAt: probe ? new Date() : null,
+        probeFailed: probe === null,
+      };
 
   let mediaFileId: string;
   if (existingFile) {
@@ -387,8 +476,11 @@ async function ingestLeafItem(
     mediaFileId = created.id;
   }
 
-  if (probe?.durationMs) {
-    await db.mediaItem.update({ where: { id: mediaItemId }, data: { runtimeMs: probe.durationMs } });
+  // Effective duration: fresh probe, or the stored row's when the file is
+  // unchanged — feeds clustering, runtime evidence, and the item's runtime.
+  const durationMs = probe?.durationMs ?? (unchanged ? existing.durationMs : null);
+  if (durationMs) {
+    await db.mediaItem.update({ where: { id: mediaItemId }, data: { runtimeMs: durationMs } });
   }
 
  // Local NFO always outranks network providers (resolution chain) — only
@@ -397,13 +489,16 @@ async function ingestLeafItem(
     await db.mediaItem.updateMany({ where: { id: mediaItemId, overview: null }, data: { overview: nfo.plot } });
   }
 
- // Probe + fonts + subtitles (Step 5): streams carry HDR gate data
- // , subtitle tracks carry the burn-in flag , fonts land in
+  // Probe + fonts + subtitles (Step 5): streams carry HDR gate data
+  // , subtitle tracks carry the burn-in flag , fonts land in
   // the shared hash-deduped store regardless of which of the three sources
- // they came from .
-  await syncMediaStreams(db, mediaFileId, probe?.streams ?? []);
-  await syncSubtitleTracks(db, mediaFileId, probe?.streams ?? []);
-  await extractFonts(db, mediaFileId, file.path, dir);
+  // they came from . An unchanged file's stored streams are still
+  // the truth — re-syncing from an empty probe would wipe them.
+  if (!unchanged) {
+    await syncMediaStreams(db, mediaFileId, probe?.streams ?? []);
+    await syncSubtitleTracks(db, mediaFileId, probe?.streams ?? []);
+    await extractFonts(db, mediaFileId, file.path, dir);
+  }
 
   // FOLDER_NAME carries the folder's identity, not the item's synthetic
   // display title — for episodes `title` is "Episode N", which would record
@@ -414,10 +509,15 @@ async function ingestLeafItem(
   if (parsed.episode !== null || parsed.title) {
     evidence.push({ signalType: "FILENAME_PARSE", source: file.path, value: { ...parsed } });
   }
-  if (probe?.durationMs) {
-    evidence.push({ signalType: "PROBE_RUNTIME", source: "probe", value: { runtimeMs: probe.durationMs } });
+  if (durationMs) {
+    evidence.push({ signalType: "PROBE_RUNTIME", source: "probe", value: { runtimeMs: durationMs } });
   }
-  if (probe?.tags && Object.keys(probe.tags).length > 0) {
+  if (unchanged) {
+    // No fresh probe means no fresh container tags — carry the stored
+    // EMBEDDED_TAG evidence forward instead of dropping it in the full-
+    // snapshot sync. The source file is unchanged, so the tag didn't vanish.
+    if (preservedEmbeddedTag) evidence.push(preservedEmbeddedTag);
+  } else if (probe?.tags && Object.keys(probe.tags).length > 0) {
     evidence.push({ signalType: "EMBEDDED_TAG", source: "container-tags", value: probe.tags });
   }
   if (nfo) {
@@ -509,14 +609,87 @@ export async function ingestLibrary(
   const deferArtwork = opts.onArtworkNeeded !== undefined;
   const deferTrickplay = opts.onTrickplayNeeded !== undefined;
 
-  // Probe the whole library in one bounded fan-out instead of directory by
-  // directory. Each probe is an ffprobe spawn (~100-400ms) and the previous
-  // code serialized probes across directories (probe dir A fully, then dir
-  // B) — with hundreds of shows that pipeline stutters and cores sit idle
-  // between directories. Probes are keyed by file path and never mutate the
-  // DB, so a single global pool is pure fan-out with no correctness cost.
-  const probeResults = await mapLimit(files, PROBE_CONCURRENCY, (f) => probeFile(f.path));
-  const probeByPath = new Map(files.map((f, i) => [f.path, probeResults[i]]));
+  // One bulk fetch of every stored file in the library — the per-file lookup
+  // ingest used to do (path first, inode fallback) and the rescan gate. The
+  // map is authoritative for this run: nothing else mutates rows mid-scan.
+  const storedRows = await db.mediaFile.findMany({
+    where: { mediaItem: { libraryId } },
+    include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
+  });
+  const storedByPath = new Map(storedRows.map((r) => [r.path, r]));
+  // inode 0 means the filesystem doesn't report real inodes (SMB/some network
+  // mounts) — every file shares it, so matching on it would attach this file
+  // to an arbitrary wrong item.
+  const storedByInode = new Map(
+    storedRows
+      .filter((r): r is StoredFile & { inode: bigint } => r.inode !== null && r.inode !== 0n)
+      .map((r) => [r.inode.toString(), r]),
+  );
+  const storedFor = (f: DiscoveredFile): StoredFile | null =>
+    storedByPath.get(f.path) ?? (f.inode !== 0n ? (storedByInode.get(f.inode.toString()) ?? null) : null);
+
+  // Probe only files that may have changed: no stored row, or size/mtime
+  // differ from the last scan. Unchanged files keep their stored probe data,
+  // so a rescan of a settled library spawns zero ffprobes.
+  const needsProbe = files.filter((f) => {
+    const row = storedFor(f);
+    return !row || row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime();
+  });
+  const probeResults = await mapLimit(needsProbe, PROBE_CONCURRENCY, (f) => probeFile(f.path));
+  const probeByPath = new Map(needsProbe.map((f, i) => [f.path, probeResults[i]]));
+  // Cluster/evidence reads the effective duration — fresh probe, else stored.
+  const durationByPath = new Map<string, number | null>(
+    files.map((f) => [f.path, probeByPath.get(f.path)?.durationMs ?? storedFor(f)?.durationMs ?? null]),
+  );
+
+  // Unchanged files have no fresh container tags; the full-snapshot evidence
+  // sync would drop their EMBEDDED_TAG rows. Bulk-load them once so the leaf
+  // can re-add the stored value verbatim.
+  const unchangedItemIds = new Set<string>();
+  for (const f of files) {
+    const row = storedFor(f);
+    if (row && row.sizeBytes === f.sizeBytes && row.mtime.getTime() === f.mtime.getTime()) {
+      unchangedItemIds.add(row.mediaItemId);
+    }
+  }
+  const preservedEmbeddedTags = new Map<string, EvidenceInput>();
+  if (unchangedItemIds.size > 0) {
+    const rows = await db.evidence.findMany({
+      where: { mediaItemId: { in: [...unchangedItemIds] }, signalType: "EMBEDDED_TAG" },
+      select: { mediaItemId: true, value: true },
+    });
+    for (const r of rows) {
+      preservedEmbeddedTags.set(r.mediaItemId, {
+        signalType: "EMBEDDED_TAG",
+        source: "container-tags",
+        value: r.value as Record<string, unknown>,
+      });
+    }
+  }
+
+  // Per-file ingest context — probes and stored rows resolved once, shared
+  // by every branch below.
+  const ctxFor = (file: DiscoveredFile, dir: string): FileContext => {
+    const stored = storedFor(file);
+    return {
+      file,
+      dir,
+      probe: probeByPath.get(file.path) ?? null,
+      stored,
+      preservedEmbeddedTag: stored ? (preservedEmbeddedTags.get(stored.mediaItemId) ?? null) : null,
+    };
+  };
+
+  // Precompute the anchor sets once: dirs that parse as a season and dirs
+  // whose own files are majority episode-named — findSeriesAnchor consults
+  // them for every directory.
+  const seasonNamedDirs = new Set<string>();
+  const seasonLikeDirs = new Set<string>();
+  for (const d of byDir.keys()) {
+    const dirFiles = byDir.get(d)!;
+    if (isSeasonLikeDirectory(dirFiles, profile)) seasonLikeDirs.add(d);
+    if (parseSeasonDirName(path.basename(d)) !== null) seasonNamedDirs.add(d);
+  }
 
   const summary: IngestSummary = {
     directoriesScanned: byDir.size,
@@ -594,16 +767,62 @@ export async function ingestLibrary(
       continue;
     }
     const dirFiles = [...(byDir.get(dir) ?? [])].sort((a, b) => a.path.localeCompare(b.path));
-    const probes = new Map(dirFiles.map((f) => [f.path, probeByPath.get(f.path) ?? null]));
 
-    if (!isSeasonLikeDirectory(dirFiles, profile)) {
+    if (!seasonLikeDirs.has(dir)) {
+      // A non-season folder that still belongs to a show (Show/Movies/,
+      // Show/Extras/, or loose files sitting directly in the show folder):
+      // every file is a movie parented to the series, so they surface under
+      // the show's Movies section instead of leaking out as root-level
+      // standalone movies.
+      const anchor = findSeriesAnchor(rootPath, dir, seasonNamedDirs, seasonLikeDirs);
+      if (anchor) {
+        const series = await findOrCreateChild(db, { libraryId, parentId: null, kind: "SERIES", title: anchor.title });
+        if (series.wasCreated) summary.seriesCreated += 1;
+        await syncEvidenceAndConfidence(
+          db,
+          series.id,
+          [{ signalType: "FOLDER_NAME", source: anchor.seriesDir, value: { title: anchor.title } }],
+          LOCAL_SIGNAL_TYPES,
+        );
+        const seriesQuery = cleanFolderTitle(anchor.title);
+        await opts.onMetadataNeeded?.({ mediaItemId: series.id, libraryId, kind: "SERIES", title: seriesQuery.title, year: seriesQuery.year });
+
+        const results = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
+          const result = await ingestLeafItem(
+            db,
+            libraryId,
+            ctxFor(file, dir),
+            "MOVIE",
+            series.id,
+            null,
+            deferArtwork,
+            deferTrickplay,
+            profile,
+          );
+          if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
+          if (result.trickplayNeeded) await opts.onTrickplayNeeded?.(result.trickplayNeeded);
+          await opts.onMetadataNeeded?.({ mediaItemId: result.mediaItemId, libraryId, kind: "MOVIE", title: result.title, year: result.year });
+          return result;
+        });
+        const movieIds: string[] = [];
+        for (const result of results) {
+          summary.artworkStored += result.artworkStored;
+          summary.moviesCreated += 1;
+          movieIds.push(result.mediaItemId);
+        }
+        if (movieIds.length > 0) await linkFranchise(db, series.id, anchor.title, movieIds);
+        await opts.onDirectoryComplete?.(dir);
+        await reportProgress();
+        continue;
+      }
+
       // Every file in a non-season directory is independently a movie — no
       // shared parent rows, so the leaf ingestion can run concurrently.
       const results = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
         const result = await ingestLeafItem(
           db,
           libraryId,
-          { file, dir, probe: probes.get(file.path) ?? null },
+          ctxFor(file, dir),
           "MOVIE",
           null,
           null,
@@ -675,7 +894,7 @@ export async function ingestLibrary(
     };
 
     const { main, outliers } = clusterByRuntime(
-      dirFiles.map((f) => ({ path: f.path, durationMs: probes.get(f.path)?.durationMs ?? null })),
+      dirFiles.map((f) => ({ path: f.path, durationMs: durationByPath.get(f.path) ?? null })),
     );
 
     // Episodes share the season row but each leaf's own MediaItem/MediaFile/
@@ -683,7 +902,7 @@ export async function ingestLibrary(
     // SERIES/SEASON evidence sync below stays serial because it needs the
     // aggregated title agreement count from every file first.
     const outcomes = await mapLimit(dirFiles, INGEST_CONCURRENCY, async (file) => {
-      const ctx: FileContext = { file, dir, probe: probes.get(file.path) ?? null };
+      const ctx = ctxFor(file, dir);
       const parsed = parsedByPath.get(file.path)!;
       const { seasonId, seasonNumber } = seasonForFile(file.path);
       // Runtime clustering exists only for the Mugen Train shape — movies
@@ -697,12 +916,12 @@ export async function ingestLibrary(
       let result: LeafResult | null = null;
       if (isOutlier) {
         // The Mugen Train shape: a movie living inside a show folder. It
-        // stays *inside* the show — parented to the season, exactly like an
-        // episode — so it shows up under the series, not as a root-level
-        // standalone movie. Only files in a *flat* (non-season) directory are
-        // ever root-level movies; a movie inside a show folder is part of that
-        // show, full stop.
-        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", seasonId, seasonNumber, deferArtwork, deferTrickplay, profile);
+        // stays *inside* the show — parented to the SERIES (not the season),
+        // so it surfaces under the show's Movies section, not as a root-level
+        // standalone movie. Only files in a *flat* (non-season) directory
+        // with no anchoring show are ever root-level movies; a movie inside a
+        // show folder is part of that show, full stop.
+        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", series.id, null, deferArtwork, deferTrickplay, profile);
       } else if (isMain) {
         result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", seasonId, seasonNumber, deferArtwork, deferTrickplay, profile);
       }
@@ -766,19 +985,7 @@ export async function ingestLibrary(
     // are movies that live inside a series folder — link them and the series
     // into one franchise collection instead of leaving them unconnected.
     if (outlierMediaItemIds.length > 0) {
-      const collection = await findOrCreateCollection(db, { name: seriesTitle, kind: "FRANCHISE" });
-      await db.collectionEntry.upsert({
-        where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId: series.id } },
-        create: { collectionId: collection.id, mediaItemId: series.id, relationType: "MAIN" },
-        update: {},
-      });
-      for (const mediaItemId of outlierMediaItemIds) {
-        await db.collectionEntry.upsert({
-          where: { collectionId_mediaItemId: { collectionId: collection.id, mediaItemId } },
-          create: { collectionId: collection.id, mediaItemId, relationType: "MOVIE" },
-          update: {},
-        });
-      }
+      await linkFranchise(db, series.id, seriesTitle, outlierMediaItemIds);
     }
 
     await opts.onDirectoryComplete?.(dir);

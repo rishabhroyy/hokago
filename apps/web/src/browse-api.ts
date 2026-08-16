@@ -101,6 +101,7 @@ function fetchMediaItemDetailUncached(id: string, profileId?: string | null): Pr
         ...fixCreatedAt(data),
         children: data.children.map(fixCreatedAt),
         episodes: data.episodes.map(fixCreatedAt),
+        movies: data.movies.map(fixCreatedAt),
         watch: data.watch ? { ...data.watch, lastWatchedAt: data.watch.lastWatchedAt ? new Date(data.watch.lastWatchedAt) : null } : null,
         collections: data.collections.map((c) => ({
           ...c,

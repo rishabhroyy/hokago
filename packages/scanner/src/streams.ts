@@ -9,6 +9,9 @@ const SUBTITLE_FORMAT_BY_CODEC: Record<string, SubtitleFormat> = {
   srt: "SRT",
   webvtt: "VTT",
   vtt: "VTT",
+  // MP4 subtitle codec — text, but not libass/JASSUB-readable as-is; the
+  // subtitle-text routes extract it on demand as SRT.
+  mov_text: "TX3G",
   hdmv_pgs_subtitle: "PGS",
   pgssub: "PGS",
   dvd_subtitle: "VOBSUB",

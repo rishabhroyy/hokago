@@ -393,8 +393,8 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
 
 // ── Downloads ────────────────────────────────────────────────────────────────
 
-const SUBTITLE_MUX: Record<string, string> = { ASS: "ass", SSA: "ass", SRT: "srt", VTT: "webvtt" };
-const SUBTITLE_EXT: Record<string, string> = { ASS: "ass", SSA: "ass", SRT: "srt", VTT: "vtt" };
+const SUBTITLE_MUX: Record<string, string> = { ASS: "ass", SSA: "ass", SRT: "srt", VTT: "webvtt", TX3G: "srt" };
+const SUBTITLE_EXT: Record<string, string> = { ASS: "ass", SSA: "ass", SRT: "srt", VTT: "vtt", TX3G: "srt" };
 const FONT_EXT: Record<string, string> = { WOFF2: "woff2", WOFF: "woff", TTF: "ttf", OTF: "otf", TTC: "ttc" };
 
 /** Same convention buildCandidateInput/static-routes use: ffmpeg's `-map 0:s:N` is relative to subtitle-type streams only. */

@@ -37,12 +37,16 @@ const SUBTITLE_MUX: Record<string, string> = {
   SSA: "ass",
   SRT: "srt",
   VTT: "webvtt",
+  // TX3G (mov_text) has no libass parser — ffmpeg converts it to SRT at
+  // extraction time, same bytes the downloads path packages.
+  TX3G: "srt",
 };
 const SUBTITLE_MIME: Record<string, string> = {
   ASS: "text/x-ssa",
   SSA: "text/x-ssa",
   SRT: "application/x-subrip",
   VTT: "text/vtt",
+  TX3G: "application/x-subrip",
 };
 
 /**

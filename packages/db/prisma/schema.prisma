@@ -100,6 +100,7 @@ enum SubtitleFormat {
   SSA
   SRT
   VTT
+  TX3G // mov_text (mp4) — text, client-rendered; extracted via ffmpeg as SRT
   PGS // bitmap — forces burn-in, kills Direct Play
   VOBSUB
   DVBSUB

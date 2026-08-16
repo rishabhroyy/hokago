@@ -125,6 +125,12 @@ export function parseSeasonDirName(name: string): number | null {
     .replace(/\s+/g, " ")
     .trim();
   if (/^(?:specials?|extras?|ovas?|onas?)$/i.test(cleaned)) return 0;
-  const m = /^(?:season|series|staffel|s)\s*0*(\d{1,3})$/i.exec(cleaned);
+  // A leading season token ("S1", "Season 1") optionally followed by a
+  // descriptor ("S1 - First Stage", "Season 1 (2019)") — the "S1 - First
+  // Stage" style splits one show into several root-level SERIES rows when
+  // unrecognized (Initial D's "stages"). The number must be followed by
+  // whitespace or the end of the name, so "s1e5" (an episode-style name)
+  // never matches.
+  const m = /^(?:season|series|staffel|s)\s*0*(\d{1,3})(?=\s|$)/i.exec(cleaned);
   return m ? Number(m[1]) : null;
 }

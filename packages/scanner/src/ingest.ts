@@ -96,11 +96,25 @@ async function findOrCreateCollection(
 }
 
 /**
+ * The top-level folder under the library root that contains `dir` — the show
+ * container. "No matter how many subfolders": an episode nested at any depth
+ * ("Initial D/S1 - First Stage/01.mkv" or "Initial D/Stages/S7/x.mp4") still
+ * belongs to the show whose folder sits directly under the library root, so
+ * season/series resolution always climbs back to it.
+ */
+function topLevelFolder(rootPath: string, dir: string): string {
+  let d = dir;
+  while (d !== rootPath && path.dirname(d) !== rootPath) d = path.dirname(d);
+  return d;
+}
+
+/**
  * Show anchor for a directory: a folder belongs to a show when it (or an
  * ancestor) is a season directory, parses as a season ("Season 1", "Specials")
  * or contains a season-named/season-like child. The anchor names the series:
- * basename(anchor), or dirname(anchor) when the anchor itself is season-named
- * ("Show/Season 1" → "Show"). Walk-up stops at the library root — a flat
+ * always the top-level folder under the library root (basename(anchor)), so a
+ * season dir nested at any depth resolves to the same show ("Initial D/Stages/
+ * S7 - Fifth Stage" → "Initial D"). Walk-up stops at the library root — a flat
  * folder with no anchoring show anywhere above it is a standalone movie
  * folder, not a show.
  *
@@ -124,9 +138,13 @@ function findSeriesAnchor(
       // it — its files are root-level movies, not a fake series named after
       // the library ("anime").
       if (path.dirname(d) === rootPath) return null;
-      return { seriesDir: path.dirname(d), title: path.basename(path.dirname(d)) };
+      const anchor = topLevelFolder(rootPath, d);
+      return { seriesDir: anchor, title: path.basename(anchor) };
     }
-    if (seasonLikeDirs.has(d) || seasonChildParents.has(d)) return { seriesDir: d, title: path.basename(d) };
+    if (seasonLikeDirs.has(d) || seasonChildParents.has(d)) {
+      const anchor = topLevelFolder(rootPath, d);
+      return { seriesDir: anchor, title: path.basename(anchor) };
+    }
     d = path.dirname(d);
   }
 }
@@ -898,7 +916,13 @@ export async function ingestLibrary(
     }
 
     const seasonDirNumber = parseSeasonDirName(path.basename(dir));
-    const seriesDir = seasonDirNumber !== null ? path.dirname(dir) : dir;
+    // The show is the top-level folder under the library root, no matter how
+    // many subfolders separate it from the season ("Initial D/Stages/S1 - First
+    // Stage" → "Initial D"). A season dir directly under the root keeps the
+    // loose-at-root fallback below; a flat (non-season) show folder is its own
+    // top-level folder.
+    const seriesDir =
+      seasonDirNumber !== null ? topLevelFolder(rootPath, path.dirname(dir)) : topLevelFolder(rootPath, dir);
     let seriesTitle = path.basename(seriesDir);
 
     const parsedByPath = new Map(dirFiles.map((f) => [f.path, parseFilename(path.basename(f.path), profile)] as const));

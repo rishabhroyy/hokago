@@ -39,6 +39,17 @@ export function parseAnime(filename: string): ParsedFilename {
       episode = Number(leading[1]);
     }
   }
+  // "10.mp4" (a bare-numbered file — no title part at all, the whole
+  // filename is just the episode number + extension). A digit-led show title
+  // always carries a title part after the number ("86 - 01.mkv"), so a bare
+  // number + extension can only be an episode number.
+  if (episode === null) {
+    const bare = /^(\d{1,3})\.[a-z0-9]{2,5}$/i.exec(filename);
+    if (bare) {
+      leadingFallback = true;
+      episode = Number(bare[1]);
+    }
+  }
   // No season token means "Series - 38" style absolute numbering — the same
   // number is the absolute number too, until episode_offset resolution
   // can tell us otherwise against a real season structure. (numberAlt is the

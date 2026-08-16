@@ -72,7 +72,11 @@ fn fallback_file(key: &str) -> std::io::Result<Option<String>> {
 
 /// The script injected into every page load (local setup page AND the remote
 /// SPA) — declares `window.hokagoNative` backed by the Tauri IPC bridge.
-/// Per-app versions are baked in so the web's MIN_NATIVE_VERSION gate works.
+/// Platform, clientKey, serverUrl, versions are all baked in per-load, so the
+/// bridge exists SYNCHRONOUSLY before the SPA's own scripts run — the web app
+/// reads `window.hokagoNative` during render, and an async round trip would
+/// race it (first paint missing the downloads gating, `startTokenWarmth`
+/// bailing on a not-yet-arrived bridge), silently hiding the downloads UI.
 ///
 /// Storage follows the iOS/Android pattern: synchronous reads come from the
 /// webview's localStorage, writes mirror through to the OS keyring, and on
@@ -80,29 +84,23 @@ fn fallback_file(key: &str) -> std::io::Result<Option<String>> {
 /// session). Tauri IPC is async-only, so a localStorage facade is the only
 /// way to satisfy the contract's synchronous `storage.get`.
 pub fn injected_script(app_version: &str, app_build: &str) -> String {
+    let server_url_json = match crate::config::server_url() {
+        Some(url) => serde_json::json!(url).to_string(),
+        None => "null".to_string(),
+    };
     format!(
         r#"(function(){{
   if (window.__hokagoBridge) return;
   window.__hokagoBridge = true;
   const inv = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) ? window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__) : null;
   if (!inv) return;
-  // Re-seed localStorage from the keyring for the keys the web app persists
-  // (sessions + the offline library manifest survive webview data wipes).
-  inv("storage_hydrate").then(function (map) {{
-    try {{
-      Object.keys(map || {{}}).forEach(function (k) {{
-        if (localStorage.getItem(k) === null) localStorage.setItem(k, map[k]);
-      }});
-    }} catch (e) {{}}
-  }}).catch(function () {{}});
-  inv("bridge_info").then(function (info) {{
-    window.hokagoNative = {{
-      platform: info.platform,
-      appVersion: "{app_version}",
-      appBuild: "{app_build}",
-      clientKey: info.clientKey,
-      serverUrl: info.serverUrl || null,
-      storage: {{
+  window.hokagoNative = {{
+    platform: "{platform}",
+    appVersion: "{app_version}",
+    appBuild: "{app_build}",
+    clientKey: "{client_key}",
+    serverUrl: {server_url_json},
+    storage: {{
         get: function (k) {{
           const v = localStorage.getItem(k);
           return v === null ? null : v;
@@ -126,19 +124,33 @@ pub fn injected_script(app_version: &str, app_build: &str) -> String {
         }},
         list: function () {{ return inv("downloads_list"); }},
         // Synchronous (the contract requires a plain string): the URL is
-        // purely derived — hokago-file:// + the encoded absolute path.
+        // purely derived — hokago-file:// + the percent-encoded path. Windows
+        // backslashes become "/" so the URL parses (and the Rust handler
+        // decodes them back); every segment is encoded because the handler
+        // decodes via URL parsing, not string ops.
         localUrl: function (localPath) {{
-          return "hokago-file://" + String(localPath).split("/").map(encodeURIComponent).join("/");
+          return "hokago-file://" + String(localPath).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
         }},
         readText: function (localPath) {{ return inv("downloads_read_text", {{ path: localPath }}); }},
         open: function (localPath) {{ try {{ inv("open_path", {{ path: localPath }}); }} catch (e) {{}} }}
       }}
     }};
     document.dispatchEvent(new CustomEvent("hokago-bridge-ready"));
-  }}).catch(function () {{}});
+    // Re-seed localStorage from the keyring for the keys the web app persists
+    // (sessions + the offline library manifest survive webview data wipes).
+    inv("storage_hydrate").then(function (map) {{
+      try {{
+        Object.keys(map || {{}}).forEach(function (k) {{
+          if (localStorage.getItem(k) === null) localStorage.setItem(k, map[k]);
+        }});
+      }} catch (e) {{}}
+    }}).catch(function () {{}});
 }})();"#,
+        platform = platform(),
+        client_key = crate::config::client_key(),
         app_version = app_version,
-        app_build = app_build
+        app_build = app_build,
+        server_url_json = server_url_json
     )
 }
 

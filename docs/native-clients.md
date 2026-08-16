@@ -131,8 +131,11 @@ interface NativeBridge {
    files (`GET /media-items/:id/files`) → `POST /downloads` → poll `GET
    /downloads/:id` until `READY` → `GET /downloads/:id/artifact` →
    `bridge.downloads.save(url, filename)` → native bytes land in
-   `~/Downloads/hokago/` (desktop), `Documents/hokago/` (iOS), or
-   `Download/hokago/` (Android). Downloads are hidden on TV platforms and in a
+   `~/Downloads/hokago/` (desktop), `Documents/hokago/` (iOS), or the app's
+   external downloads dir `Android/data/com.hokago.app/files/Download/hokago/`
+   (Android — public `Downloads/` needs permissions/MediaStore on modern
+   Android and has no real path, so saves live app-scoped and are exposed via
+   the FileProvider `open`). Downloads are hidden on TV platforms and in a
    plain browser.
 
 ## Update policy
@@ -198,10 +201,10 @@ SPA and the web app gets an offline library.
   App icon lives in `hokago/Assets.xcassets` (1024px, no alpha). AirPlay is on.
 - **Android** (`native/android`) — raw WebView with a synchronous
   `addJavascriptInterface` bridge; phone + TV product flavors; AES-GCM
-  Keystore-backed secure store; downloads via `HttpURLConnection` into public
-  Downloads (opened with a FileProvider); `hokago-file://` intercepted in
-  `shouldInterceptRequest` with Range support, as are the `web-dist` assets
-  behind the fake `http://hokago-app.local` origin. Release builds are signed
+  Keystore-backed secure store; downloads via `HttpURLConnection` into the
+  app's external downloads dir (opened with a FileProvider); `hokago-file://`
+  intercepted in `shouldInterceptRequest` with Range support, as are the
+  `web-dist` assets behind the fake `http://hokago-app.local` origin. Release builds are signed
   in CI with a key held in **repo secrets** — never committed: the APK
   signature is Android's trust anchor, and a leaked key lets anyone ship
   malicious updates over the install base. The secrets are

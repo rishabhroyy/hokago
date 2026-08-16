@@ -139,9 +139,8 @@ class NativeBridge(private val webView: WebView) {
     @JavascriptInterface
     fun downloadList(id: Int) {
         executor.execute {
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "hokago")
             val entries = JSONArray()
-            dir.listFiles()?.forEach { f ->
+            downloadsDir().listFiles()?.forEach { f ->
                 if (f.isFile && !f.name.startsWith(".")) {
                     val o = JSONObject()
                     o.put("localPath", f.absolutePath)
@@ -177,17 +176,14 @@ class NativeBridge(private val webView: WebView) {
             connection = URL(url).openConnection() as HttpURLConnection
             connection.setRequestProperty("Authorization", "Bearer $token")
             connection.connectTimeout = 30_000
-            connection.readTimeout = 60_000
+            // No read timeout: a multi-gigabyte movie over a slow link can
+            // legitimately stall far beyond any per-read window.
+            connection.readTimeout = 0
             val code = connection.responseCode
             if (code == 401) return resultJson(id, false, error = "session expired — reopen hokago to refresh")
             if (code !in 200..299) return resultJson(id, false, error = "the server answered $code")
 
-            val dir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                "hokago"
-            ).apply { mkdirs() }
-            val safe = filename.map { if (it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' || it == ' ') it else '_' }.joinToString("")
-            val dest = File(dir, safe)
+            val dest = File(downloadsDir(), safeFilename(filename))
             connection.inputStream.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
             }
@@ -198,6 +194,23 @@ class NativeBridge(private val webView: WebView) {
             connection?.disconnect()
         }
     }
+
+    /**
+     * Where saved files land — the app's own external downloads dir. Public
+     * Downloads/ is writeable only with storage permissions (API <= 28) or
+     * via MediaStore (API 29+), and MediaStore files have no real path for
+     * the file:// plumbing (list, localUrl, readText, Range serving) to use.
+     * The app-external dir needs no permission on any API level and keeps
+     * every path-based feature working; "open" exposes the file through the
+     * FileProvider.
+     */
+    private fun downloadsDir(): File {
+        val base = HokagoApp.instance.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: HokagoApp.instance.filesDir
+        return File(base, "hokago").apply { mkdirs() }
+    }
+
+    private fun safeFilename(filename: String): String =
+        filename.map { if (it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' || it == ' ') it else '_' }.joinToString("")
 
     private fun resultJson(id: Int, ok: Boolean, localPath: String? = null, sizeBytes: Long? = null, error: String? = null): String {
         val o = JSONObject()

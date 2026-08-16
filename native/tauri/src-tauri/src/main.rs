@@ -27,8 +27,14 @@ fn video_mime(path: &std::path::Path) -> &'static str {
     }
 }
 
-/// Serves `hokago-file://<absolute-path>` bytes (the webview's offline player).
-/// Range support so <video> can seek into the file.
+/// Serves `hokago-file://<percent-encoded-absolute-path>` bytes (the webview's
+/// offline player). Range support so <video> can seek into the file.
+///
+/// The URL is not a `file:` URL, and `Url::to_file_path()` refuses non-file
+/// schemes, so the custom-scheme URL is first rewritten to `file://` (the
+/// shim's `hokago-file://` + percent-encoded path parses cleanly as one) and
+/// decoded by the URL parser — this is also what makes Windows drive letters
+/// (`hokago-file://C:/...`) and spaces/non-ASCII characters work everywhere.
 fn file_scheme_handler<R: Runtime>(
     _ctx: tauri::UriSchemeContext<'_, R>,
     request: tauri::http::Request<Vec<u8>>,
@@ -36,7 +42,15 @@ fn file_scheme_handler<R: Runtime>(
     // Proper percent-decoding + Windows drive-letter handling via Url.
     let path = tauri::Url::parse(&request.uri().to_string())
         .ok()
-        .and_then(|u| u.to_file_path().ok())
+        .and_then(|u| {
+            // file:// <-> to_file_path handles percent-decoding, Windows drive
+            // letters, and backslash-on-windows; the shim percent-encodes
+            // every segment, so the rewritten URL always parses.
+            let rest = u.as_str().trim_start_matches("hokago-file://");
+            tauri::Url::parse(&format!("file://{rest}"))
+                .ok()
+                .and_then(|f| f.to_file_path().ok())
+        })
         .unwrap_or_default();
 
     let not_found = || {

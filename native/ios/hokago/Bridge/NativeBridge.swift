@@ -70,7 +70,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             }
         case "route":
             let view = body["view"] as? String ?? ""
-            PlayerRouteState.shared.inPlayer = (view == "player" || view == "offlineWatch")
+            let inPlayer = (view == "player" || view == "offlineWatch")
+            PlayerRouteState.shared.inPlayer = inPlayer
+            rotateForPlayer(inPlayer)
         case "open":
             if let path = body["localPath"] as? String {
                 let url = URL(fileURLWithPath: path)
@@ -85,6 +87,18 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     }
 
     private var documentInteraction: UIDocumentInteractionController?
+
+    /// Swing the device to landscape while watching and back to portrait
+    /// after (iPads keep free rotation). The mask flip alone won't rotate a
+    /// portrait-held phone — the UIDevice orientation kick is the same
+    /// mechanism Plex/YouTube-style apps use; attemptRotation then re-applies
+    /// the (possibly just-changed) supported mask cleanly.
+    private func rotateForPlayer(_ inPlayer: Bool) {
+        if UIDevice.current.userInterfaceIdiom == .pad { return }
+        let target: UIInterfaceOrientation = inPlayer ? .landscapeLeft : .portrait
+        UIDevice.current.setValue(target.rawValue, forKey: "orientation")
+        UIViewController.attemptRotationToDeviceOrientation()
+    }
 
     // ── Outbound (native → web) ────────────────────────────────────────────
     func post(event: String, payload: [String: Any]) {

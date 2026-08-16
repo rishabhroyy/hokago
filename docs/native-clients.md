@@ -216,7 +216,9 @@ SPA and the web app gets an offline library.
   screen is a black `LaunchBackground` color (no white flash). Webview
   chrome: no bounce, black under-page background. The `route` event hides
   the status bar + home indicator (`statusBarHidden` +
-  `persistentSystemOverlays`) on player routes. AirPlay is on.
+  `persistentSystemOverlays`) on player routes, and swings phones to
+  landscape while watching (portrait elsewhere; iPads keep free rotation).
+  AirPlay is on.
 - **Android** (`native/android`) — raw WebView with a synchronous
   `addJavascriptInterface` bridge; phone + TV product flavors; AES-GCM
   Keystore-backed secure store; downloads via `HttpURLConnection` into the
@@ -226,7 +228,9 @@ SPA and the web app gets an offline library.
   `WebChromeClient` implements `onShowCustomView`/`onHideCustomView`, so the
   player's fullscreen button gets a real native fullscreen view (immersive
   bars, phones lock to landscape — the same in-webview renderer, just
-  chromeless). The `route` event hides the system bars on player routes.
+  chromeless). The `route` event hides the system bars on player routes and
+  swings phones to landscape while watching (portrait elsewhere; tablets
+  rotate freely; TV untouched).
   Window insets are forwarded into the page as `--hokago-safe-*` CSS vars
   (edge-to-edge on every API level; short-edges cutout mode). Release builds are signed
   in CI with a key held in **repo secrets** — never committed: the APK

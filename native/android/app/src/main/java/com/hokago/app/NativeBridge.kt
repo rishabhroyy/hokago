@@ -16,7 +16,7 @@ import java.util.concurrent.Executors
  * addJavascriptInterface runs on the JS thread); downloads run on a
  * background executor and resolve the web-side promise via a CustomEvent.
  */
-class NativeBridge(private val webView: WebView) {
+class NativeBridge(private val webView: WebView, private val activity: MainActivity) {
 
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -46,6 +46,8 @@ class NativeBridge(private val webView: WebView) {
               delete pending[d.id];
               if (d.ok) p.resolve(d.text);
               else p.reject(new Error(d.error || "could not read subtitle"));
+            } else if (d.type === "route" && window.androidBridge.routeChanged) {
+              window.androidBridge.routeChanged(d.view || "");
             }
           });
           window.hokagoNative = {
@@ -126,6 +128,14 @@ class NativeBridge(private val webView: WebView) {
 
     @JavascriptInterface
     fun storageDelete(key: String) = SecureStore.delete(key)
+
+    // ── Route changes (player modes hide system bars) ──────────────────────
+    /** Called from the injected script when the SPA announces its route. */
+    @JavascriptInterface
+    fun routeChanged(view: String) {
+        val onPlayer = view == "player" || view == "offlineWatch"
+        activity.runOnUiThread { activity.setPlayerRoute(onPlayer) }
+    }
 
     // ── Async: downloads ───────────────────────────────────────────────────
     @JavascriptInterface

@@ -42,6 +42,8 @@ jobs:
     needs: versions
     runs-on: ubuntu-latest
     steps:
+      # gh needs a git repo context to resolve the repository.
+      - uses: actions/checkout@v4
       - name: Create the one draft release
         run: >
           printf '%s\n'

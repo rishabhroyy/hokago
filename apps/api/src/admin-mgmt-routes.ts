@@ -31,7 +31,15 @@ import { queueSummaries } from "./admin-routes.js";
 const db = new PrismaClient();
 
 const connection = getConnection();
-const scanQueue = new Queue(QUEUE_NAMES.SCAN, { connection });
+// Same deterministic-jobId argument as the worker's scanQueue: the libraryId
+// is the jobId, so a *kept* failed/completed job would permanently block any
+// later re-enqueue for that library (add with an existing id returns the old
+// job without re-adding to wait). Drop both terminal states so a rescan can
+// never silently no-op against a stale hash.
+const scanQueue = new Queue(QUEUE_NAMES.SCAN, {
+  connection,
+  defaultJobOptions: { removeOnComplete: true, removeOnFail: true },
+});
 
 /** enqueueScan with the worker's deterministic jobId — re-enqueuing is a no-op. */
 async function enqueueScan(libraryId: string): Promise<void> {

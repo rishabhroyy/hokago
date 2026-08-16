@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var bridge: NativeBridge? = null
     private var setupView: View? = null
+    private val chromeClient = HokagoChromeClient()
 
     /** Route-driven cinema mode (player routes hide the system bars). */
     private var cinematic = false
@@ -99,7 +100,7 @@ class MainActivity : AppCompatActivity() {
         webView.overScrollMode = View.OVER_SCROLL_NEVER
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
 
-        webView.webChromeClient = HokagoChromeClient()
+        webView.webChromeClient = chromeClient
         webView.webViewClient = object : WebViewClient() {
             private var offlineFallbackShown = false
 
@@ -179,6 +180,19 @@ class MainActivity : AppCompatActivity() {
     fun setPlayerRoute(onPlayer: Boolean) {
         cinematic = onPlayer && !isTvForm
         applySystemUi()
+        applyOrientationLock(onPlayer)
+    }
+
+    /** Phones: portrait everywhere, landscape while playing (Plex-style);
+     *  tablets rotate freely; TVs are landscape panels already. */
+    private fun applyOrientationLock(onPlayer: Boolean) {
+        if (isTvForm) return
+        val tablet = resources.configuration.smallestScreenWidthDp >= 600
+        requestedOrientation = when {
+            tablet -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            onPlayer -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
     }
 
     private fun applySystemUi() {
@@ -201,6 +215,10 @@ class MainActivity : AppCompatActivity() {
         private var customView: View? = null
         private var customViewCallback: CustomViewCallback? = null
         private var priorOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
+        fun isShowingCustomView() = customView != null
+
+        fun hideCustomView() = onHideCustomView()
 
         override fun onShowCustomView(view: View, callback: CustomViewCallback) {
             if (customView != null) {
@@ -405,6 +423,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // WebChromeClient fullscreen owns back while the video view is up —
+        // exiting it must not fall through to the webview's history.
+        if (keyCode == KeyEvent.KEYCODE_BACK && chromeClient.isShowingCustomView()) {
+            chromeClient.hideCustomView()
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (webView.canGoBack()) {
                 webView.goBack()

@@ -27,6 +27,9 @@ export interface IngestSummary {
   artworkStored: number;
 }
 
+/** ffprobe's `format_name` for .mp4/.m4v/.mov — the only containers that carry mov_text subtitle tracks. */
+const MP4_MOV_CONTAINER = "mov,mp4,m4a,3gp,3g2,mj2";
+
 /**
  * Directory-hierarchy heuristic ("group first, match second"):
  *
@@ -100,12 +103,17 @@ async function findOrCreateCollection(
  * ("Show/Season 1" → "Show"). Walk-up stops at the library root — a flat
  * folder with no anchoring show anywhere above it is a standalone movie
  * folder, not a show.
+ *
+ * `seasonChildParents` is the precomputed set of dirs that contain a
+ * season-named/season-like child — the "Show/Movies/" anchor case. It's
+ * built once per scan (O(#season-dirs)); checking it here is O(1) instead of
+ * scanning every season dir at each walk-up level.
  */
 function findSeriesAnchor(
   rootPath: string,
   dir: string,
-  seasonNamedDirs: ReadonlySet<string>,
   seasonLikeDirs: ReadonlySet<string>,
+  seasonChildParents: ReadonlySet<string>,
 ): { seriesDir: string; title: string } | null {
   let d = dir;
   for (;;) {
@@ -118,11 +126,7 @@ function findSeriesAnchor(
       if (path.dirname(d) === rootPath) return null;
       return { seriesDir: path.dirname(d), title: path.basename(path.dirname(d)) };
     }
-    if (seasonLikeDirs.has(d)) return { seriesDir: d, title: path.basename(d) };
-    const hasSeasonChild =
-      [...seasonNamedDirs].some((child) => path.dirname(child) === d) ||
-      [...seasonLikeDirs].some((child) => path.dirname(child) === d);
-    if (hasSeasonChild) return { seriesDir: d, title: path.basename(d) };
+    if (seasonLikeDirs.has(d) || seasonChildParents.has(d)) return { seriesDir: d, title: path.basename(d) };
     d = path.dirname(d);
   }
 }
@@ -269,7 +273,13 @@ interface FileContext {
 }
 
 type StoredFile = Prisma.MediaFileGetPayload<{
-  include: { mediaItem: { select: { kind: true; parentId: true; title: true } } };
+  include: {
+    mediaItem: { select: { kind: true; parentId: true; title: true } };
+    // Streams/subtitle-track counts let the rescan gate detect a stored probe
+    // that never produced rows (failed probe, or a pre-mapping scan that
+    // silently dropped mov_text tracks) so it re-probes and heals the gap.
+    _count: { select: { streams: true; subtitleTracks: true } };
+  };
 }>;
 
 export interface ArtworkNeeded {
@@ -382,10 +392,12 @@ async function ingestLeafItem(
   const existing = existingFile;
 
   // Rescan gate: size + mtime match means the file never changed since its
-  // stored probe — skip the probe spawn, the 2MiB partial hash, and the
-  // stream/font re-derivation entirely. Classification (kind/parent/title),
-  // NFO, and evidence are still re-derived from the (unchanged) on-disk
-  // signals below — that's what makes a plain rescan heal re-classifications.
+  // stored probe — skip the 2MiB partial hash. Classification (kind/parent/
+  // title), NFO, and evidence are still re-derived from the (unchanged)
+  // on-disk signals below — that's what makes a plain rescan heal
+  // re-classifications. Probing may still happen for unchanged files the
+  // gate flagged as incomplete (failed/empty stored probe, TX3G backfill);
+  // those flows treat this as "content unchanged" but take the fresh probe.
   const unchanged =
     existing !== null &&
     existing.sizeBytes === file.sizeBytes &&
@@ -404,7 +416,10 @@ async function ingestLeafItem(
   if (!existingFile) {
     const twin = await db.mediaFile.findFirst({
       where: { hash, mediaItem: { libraryId }, path: { not: file.path } },
-      include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
+      include: {
+        mediaItem: { select: { kind: true, parentId: true, title: true } },
+        _count: { select: { streams: true, subtitleTracks: true } },
+      },
     });
     if (twin && !existsSync(twin.path)) {
       existingFile = twin;
@@ -416,34 +431,51 @@ async function ingestLeafItem(
 
   const nfo = await findNfoForFile(file.path, kind === "EPISODE" ? "episode" : "movie");
 
-  // Unchanged files keep their stored probe fields (probedAt untouched — the
-  // probe is still the one that produced them); changed/new files take the
-  // fresh probe.
-  const fileFields = unchanged
-    ? {
-        path: file.path,
-        sizeBytes: file.sizeBytes,
-        mtime: file.mtime,
-        inode: file.inode,
-        hash,
-        container: existing.container,
-        durationMs: existing.durationMs,
-        bitrate: existing.bitrate,
-        probedAt: existing.probedAt,
-        probeFailed: existing.probeFailed,
-      }
-    : {
-        path: file.path,
-        sizeBytes: file.sizeBytes,
-        mtime: file.mtime,
-        inode: file.inode,
-        hash,
-        container: probe?.container ?? null,
-        durationMs: probe?.durationMs ?? null,
-        bitrate: probe?.bitrate ?? null,
-        probedAt: probe ? new Date() : null,
-        probeFailed: probe === null,
-      };
+  // Fresh probe data wins when this run produced one (the file was re-probed
+  // — including unchanged-but-incomplete files the gate sent back for a heal,
+  // e.g. a previously-failed probe now succeeding). A skipped file (unchanged,
+  // complete stored probe) keeps its stored fields verbatim; a changed/new
+  // file whose probe just failed gets nulls + probeFailed so the next scan
+  // retries it.
+  const fileFields =
+    probe !== null
+      ? {
+          path: file.path,
+          sizeBytes: file.sizeBytes,
+          mtime: file.mtime,
+          inode: file.inode,
+          hash,
+          container: probe.container,
+          durationMs: probe.durationMs,
+          bitrate: probe.bitrate,
+          probedAt: new Date(),
+          probeFailed: false,
+        }
+      : unchanged
+        ? {
+            path: file.path,
+            sizeBytes: file.sizeBytes,
+            mtime: file.mtime,
+            inode: file.inode,
+            hash,
+            container: existing.container,
+            durationMs: existing.durationMs,
+            bitrate: existing.bitrate,
+            probedAt: existing.probedAt,
+            probeFailed: existing.probeFailed,
+          }
+        : {
+            path: file.path,
+            sizeBytes: file.sizeBytes,
+            mtime: file.mtime,
+            inode: file.inode,
+            hash,
+            container: null,
+            durationMs: null,
+            bitrate: null,
+            probedAt: null,
+            probeFailed: true,
+          };
 
   let mediaFileId: string;
   if (existingFile) {
@@ -492,11 +524,15 @@ async function ingestLeafItem(
   // Probe + fonts + subtitles (Step 5): streams carry HDR gate data
   // , subtitle tracks carry the burn-in flag , fonts land in
   // the shared hash-deduped store regardless of which of the three sources
-  // they came from . An unchanged file's stored streams are still
-  // the truth — re-syncing from an empty probe would wipe them.
-  if (!unchanged) {
-    await syncMediaStreams(db, mediaFileId, probe?.streams ?? []);
-    await syncSubtitleTracks(db, mediaFileId, probe?.streams ?? []);
+  // they came from . Sync runs only on a *successful* probe this run — a
+  // skipped (unchanged) file keeps its stored rows, and a failed re-probe
+  // leaves them untouched instead of wiping them with an empty list. Files
+  // the gate re-probes for a heal (failed probe, zero streams, the TX3G
+  // backfill) land here too: the syncs are idempotent upserts, so re-running
+  // them on an unchanged file is safe and closes the missing-row gaps.
+  if (probe !== null) {
+    await syncMediaStreams(db, mediaFileId, probe.streams);
+    await syncSubtitleTracks(db, mediaFileId, probe.streams);
     await extractFonts(db, mediaFileId, file.path, dir);
   }
 
@@ -512,13 +548,13 @@ async function ingestLeafItem(
   if (durationMs) {
     evidence.push({ signalType: "PROBE_RUNTIME", source: "probe", value: { runtimeMs: durationMs } });
   }
-  if (unchanged) {
+  if (probe?.tags && Object.keys(probe.tags).length > 0) {
+    evidence.push({ signalType: "EMBEDDED_TAG", source: "container-tags", value: probe.tags });
+  } else if (unchanged && preservedEmbeddedTag) {
     // No fresh probe means no fresh container tags — carry the stored
     // EMBEDDED_TAG evidence forward instead of dropping it in the full-
     // snapshot sync. The source file is unchanged, so the tag didn't vanish.
-    if (preservedEmbeddedTag) evidence.push(preservedEmbeddedTag);
-  } else if (probe?.tags && Object.keys(probe.tags).length > 0) {
-    evidence.push({ signalType: "EMBEDDED_TAG", source: "container-tags", value: probe.tags });
+    evidence.push(preservedEmbeddedTag);
   }
   if (nfo) {
     evidence.push({ signalType: "NFO_UNIQUEID", source: "nfo", value: { ...nfo } });
@@ -614,7 +650,10 @@ export async function ingestLibrary(
   // map is authoritative for this run: nothing else mutates rows mid-scan.
   const storedRows = await db.mediaFile.findMany({
     where: { mediaItem: { libraryId } },
-    include: { mediaItem: { select: { kind: true, parentId: true, title: true } } },
+    include: {
+      mediaItem: { select: { kind: true, parentId: true, title: true } },
+      _count: { select: { streams: true, subtitleTracks: true } },
+    },
   });
   const storedByPath = new Map(storedRows.map((r) => [r.path, r]));
   // inode 0 means the filesystem doesn't report real inodes (SMB/some network
@@ -628,12 +667,22 @@ export async function ingestLibrary(
   const storedFor = (f: DiscoveredFile): StoredFile | null =>
     storedByPath.get(f.path) ?? (f.inode !== 0n ? (storedByInode.get(f.inode.toString()) ?? null) : null);
 
-  // Probe only files that may have changed: no stored row, or size/mtime
-  // differ from the last scan. Unchanged files keep their stored probe data,
-  // so a rescan of a settled library spawns zero ffprobes.
+  // Probe only files whose stored probe is missing or untrustworthy: no
+  // stored row (brand new), size/mtime changed (content changed), the stored
+  // probe failed or never stored streams (nothing complete to reuse), or an
+  // mp4/mov with zero stored subtitle tracks — files probed before the
+  // mov_text→TX3G mapping silently lost their subtitle streams, so re-probe
+  // just those containers and let the leaf's idempotent sync heal the rows.
+  // Everything else skips ffprobe — a rescan of a settled library still
+  // spawns zero probes.
   const needsProbe = files.filter((f) => {
     const row = storedFor(f);
-    return !row || row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime();
+    if (!row) return true;
+    if (row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime()) return true;
+    if (row.probeFailed) return true;
+    if (row._count.streams === 0) return true;
+    if (MP4_MOV_CONTAINER === row.container && row._count.subtitleTracks === 0) return true;
+    return false;
   });
   const probeResults = await mapLimit(needsProbe, PROBE_CONCURRENCY, (f) => probeFile(f.path));
   const probeByPath = new Map(needsProbe.map((f, i) => [f.path, probeResults[i]]));
@@ -682,7 +731,8 @@ export async function ingestLibrary(
 
   // Precompute the anchor sets once: dirs that parse as a season and dirs
   // whose own files are majority episode-named — findSeriesAnchor consults
-  // them for every directory.
+  // them for every directory. seasonChildParents flattens "contains a season
+  // child" into a plain set so the walk-up check is O(1), not O(season dirs).
   const seasonNamedDirs = new Set<string>();
   const seasonLikeDirs = new Set<string>();
   for (const d of byDir.keys()) {
@@ -690,6 +740,9 @@ export async function ingestLibrary(
     if (isSeasonLikeDirectory(dirFiles, profile)) seasonLikeDirs.add(d);
     if (parseSeasonDirName(path.basename(d)) !== null) seasonNamedDirs.add(d);
   }
+  const seasonChildParents = new Set<string>();
+  for (const child of seasonNamedDirs) seasonChildParents.add(path.dirname(child));
+  for (const child of seasonLikeDirs) seasonChildParents.add(path.dirname(child));
 
   const summary: IngestSummary = {
     directoriesScanned: byDir.size,
@@ -774,7 +827,7 @@ export async function ingestLibrary(
       // every file is a movie parented to the series, so they surface under
       // the show's Movies section instead of leaking out as root-level
       // standalone movies.
-      const anchor = findSeriesAnchor(rootPath, dir, seasonNamedDirs, seasonLikeDirs);
+      const anchor = findSeriesAnchor(rootPath, dir, seasonLikeDirs, seasonChildParents);
       if (anchor) {
         const series = await findOrCreateChild(db, { libraryId, parentId: null, kind: "SERIES", title: anchor.title });
         if (series.wasCreated) summary.seriesCreated += 1;

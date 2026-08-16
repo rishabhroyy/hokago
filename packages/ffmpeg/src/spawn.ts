@@ -31,6 +31,21 @@ const STDERR_TAIL_BYTES = 8192;
  */
 export function spawnFfmpeg(args: string[], onExit?: (result: TranscodeExit) => void, input?: Readable): RunningTranscode {
   const child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
+  let pid: number | undefined;
+  let settled = false;
+  // One terminal notification per process. A failed exec fires 'error' *and*
+  // Node docs warn that 'exit' "may or may not fire after an error" — without
+  // the latch, onExit could run twice (double truncatePlaylist + a second
+  // hw→CPU respawn). The latch also makes the pre-pid throw below the single
+  // owner of the immediate path: an async 'error' after that throw sees the
+  // pid guard below and stays silent (nothing to untrack, no onExit).
+  const notifyExit = (code: number | null, stderr: string): void => {
+    if (settled) return;
+    settled = true;
+    if (pid !== undefined) untrackPid(pid);
+    if (input) input.destroy();
+    onExit?.({ code, stderr });
+  };
   // A failed exec emits 'error' instead of 'exit' — without a listener that
   // becomes an uncaught exception (taking the whole API down), and the slot/
   // job accounting that onExit performs would never run. Pre-pid errors
@@ -38,12 +53,11 @@ export function spawnFfmpeg(args: string[], onExit?: (result: TranscodeExit) => 
   // anything async that slips past it.
   child.on("error", (err) => {
     if (child.pid !== undefined && child.pid !== null) {
-      untrackPid(child.pid);
-      onExit?.({ code: -1, stderr: `spawn error: ${err.message}` });
+      notifyExit(-1, `spawn error: ${err.message}`);
     }
   });
   if (!child.pid) throw new Error("ffmpeg failed to spawn");
-  const pid = child.pid;
+  pid = child.pid;
   trackPid(pid);
 
   if (input) {
@@ -62,9 +76,7 @@ export function spawnFfmpeg(args: string[], onExit?: (result: TranscodeExit) => 
   });
 
   child.on("exit", (code) => {
-    untrackPid(pid);
-    if (input) input.destroy();
-    onExit?.({ code, stderr: transcode.stderr });
+    notifyExit(code, transcode.stderr);
   });
   return transcode;
 }

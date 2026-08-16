@@ -131,7 +131,8 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
               },
             },
           },
-        },      },
+        },
+      },
     });
     if (!item) return reply.code(404).send({ error: "media item not found" });
 

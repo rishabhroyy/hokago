@@ -297,8 +297,23 @@ jobs:
           rm -rf native/android/app/src/main/assets/web-dist
           mkdir -p native/android/app/src/main/assets/web-dist
           cp -R apps/web/dist/. native/android/app/src/main/assets/web-dist/
+      - name: Prepare release keystore
+        shell: bash
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Repo secrets are not configured. Set ANDROID_KEYSTORE_BASE64 (base64 of the .keystore file), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD — see docs/native-clients.md § Android signing."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > native/android/app/ci-release.keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       - name: Build APKs
         working-directory: native/android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/native/android/app/ci-release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           # run_number is monotonic per-repo — a stable, ever-increasing
           # versionCode so upgrades always install over older builds.

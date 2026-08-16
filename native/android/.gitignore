@@ -8,3 +8,6 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+# Release signing keys are repo secrets, never files in the repo.
+*.keystore
+*.jks

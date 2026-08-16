@@ -202,8 +202,14 @@ SPA and the web app gets an offline library.
   Downloads (opened with a FileProvider); `hokago-file://` intercepted in
   `shouldInterceptRequest` with Range support, as are the `web-dist` assets
   behind the fake `http://hokago-app.local` origin. Release builds are signed
-  with the committed `app/hokago-release.keystore` — an unsigned APK can't
-  install, and the signature must stay stable across CI runs for upgrades.
+  in CI with a key held in **repo secrets** — never committed: the APK
+  signature is Android's trust anchor, and a leaked key lets anyone ship
+  malicious updates over the install base. The secrets are
+  `ANDROID_KEYSTORE_BASE64` (base64 of the .keystore), `ANDROID_KEYSTORE_PASSWORD`,
+  `ANDROID_KEY_ALIAS` (hokago), `ANDROID_KEY_PASSWORD`; the android job decodes
+  them and fails loudly if unset. Local `assembleRelease` without the env vars
+  falls back to the debug keystore (installable, but the signature is
+  machine-local — only for sideload testing, never for releases).
   Gradle wrapper is **not** committed — CI uses `gradle/actions/setup-gradle`
   with `gradle-version` and invokes `gradle` directly. Adaptive icon: white
   background + the logo as foreground; TV banner is `drawable-xhdpi/banner.png`.

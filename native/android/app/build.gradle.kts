@@ -31,25 +31,36 @@ android {
         }
     }
 
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            // Self-hosted client distributed as sideload APKs: a committed
-            // keystore keeps signatures stable across CI runs (upgrades must
-            // keep the same signature or Android refuses to install them).
-            // An unsigned release APK won't install at all.
-            signingConfig = signingConfigs.getByName("release")
+    // The release signing key is NEVER committed — it lives in GitHub repo
+    // secrets (CI decodes ANDROID_KEYSTORE_BASE64 to a file and points
+    // ANDROID_KEYSTORE_PATH at it). The APK signature is Android's trust
+    // anchor: a leaked key lets anyone ship malicious updates over the
+    // install base. Local builds fall back to the well-known debug keystore
+    // so `assembleRelease` still yields an installable APK without the
+    // official key (that signature is only valid for local sideloads).
+    signingConfigs {
+        create("release") {
+            val envPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (envPath != null) {
+                storeFile = file(envPath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            } else {
+                storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 
-    signingConfigs {
-        create("release") {
-            storeFile = file("hokago-release.keystore")
-            storePassword = "hokago-keystore"
-            keyAlias = "hokago"
-            keyPassword = "hokago-keystore"
-            enableV1Signing = true
-            enableV2Signing = true
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

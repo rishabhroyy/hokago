@@ -38,15 +38,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # NVIDIA CUDA apt repo (not Ubuntu), and only amd64 (arm64 stays CPU-only).
 # libnpp-dev pulls the runtime libnpp-13-0 too, so the .so symlinks resolve at
 # link time; cuda-cudart-dev supplies the CUDA runtime headers (npp.h includes
-# <cuda_runtime.h>) that the configure probe needs to even compile. The
-# resulting ffmpeg links NPP dynamically — the runtime stage installs
-# libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
+# <cuda_runtime.h>) that the configure probe needs to even compile; and
+# cuda-driver-dev ships stubs/libcuda.so, which the NPP shared libs link
+# against (libcuda.so.1 itself is the driver, mounted at runtime by the
+# nvidia-container-toolkit). The resulting ffmpeg links NPP dynamically — the
+# runtime stage installs libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fsSL -o /tmp/cuda-keyring.deb \
         https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
       && dpkg -i /tmp/cuda-keyring.deb \
       && apt-get update \
-      && apt-get install -y --no-install-recommends libnpp-dev-13-0 cuda-cudart-dev-13-0 \
+      && apt-get install -y --no-install-recommends libnpp-dev-13-0 cuda-cudart-dev-13-0 cuda-driver-dev-13-0 \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -127,7 +129,9 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
             # nvenc path (scale_npp) requires --enable-nonfree too.
             echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec --enable-libnpp \
                   --extra-cflags=-I/usr/local/cuda-13.0/targets/x86_64-linux/include \
-                  --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib --enable-nonfree"; \
+                  --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib \
+                  --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib/stubs \
+                  --enable-nonfree"; \
           fi) \
     && make -j"$(nproc)" && make install
 

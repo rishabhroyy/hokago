@@ -26,12 +26,27 @@ ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config yasm nasm git ca-certificates \
-      libssl-dev autoconf automake libtool wget \
+      libssl-dev autoconf automake libtool wget curl gnupg \
       libva-dev libdrm-dev \
     && if [ "$TARGETARCH" = "amd64" ]; then \
          apt-get install -y --no-install-recommends libvpl-dev; \
        fi \
     && rm -rf /var/lib/apt/lists/*
+
+# NPP (NVIDIA Performance Primitives) — backs ffmpeg's scale_npp filter, the
+# on-GPU scaler the full-GPU nvenc transcode path requires. Ships only in the
+# NVIDIA CUDA apt repo (not Ubuntu), and only amd64 (arm64 stays CPU-only).
+# Installing libnpp-dev pulls the runtime libnpp-13-0 too, so the .so symlinks
+# resolve at link time. The resulting ffmpeg links NPP dynamically — the
+# runtime stage installs libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      curl -fsSL -o /tmp/cuda-keyring.deb \
+        https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+      && dpkg -i /tmp/cuda-keyring.deb \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends libnpp-dev-13-0 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /build
 
@@ -90,7 +105,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
 RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
     && cd ffmpeg && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure \
          --pkg-config-flags="--static" \
-         --extra-libs="-lpthread -lm -lstdc++" \
+         --extra-libs="-lpthread -lm -lstdc++ -ldl -lrt" \
          --enable-gpl \
          --enable-version3 \
          --enable-static \
@@ -105,8 +120,10 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
          --enable-libzimg \
          $(if [ "$TARGETARCH" = "amd64" ]; then \
            # qsv needs no own flag since FFmpeg 7 — the qsv encoders build in via
-            # --enable-vaapi + --enable-libvpl (libvpl runtime dispatch).
-            echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec"; \
+           # --enable-vaapi + --enable-libvpl (libvpl runtime dispatch).
+           echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec --enable-libnpp \
+                 --extra-cflags=-I/usr/local/cuda-13.0/targets/x86_64-linux/include \
+                 --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib"; \
          fi) \
     && make -j"$(nproc)" && make install
 
@@ -154,7 +171,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       # start. x86-only packages are gated on TARGETARCH (arm64 = CPU).
       libva2 libva-drm2 mesa-va-drivers \
     && if [ "$TARGETARCH" = "amd64" ]; then \
-         apt-get install -y --no-install-recommends libvpl2 intel-media-va-driver; \
+         apt-get install -y --no-install-recommends libvpl2 intel-media-va-driver \
+         # NPP runtime libs for the full-GPU nvenc transcode path (scale_npp) —
+         # the ffmpeg-builder linked libnpp dynamically, so the image must ship
+         # the .so.13 files + their cudart dependency or every hw transcode
+         # fails to load libnppig.so.13 at startup.
+         && curl -fsSL -o /tmp/cuda-keyring.deb \
+              https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+         && dpkg -i /tmp/cuda-keyring.deb \
+         && apt-get update \
+         && apt-get install -y --no-install-recommends libnpp-13-0 cuda-cudart-13-0 \
+         # NVIDIA's postinst runs ldconfig but never registers the CUDA lib dir
+         # in ld.so.conf.d — add it ourselves so libnppig.so.13 resolves.
+         && echo "/usr/local/cuda-13.0/targets/x86_64-linux/lib" > /etc/ld.so.conf.d/cuda-13-0.conf \
+         && ldconfig \
+         && rm -rf /var/lib/apt/lists/*; \
        fi \
     # postgresql-client matching the postgres:17 compose image — Ubuntu
     # noble's own client is 16 and pg_dump hard-aborts on a server version

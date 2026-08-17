@@ -175,6 +175,14 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // scale, no CPU-only stage — frames never leave video memory.
   const gpuResidentNvenc =
     input.hwaccel?.method === "nvenc" &&
+    // The residual path's on-GPU scaler is scale_npp (NPP), which only exists
+    // when the ffmpeg build was compiled with --enable-libnpp. A build without
+    // it must not attempt the path: ffmpeg fails with "No such filter:
+    // scale_npp", the transcode dies, and reportHwFailure flips the whole
+    // process to CPU — the "GPU detected but transcoding is slow" report. Gate
+    // on the filter actually being present so such builds ride the nv12-
+    // download path (CPU scale + nvenc encode) instead.
+    input.hwaccel.filters.has("scale_npp") &&
     !input.toneMap &&
     !input.subtitleBurnIn &&
     input.maxWidth !== undefined &&

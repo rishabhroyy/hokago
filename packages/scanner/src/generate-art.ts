@@ -63,7 +63,10 @@ async function extractCandidateFrame(
   cropFilter: string | null,
   outPath: string,
 ): Promise<boolean> {
-  const vf = cropFilter ? `crop=${cropFilter},thumbnail=50` : "thumbnail=50";
+  // JPEG is full-range-only; hw-decoded nv12 frames are limited-range and
+  // mjpeg rejects them — append format=yuvj420p so a hardware decode can't
+  // hang the candidate-frame extraction (and trip reportHwFailure).
+  const vf = cropFilter ? `crop=${cropFilter},thumbnail=50,format=yuvj420p` : "thumbnail=50,format=yuvj420p";
   try {
     await runFfmpeg(["-y", "-ss", String(atSec), "-i", filePath, "-vf", vf, "-frames:v", "1", outPath]);
     return true;

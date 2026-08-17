@@ -36,7 +36,11 @@ const TILE_CONCURRENCY = 4;
 
 const TILE_FILTER =
   `scale=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:force_original_aspect_ratio=decrease,` +
-  `pad=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black`;
+  `pad=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,` +
+  // JPEG is full-range-only; hw-decoded nv12 frames are limited-range, and
+  // mjpeg rejects them ("Non full-range YUV is non-standard") — the tile job
+  // then hangs and reportHwFailure flips the worker to CPU. Force full range.
+  `format=yuvj420p`;
 
 /** True when ffmpeg failed because a keyframe-seek landed past the last
  *  decodable frame ("nothing was written") — the file is fine, its reported

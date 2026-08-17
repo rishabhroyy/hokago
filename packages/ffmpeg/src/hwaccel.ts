@@ -47,6 +47,8 @@ export interface HwaccelState {
   available: HwaccelCapability[];
   /** encoder names this ffmpeg build offers (from `ffmpeg -encoders`) */
   encoders: Set<string>;
+  /** filter names this ffmpeg build offers (from `ffmpeg -filters`) — scale_npp gates the nvenc residual path */
+  filters: Set<string>;
   /** true when a runtime failure flipped this process to CPU */
   disabledAfterFailure: boolean;
   /** why the resolved method was chosen (surfaced in the admin console) */
@@ -120,6 +122,21 @@ function readEncoders(): Promise<Set<string>> {
   });
 }
 
+/** Filter names offered by this ffmpeg build — e.g. scale_npp, which gates the nvenc residual path. */
+function readFilters(): Promise<Set<string>> {
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", ["-hide_banner", "-filters"], { maxBuffer: 4 * 1024 * 1024, timeout: 15_000 }, (err, stdout) => {
+      if (err) return reject(err);
+      const filters = new Set<string>();
+      for (const line of stdout.split("\n")) {
+        const match = /^.{7}\s+(\S+)/.exec(line);
+        if (match && !match[1]!.startsWith("=")) filters.add(match[1]!);
+      }
+      resolve(filters);
+    });
+  });
+}
+
 /**
  * Picks the device for a capability: the env override when set (validated to
  * exist for vaapi/qsv), else the detected node. For nvenc an override is a
@@ -135,7 +152,12 @@ async function deviceFor(cap: HwaccelCapability, override: string | null): Promi
 }
 
 async function detect(): Promise<HwaccelState> {
-  const [encoders, node, nvidia0] = await Promise.all([readEncoders(), renderNode(), exists("/dev/nvidia0")]);
+  const [encoders, filters, node, nvidia0] = await Promise.all([
+    readEncoders(),
+    readFilters(),
+    renderNode(),
+    exists("/dev/nvidia0"),
+  ]);
 
   const capabilities: HwaccelCapability[] = [];
   if (node && encoders.has(GATE_ENCODER.vaapi)) capabilities.push({ method: "vaapi", device: node });
@@ -185,7 +207,7 @@ async function detect(): Promise<HwaccelState> {
     }
   }
 
-  return { requested, method, device, available: capabilities, encoders, disabledAfterFailure: false, note };
+  return { requested, method, device, available: capabilities, encoders, filters, disabledAfterFailure: false, note };
 }
 
 /** Resolved, process-lifetime-cached acceleration state (first call runs detection). */

@@ -36,7 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # NPP (NVIDIA Performance Primitives) — backs ffmpeg's scale_npp filter, the
 # on-GPU scaler the full-GPU nvenc transcode path requires. Ships only in the
 # NVIDIA CUDA apt repo (not Ubuntu), and only amd64 (arm64 stays CPU-only).
-# libnpp-dev pulls the runtime libnpp-13-0 too, so the .so symlinks resolve at
+# Pinned to CUDA 12.9 — the last toolkit that supports Pascal-class GPUs
+# (Quadro P620 et al.; CUDA 13 dropped pre-Turing architectures and removed
+# the non-_Ctx NPP API that ffmpeg n7.1's npp filters call). NVIDIA's own
+# guidance for pre-Turing hardware: stay on 12.9 (driver floor r525).
+# libnpp-dev pulls the runtime libnpp-12-9 too, so the .so symlinks resolve at
 # link time; cuda-cudart-dev supplies the CUDA runtime headers (npp.h includes
 # <cuda_runtime.h>) that the configure probe needs to even compile; and
 # cuda-crt ships the crt/ headers (host_config.h, host_defines.h) that
@@ -47,14 +51,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # shared libs don't currently DT_NEEDED libcuda.so.1 (verified), but the stub
 # symlink keeps the linker able to resolve it if a point release adds the
 # dependency. The resulting ffmpeg links NPP dynamically — the runtime stage
-# installs libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
+# installs libnpp-12-9 + cuda-cudart-12-9 so it resolves there.
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fsSL -o /tmp/cuda-keyring.deb \
         https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
       && dpkg -i /tmp/cuda-keyring.deb \
       && apt-get update \
-      && apt-get install -y --no-install-recommends libnpp-dev-13-0 cuda-cudart-dev-13-0 cuda-crt-13-0 cuda-driver-dev-13-0 \
-      && ln -sf libcuda.so /usr/local/cuda-13.0/targets/x86_64-linux/lib/stubs/libcuda.so.1 \
+      && apt-get install -y --no-install-recommends libnpp-dev-12-9 cuda-cudart-dev-12-9 cuda-crt-12-9 cuda-driver-dev-12-9 \
+      && ln -sf libcuda.so /usr/local/cuda-12.9/targets/x86_64-linux/lib/stubs/libcuda.so.1 \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -134,9 +138,9 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
             # libnpp sits in ffmpeg's HWACCEL_LIBRARY_NONFREE_LIST, so the full-GPU
             # nvenc path (scale_npp) requires --enable-nonfree too.
             echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec --enable-libnpp \
-                  --extra-cflags=-I/usr/local/cuda-13.0/targets/x86_64-linux/include \
-                  --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib \
-                  --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib/stubs \
+                  --extra-cflags=-I/usr/local/cuda-12.9/targets/x86_64-linux/include \
+                  --extra-ldflags=-L/usr/local/cuda-12.9/targets/x86_64-linux/lib \
+                  --extra-ldflags=-L/usr/local/cuda-12.9/targets/x86_64-linux/lib/stubs \
                   --enable-nonfree"; \
           fi) \
     && make -j"$(nproc)" && make install
@@ -188,16 +192,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          apt-get install -y --no-install-recommends libvpl2 intel-media-va-driver \
          # NPP runtime libs for the full-GPU nvenc transcode path (scale_npp) —
          # the ffmpeg-builder linked libnpp dynamically, so the image must ship
-         # the .so.13 files + their cudart dependency or every hw transcode
-         # fails to load libnppig.so.13 at startup.
+         # the .so.12 files + their cudart dependency or every hw transcode
+         # fails to load libnppig.so.12 at startup. Version must match the
+         # ffmpeg-builder's CUDA 12.9 pin.
          && curl -fsSL -o /tmp/cuda-keyring.deb \
               https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
          && dpkg -i /tmp/cuda-keyring.deb \
          && apt-get update \
-         && apt-get install -y --no-install-recommends libnpp-13-0 cuda-cudart-13-0 \
+         && apt-get install -y --no-install-recommends libnpp-12-9 cuda-cudart-12-9 \
          # NVIDIA's postinst runs ldconfig but never registers the CUDA lib dir
-         # in ld.so.conf.d — add it ourselves so libnppig.so.13 resolves.
-         && echo "/usr/local/cuda-13.0/targets/x86_64-linux/lib" > /etc/ld.so.conf.d/cuda-13-0.conf \
+         # in ld.so.conf.d — add it ourselves so libnppig.so.12 resolves.
+         && echo "/usr/local/cuda-12.9/targets/x86_64-linux/lib" > /etc/ld.so.conf.d/cuda-12-9.conf \
          && ldconfig \
          && rm -rf /var/lib/apt/lists/*; \
        fi \

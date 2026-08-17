@@ -44,16 +44,26 @@ jobs:
     steps:
       # gh needs a git repo context to resolve the repository.
       - uses: actions/checkout@v4
-      - name: Create the one draft release
-        run: >
-          printf '%s\n'
-          '## Install notes' ''
-          '**macOS (Apple Silicon)** — the app is ad-hoc signed, not notarized. If macOS says it is "damaged and can'"'"'t be opened", it is the Gatekeeper quarantine attribute:'
-          '```' 'xattr -cr /Applications/hokago.app' '```'
-          'Prefer the .dmg over the raw .app.tar.gz.' ''
-          '**Windows** — unsigned build: SmartScreen → "More info" → "Run anyway".' ''
-          '**iOS** — install the .ipa with Sideloadly/AltStore (re-signs with your Apple ID). The simulator zip is for development only.' ''
-          '**Android** — the APKs are self-signed with the repo'"'"'s committed key (stable signature across releases, so upgrades install cleanly). "Install unknown apps" permission is required on first install. The TV APK targets Android TV.'
+      - name: Create the one draft release (adopt or create — never duplicate)
+        run: |
+          # Re-pushing a tag re-triggers this workflow, and a blind
+          # `gh release create` on every run splits uploads across duplicate
+          # drafts (v0.3.2 lost its iOS assets exactly this way). Resolve
+          # first: adopt an existing release for the tag (every upload uses
+          # --clobber, so it lands there fine), then drop stale duplicate
+          # drafts, and create only when nothing exists.
+          set -euo pipefail
+          if gh release view "$TAG" --json id >/dev/null 2>&1; then
+            echo "release for $TAG already exists — adopting it; not creating a duplicate"
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.draft == true and .tag_name == $tag) | .id' \
+            --arg tag "$TAG" | while read -r id; do
+            echo "deleting stale duplicate draft $id for $TAG"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          printf '%s\n' '## Install notes' '' '**macOS (Apple Silicon)** — the app is ad-hoc signed, not notarized. If macOS says it is "damaged and can'"'"'t be opened", it is the Gatekeeper quarantine attribute:' '```' 'xattr -cr /Applications/hokago.app' '```' 'Prefer the .dmg over the raw .app.tar.gz.' '' '**Windows** — unsigned build: SmartScreen → "More info" → "Run anyway".' '' '**iOS** — install the .ipa with Sideloadly/AltStore (re-signs with your Apple ID). The simulator zip is for development only.' '' '**Android** — the APKs are self-signed with the repo'"'"'s committed key (stable signature across releases, so upgrades install cleanly). "Install unknown apps" permission is required on first install. The TV APK targets Android TV.'
           | gh release create "$TAG" --draft --title "hokago $TAG" --notes-file -
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

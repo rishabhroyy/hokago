@@ -40,15 +40,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # link time; cuda-cudart-dev supplies the CUDA runtime headers (npp.h includes
 # <cuda_runtime.h>) that the configure probe needs to even compile; and
 # cuda-driver-dev ships stubs/libcuda.so, which the NPP shared libs link
-# against (libcuda.so.1 itself is the driver, mounted at runtime by the
-# nvidia-container-toolkit). The resulting ffmpeg links NPP dynamically — the
-# runtime stage installs libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
+# against (libnppc.so.13 has DT_NEEDED libcuda.so.1, but the stub is
+# versioned-name libcuda.so — symlink the .so.1 the linker will search for).
+# The resulting ffmpeg links NPP dynamically — the runtime stage installs
+# libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fsSL -o /tmp/cuda-keyring.deb \
         https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
       && dpkg -i /tmp/cuda-keyring.deb \
       && apt-get update \
       && apt-get install -y --no-install-recommends libnpp-dev-13-0 cuda-cudart-dev-13-0 cuda-driver-dev-13-0 \
+      && ln -sf libcuda.so /usr/local/cuda-13.0/targets/x86_64-linux/lib/stubs/libcuda.so.1 \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 

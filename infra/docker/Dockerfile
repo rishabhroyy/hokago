@@ -39,17 +39,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # libnpp-dev pulls the runtime libnpp-13-0 too, so the .so symlinks resolve at
 # link time; cuda-cudart-dev supplies the CUDA runtime headers (npp.h includes
 # <cuda_runtime.h>) that the configure probe needs to even compile; and
-# cuda-driver-dev ships stubs/libcuda.so, which the NPP shared libs link
-# against (libnppc.so.13 has DT_NEEDED libcuda.so.1, but the stub is
-# versioned-name libcuda.so — symlink the .so.1 the linker will search for).
-# The resulting ffmpeg links NPP dynamically — the runtime stage installs
-# libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
+# cuda-crt ships the crt/ headers (host_config.h, host_defines.h) that
+# cuda_runtime.h includes unconditionally — split out of cuda-cudart-dev since
+# CUDA 12.5 and NOT a dependency of it, so without it the libnpp probe dies on
+# "crt/host_config.h: No such file or directory" and configure reports
+# "ERROR: libnpp not found". cuda-driver-dev ships stubs/libcuda.so; the NPP
+# shared libs don't currently DT_NEEDED libcuda.so.1 (verified), but the stub
+# symlink keeps the linker able to resolve it if a point release adds the
+# dependency. The resulting ffmpeg links NPP dynamically — the runtime stage
+# installs libnpp-13-0 + cuda-cudart-13-0 so it resolves there.
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fsSL -o /tmp/cuda-keyring.deb \
         https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
       && dpkg -i /tmp/cuda-keyring.deb \
       && apt-get update \
-      && apt-get install -y --no-install-recommends libnpp-dev-13-0 cuda-cudart-dev-13-0 cuda-driver-dev-13-0 \
+      && apt-get install -y --no-install-recommends libnpp-dev-13-0 cuda-cudart-dev-13-0 cuda-crt-13-0 cuda-driver-dev-13-0 \
       && ln -sf libcuda.so /usr/local/cuda-13.0/targets/x86_64-linux/lib/stubs/libcuda.so.1 \
       && rm -rf /var/lib/apt/lists/*; \
     fi

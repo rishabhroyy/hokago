@@ -118,13 +118,15 @@ RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpe
          --enable-libvpx \
          --enable-libopus \
          --enable-libzimg \
-         $(if [ "$TARGETARCH" = "amd64" ]; then \
-           # qsv needs no own flag since FFmpeg 7 — the qsv encoders build in via
-           # --enable-vaapi + --enable-libvpl (libvpl runtime dispatch).
-           echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec --enable-libnpp \
-                 --extra-cflags=-I/usr/local/cuda-13.0/targets/x86_64-linux/include \
-                 --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib"; \
-         fi) \
+          $(if [ "$TARGETARCH" = "amd64" ]; then \
+            # qsv needs no own flag since FFmpeg 7 — the qsv encoders build in via
+            # --enable-vaapi + --enable-libvpl (libvpl runtime dispatch).
+            # libnpp sits in ffmpeg's HWACCEL_LIBRARY_NONFREE_LIST, so the full-GPU
+            # nvenc path (scale_npp) requires --enable-nonfree too.
+            echo "--enable-vaapi --enable-libvpl --enable-nvenc --enable-ffnvcodec --enable-libnpp \
+                  --extra-cflags=-I/usr/local/cuda-13.0/targets/x86_64-linux/include \
+                  --extra-ldflags=-L/usr/local/cuda-13.0/targets/x86_64-linux/lib --enable-nonfree"; \
+          fi) \
     && make -j"$(nproc)" && make install
 
 # ── Stage: node-builder — pnpm workspace build ──

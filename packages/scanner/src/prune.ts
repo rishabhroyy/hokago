@@ -35,7 +35,6 @@ export async function pruneMissingMedia(db: PrismaClient, libraryId: string, roo
   ]);
 
   const missingFiles = files.filter((f) => !existsSync(f.path));
-  if (missingFiles.length === 0 && orphanCollections.length === 0) return { filesRemoved: 0, itemsRemoved: 0, collectionsRemoved: 0 };
 
   // Best-effort: the scrubber-preview sheets are disposable cache under
   // /config/cache/trickplay/{fileId}/ — drop them with the row.
@@ -45,39 +44,41 @@ export async function pruneMissingMedia(db: PrismaClient, libraryId: string, roo
 
   await db.mediaFile.deleteMany({ where: { id: { in: missingFiles.map((f) => f.id) } } });
 
-  // Computed AFTER the file deletes — zero surviving files is the death
-  // condition. Leaves first, then seasons, then series (roll-up).
-  const [leaves, seasons, series] = await Promise.all([
-    db.mediaItem.findMany({
-      where: { libraryId, kind: { in: ["MOVIE", "EPISODE"] }, files: { none: {} } },
-      select: { id: true },
-    }),
-    db.mediaItem.findMany({
-      where: { libraryId, kind: "SEASON", children: { none: {} } },
-      select: { id: true },
-    }),
-    db.mediaItem.findMany({
-      where: { libraryId, kind: "SERIES", children: { none: {} }, files: { none: {} } },
-      select: { id: true, title: true },
-    }),
-  ]);
+  // Roll-up: leaves first, then seasons, then series — strictly sequential,
+  // each round querying only AFTER the previous round's deletes. A series
+  // still holding empty seasons (or a season still holding vanished leaves)
+  // must not be invisible to its own round; running the queries in parallel
+  // lets exactly that shape escape (a reparenting parser change leaves bogus
+  // shows whose episodes all moved away). The roll-up runs unconditionally —
+  // the caller gates on the walk finding files, which is what protects a
+  // temporarily unmounted library; a settled library with nothing missing
+  // still needs empty-container cleanup to happen.
+  const emptyLeaves = await db.mediaItem.findMany({
+    where: { libraryId, kind: { in: ["MOVIE", "EPISODE"] }, files: { none: {} } },
+    select: { id: true },
+  });
+  await db.mediaItem.deleteMany({ where: { id: { in: emptyLeaves.map((i) => i.id) } } });
+
+  const emptySeasons = await db.mediaItem.findMany({
+    where: { libraryId, kind: "SEASON", children: { none: {} } },
+    select: { id: true },
+  });
+  await db.mediaItem.deleteMany({ where: { id: { in: emptySeasons.map((i) => i.id) } } });
+
+  const emptySeries = await db.mediaItem.findMany({
+    where: { libraryId, kind: "SERIES", children: { none: {} }, files: { none: {} } },
+    select: { id: true, title: true },
+  });
 
   // Bare SERIES rows are keyed on their folder — an existing (even empty)
   // folder keeps the placeholder, a deleted folder releases the identity.
-  const deadSeries = series.filter((s) => !existsSync(path.join(rootPath, s.title)));
-
-  if (leaves.length + seasons.length + deadSeries.length === 0 && orphanCollections.length === 0) {
-    return { filesRemoved: missingFiles.length, itemsRemoved: 0, collectionsRemoved: 0 };
-  }
-
-  await db.mediaItem.deleteMany({
-    where: { id: { in: [...leaves, ...seasons, ...deadSeries].map((i) => i.id) } },
-  });
+  const deadSeries = emptySeries.filter((s) => !existsSync(path.join(rootPath, s.title)));
+  await db.mediaItem.deleteMany({ where: { id: { in: deadSeries.map((i) => i.id) } } });
   await db.collection.deleteMany({ where: { id: { in: orphanCollections.map((c) => c.id) } } });
 
   return {
     filesRemoved: missingFiles.length,
-    itemsRemoved: leaves.length + seasons.length + deadSeries.length,
+    itemsRemoved: emptyLeaves.length + emptySeasons.length + deadSeries.length,
     collectionsRemoved: orphanCollections.length,
   };
 }

@@ -62,8 +62,8 @@ jobs:
             echo "deleting stale duplicate draft $id for $TAG"
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done
-          printf '%s\n' '## Install notes' '' '**macOS (Apple Silicon)** — the app is ad-hoc signed, not notarized. If macOS says it is "damaged and can'"'"'t be opened", it is the Gatekeeper quarantine attribute:' '```' 'xattr -cr /Applications/hokago.app' '```' 'Prefer the .dmg over the raw .app.tar.gz.' '' '**Windows** — unsigned build: SmartScreen → "More info" → "Run anyway".' '' '**iOS** — install the .ipa with Sideloadly/AltStore (re-signs with your Apple ID). The simulator zip is for development only.' '' '**Android** — the APKs are self-signed with the repo'"'"'s committed key (stable signature across releases, so upgrades install cleanly). "Install unknown apps" permission is required on first install. The TV APK targets Android TV.'
-          | gh release create "$TAG" --draft --title "hokago $TAG" --notes-file -
+          printf '%s\n' '## Install notes' '' '**macOS (Apple Silicon)** — the app is ad-hoc signed, not notarized. If macOS says it is "damaged and can'"'"'t be opened", it is the Gatekeeper quarantine attribute:' '```' 'xattr -cr /Applications/hokago.app' '```' 'Prefer the .dmg over the raw .app.tar.gz.' '' '**Windows** — unsigned build: SmartScreen → "More info" → "Run anyway".' '' '**iOS** — install the .ipa with Sideloadly/AltStore (re-signs with your Apple ID). The simulator zip is for development only.' '' '**Android** — the APKs are self-signed with the repo'"'"'s committed key (stable signature across releases, so upgrades install cleanly). "Install unknown apps" permission is required on first install. The TV APK targets Android TV.' |
+            gh release create "$TAG" --draft --title "hokago $TAG" --notes-file -
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.versions.outputs.tag }}

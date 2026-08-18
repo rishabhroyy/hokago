@@ -30,6 +30,19 @@ export interface IngestSummary {
 /** ffprobe's `format_name` for .mp4/.m4v/.mov — the only containers that carry mov_text subtitle tracks. */
 const MP4_MOV_CONTAINER = "mov,mp4,m4a,3gp,3g2,mj2";
 
+// Structural folder names that are never seasons, regardless of what their
+// files parse as — the Kodi/arr convention for show-scoped movie containers
+// ("Show/Movies/"). Movies inside routinely carry leading episode-style
+// numbers ("01. Legend of Crimson.mp4"), which the anime parser's leading-
+// number episode fallback cannot distinguish from "01. Episode Name" — a
+// majority of such files would otherwise flip the folder season-like and
+// ingest the movies as fake episodes of a fake "Season 1". Declining here
+// routes the folder through findSeriesAnchor, whose "Show/Movies/" anchor
+// branch parents every file as a MOVIE child of the series — the Mugen Train
+// shape this folder exists for. (Extras/Specials/OVAs are a real season 0 via
+// parseSeasonDirName, not movie containers — intentionally untouched.)
+const NON_SEASON_MOVIE_DIRS = new Set(["movies", "movie", "films", "film"]);
+
 /**
  * Directory-hierarchy heuristic ("group first, match second"):
  *
@@ -46,7 +59,8 @@ const MP4_MOV_CONTAINER = "mov,mp4,m4a,3gp,3g2,mj2";
  * independently a root-level movie (covers both one-movie-per-folder and
  * flat scene-style dumps of unrelated files in one folder).
  */
-function isSeasonLikeDirectory(files: DiscoveredFile[], profile: ContentProfile): boolean {
+function isSeasonLikeDirectory(dir: string, files: DiscoveredFile[], profile: ContentProfile): boolean {
+  if (NON_SEASON_MOVIE_DIRS.has(path.basename(dir).toLowerCase())) return false;
   const parsed = files.map((f) => parseFilename(path.basename(f.path), profile));
   const seasoned = parsed.filter((p) => p.episode !== null).length;
   return seasoned / files.length >= 0.5;
@@ -755,7 +769,7 @@ export async function ingestLibrary(
   const seasonLikeDirs = new Set<string>();
   for (const d of byDir.keys()) {
     const dirFiles = byDir.get(d)!;
-    if (isSeasonLikeDirectory(dirFiles, profile)) seasonLikeDirs.add(d);
+    if (isSeasonLikeDirectory(d, dirFiles, profile)) seasonLikeDirs.add(d);
     if (parseSeasonDirName(path.basename(d)) !== null) seasonNamedDirs.add(d);
   }
   const seasonChildParents = new Set<string>();

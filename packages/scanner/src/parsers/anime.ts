@@ -59,8 +59,16 @@ export function parseAnime(filename: string): ParsedFilename {
 
   return {
     // The fallback case has no series name in the file — the folder is the
-    // show — so anitomy's "01  Departure" title is garbage; null it.
-    title: leadingFallback ? null : (result.title ?? null),
+    // show — so anitomy's "01  Departure" title is garbage as a series
+    // identity; null it. (A bare-number filename like "10.mp4" is only ever
+    // the number, so it stays null too.) The exception: a movie file —
+    // "01. Movie Title.mp4" — where the remainder after the recovered number
+    // is a real name; keeping it gives the MOVIE item a clean title instead
+    // of the raw basename-with-extension fallback.
+    title:
+      leadingFallback && result.title && !/^\d{1,3}\s*$/.test(result.title)
+        ? result.title.replace(/^\d{1,3}\s+/, "")
+        : null,
     year,
     season,
     episode,

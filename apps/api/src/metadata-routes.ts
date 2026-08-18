@@ -1,6 +1,6 @@
 import { PrismaClient } from "@hokago/db";
 import { getConnection, Queue, QUEUE_NAMES, metadataJobId, JOB_FAILURE_THRESHOLD } from "@hokago/queue";
-import { AniListProvider, JikanProvider, TvMazeProvider } from "@hokago/providers";
+import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider } from "@hokago/providers";
 import { syncEvidenceAndConfidence } from "@hokago/scanner/evidence";
 import type { MetadataMatch, MetadataProvider, MetadataQuery } from "@hokago/metadata";
 import {
@@ -30,12 +30,14 @@ const db = new PrismaClient();
 export async function registerMetadataRoutes(app: ZodFastifyInstance): Promise<void> {
   const providers: Record<string, MetadataProvider> = {
     TVMAZE: new TvMazeProvider(),
+    WIKIPEDIA: new WikipediaProvider(),
     ANILIST: new AniListProvider(),
     MAL: new JikanProvider(),
   } as const;
 
   const METADATA_QUEUE_NAME: Record<string, string> = {
     TVMAZE: QUEUE_NAMES.METADATA_TVMAZE,
+    WIKIPEDIA: QUEUE_NAMES.METADATA_WIKIPEDIA,
     ANILIST: QUEUE_NAMES.METADATA_ANILIST,
     MAL: QUEUE_NAMES.METADATA_MAL,
   };
@@ -46,6 +48,10 @@ export async function registerMetadataRoutes(app: ZodFastifyInstance): Promise<v
   const connection = getConnection();
   const metadataQueues: Record<string, Queue> = {
     TVMAZE: new Queue(QUEUE_NAMES.METADATA_TVMAZE, {
+      connection,
+      defaultJobOptions: { attempts: JOB_FAILURE_THRESHOLD, backoff: { type: "exponential", delay: 2000 }, removeOnComplete: true, removeOnFail: true },
+    }),
+    WIKIPEDIA: new Queue(QUEUE_NAMES.METADATA_WIKIPEDIA, {
       connection,
       defaultJobOptions: { attempts: JOB_FAILURE_THRESHOLD, backoff: { type: "exponential", delay: 2000 }, removeOnComplete: true, removeOnFail: true },
     }),
@@ -70,7 +76,7 @@ export async function registerMetadataRoutes(app: ZodFastifyInstance): Promise<v
     ]);
   }
 
-  function toCandidate(provider: "TVMAZE" | "ANILIST" | "MAL", match: MetadataMatch) {
+  function toCandidate(provider: "TVMAZE" | "WIKIPEDIA" | "ANILIST" | "MAL", match: MetadataMatch) {
     return {
       provider,
       providerId: match.providerId,
@@ -93,8 +99,8 @@ export async function registerMetadataRoutes(app: ZodFastifyInstance): Promise<v
       // TVmaze has no movie catalog — skip it for MOVIE searches rather than
       // waste a request that can only come back empty (its own guard would
       // return no matches, same result, one call more).
-      const names: ("TVMAZE" | "ANILIST" | "MAL")[] =
-        req.query.kind === "MOVIE" ? ["ANILIST", "MAL"] : ["TVMAZE", "ANILIST", "MAL"];
+      const names: ("TVMAZE" | "WIKIPEDIA" | "ANILIST" | "MAL")[] =
+        req.query.kind === "MOVIE" ? ["WIKIPEDIA", "ANILIST", "MAL"] : ["TVMAZE", "WIKIPEDIA", "ANILIST", "MAL"];
 
       const candidates = [];
       for (const name of names) {

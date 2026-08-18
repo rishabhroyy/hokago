@@ -16,6 +16,7 @@ export type ProviderName =
   | "EMBEDDED"
   | "GENERATED"
   | "TVMAZE"
+  | "WIKIPEDIA"
   | "ANILIST"
   | "MAL"
   | "ANIDB"
@@ -139,6 +140,16 @@ export interface MetadataProvider {
    * matches made before the provider started handing `alternateIds` out.
    */
   alternateIds?(providerId: string): Promise<Array<{ provider: string; id: string }>>;
+  /**
+   * Optional franchise chain for a providerId this provider already matched —
+   * the SEQUEL-ordered cours AFTER the matched record (e.g. AniList's relation
+   * edges: for "Initial D First Stage" → Second Stage, Third Stage, ...).
+   * Enrichment uses it to title seasons beyond the cour the match covered,
+   * since split-record catalogs (MAL) only expose the matched cour's episode
+   * list. Nodes carry the alternate-provider id their episode list can be
+   * pulled from.
+   */
+  sequels?(providerId: string): Promise<Array<{ provider: string; providerId: string }>>;
 }
 
 /**

@@ -42,6 +42,7 @@ enum Provider {
   EMBEDDED // container tags, attached_pic
   GENERATED // ffmpeg-derived
   TVMAZE
+  WIKIPEDIA // keyless movie metadata: REST summary + infobox (genre/studio/year)
   ANILIST
   MAL // via Jikan
   ANIDB // mapping target only; we never call AniDB

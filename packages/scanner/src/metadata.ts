@@ -47,6 +47,30 @@ function ttlPolicyAndExpiry(lifecycleState: MetadataLifecycleState): { ttlPolicy
   }
 }
 
+/**
+ * Episode-title enrichments back off on a per-series stamp
+ * (series.extra.titlesLastAttemptedAt), same cadence as the self-healing
+ * sweeps. A failed episode fetch caches nothing, so without the stamp the
+ * periodic metadata sweep would re-fetch the same dead source every pass
+ * forever. TTL-expired cache rows are the designed refetch cadence and pass
+ * through regardless — the stamp only gates rows that were never cached.
+ */
+async function titlesHealDue(db: PrismaClient, seriesId: string): Promise<boolean> {
+  const series = await db.mediaItem.findUnique({ where: { id: seriesId }, select: { extra: true } });
+  const stamp = (series?.extra as Record<string, unknown> | null)?.titlesLastAttemptedAt;
+  const stampMs = typeof stamp === "string" ? Date.parse(stamp) : NaN;
+  return Number.isNaN(stampMs) || Date.now() - stampMs >= SELF_HEALING_RETRY_BACKOFF_MS;
+}
+
+async function stampTitlesAttempt(db: PrismaClient, seriesId: string): Promise<void> {
+  const series = await db.mediaItem.findUnique({ where: { id: seriesId }, select: { extra: true } });
+  const extra = (series?.extra ?? {}) as Record<string, unknown>;
+  await db.mediaItem.update({
+    where: { id: seriesId },
+    data: { extra: { ...extra, titlesLastAttemptedAt: new Date().toISOString() } as Prisma.InputJsonValue },
+  });
+}
+
 /** Only ever declares the PROVIDER_MATCH domain, so this never prunes a local signal ingest.ts wrote (see ownedTypes doc on syncEvidenceAndConfidence). */
 async function addProviderMatchEvidence(
   db: PrismaClient,
@@ -273,38 +297,41 @@ async function enrichEpisodeTitles(
   providers: Record<string, MetadataProvider> = {},
 ): Promise<void> {
   try {
+    // The per-series network backoff (see titlesHealDue) — read once, gates
+    // every network fetch below: the primary episode list, the multi-cour
+    // walk, and the TVMaze backfill.
+    const retryDue = await titlesHealDue(db, seriesId);
+
     let source: { provider: MetadataProvider; providerName: string; providerId: string } | undefined =
       provider.episodes ? { provider, providerName, providerId } : undefined;
     if (!source) {
-      const alternates = provider.alternateIds ? await provider.alternateIds(providerId) : [];
-      for (const alt of alternates) {
-        await db.externalId
-          .upsert({
-            where: { mediaItemId_provider: { mediaItemId: seriesId, provider: alt.provider } },
-            create: { mediaItemId: seriesId, provider: alt.provider, providerId: alt.id, confidence: 1 },
-            update: { providerId: alt.id },
-          })
-          .catch(() => {});
-      }
-      const rows = await db.externalId.findMany({ where: { mediaItemId: seriesId } });
-      for (const row of rows) {
-        const candidate = providers[row.provider];
-        if (candidate?.episodes) {
-          source = { provider: candidate, providerName: row.provider, providerId: row.providerId };
-          break;
+      // Prefer an episode-capable ExternalId this series already holds (an
+      // AniList match persists its MAL alternate at match time) — zero
+      // network. The alternateIds hop only fires for matches made before
+      // `alternateIds` existed, i.e. when no MAL row exists yet; without
+      // that skip it would re-question the AniList API on every sweep.
+      let rows = await db.externalId.findMany({ where: { mediaItemId: seriesId } });
+      let episodeCapable = rows.find((r) => providers[r.provider]?.episodes);
+      if (!episodeCapable && provider.alternateIds) {
+        const alternates = await provider.alternateIds(providerId);
+        for (const alt of alternates) {
+          await db.externalId
+            .upsert({
+              where: { mediaItemId_provider: { mediaItemId: seriesId, provider: alt.provider } },
+              create: { mediaItemId: seriesId, provider: alt.provider, providerId: alt.id, confidence: 1 },
+              update: { providerId: alt.id },
+            })
+            .catch(() => {});
         }
+        rows = await db.externalId.findMany({ where: { mediaItemId: seriesId } });
+        episodeCapable = rows.find((r) => providers[r.provider]?.episodes);
       }
-    }
-    if (!source) {
-      // No direct episode source — Jikan is the MAL API and re-uses its id.
-      // (Every providers map in the codebase is keyed "MAL" — the Jikan
-      // provider's own `provider` field — so look it up under that key.)
-      const jikan = providers["MAL"];
-      if (jikan?.episodes) {
-        const malRow = (await db.externalId.findMany({ where: { mediaItemId: seriesId } })).find(
-          (r) => r.provider === "MAL",
-        );
-        if (malRow) source = { provider: jikan, providerName: "MAL", providerId: malRow.providerId };
+      if (episodeCapable) {
+        source = {
+          provider: providers[episodeCapable.provider]!,
+          providerName: episodeCapable.provider,
+          providerId: episodeCapable.providerId,
+        };
       }
     }
     if (!source) return;
@@ -322,6 +349,19 @@ async function enrichEpisodeTitles(
     if (!episodes) {
       const fetchEpisodes = source.provider.episodes;
       if (!fetchEpisodes) return;
+      // Empty episode lists are never cached, and the source's own match row
+      // rides in the same cache without an episode list — so a row lacking
+      // one (or no row at all) is a never-succeeded fetch, and without the
+      // stamp every metadata sweep would re-fetch the same dead source
+      // forever. A brand-new series (no stamp) fetches immediately;
+      // afterwards the stamp backs it off to the self-healing cadence. A
+      // row THAT HAS a list but is TTL-expired is the designed refetch
+      // cadence (ONGOING 6h) and passes through regardless.
+      const rowHasList = Array.isArray((cached?.payload as Record<string, unknown> | null)?.episodes);
+      if (!rowHasList) {
+        if (!retryDue) return;
+        await stampTitlesAttempt(db, seriesId);
+      }
       episodes = await fetchEpisodes(source.providerId);
       // The enrichment row's TTL follows the series' own lifecycle, not the
       // matched provider's cache — an ONGOING anime keeps re-fetching its
@@ -332,13 +372,14 @@ async function enrichEpisodeTitles(
       });
       const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(series?.lifecycleState ?? "UNKNOWN");
       const payload = { ...cachedPayload, episodes } as unknown as Prisma.InputJsonValue;
-      await db.metadataCache.upsert({
-        where: { provider_externalId: { provider: source.providerName, externalId: source.providerId } },
-        create: { provider: source.providerName, externalId: source.providerId, payload, ttlPolicy, expiresAt },
-        update: { payload, ttlPolicy, expiresAt },
-      });
+      if (episodes.length > 0) {
+        await db.metadataCache.upsert({
+          where: { provider_externalId: { provider: source.providerName, externalId: source.providerId } },
+          create: { provider: source.providerName, externalId: source.providerId, payload, ttlPolicy, expiresAt },
+          update: { payload, ttlPolicy, expiresAt },
+        });
+      }
     }
-    if (episodes.length === 0) return;
 
     // Split-season providers (MAL/Jikan expose one record per season) only
     // cover part of a multi-cour series — merge every episode-capable source
@@ -420,8 +461,100 @@ async function enrichEpisodeTitles(
     const covered = new Set([...byKey.keys()].map((k) => Number(k.split(":")[0])));
     const localSeasons = new Set(locals.map((l) => l.seasonNumber).filter((s): s is number => s != null));
     const gapSeasons = [...localSeasons].filter((s) => !covered.has(s));
+
+    // Multi-cour walk (split-record catalogs): MAL/Jikan keep one record per
+    // cour, so the primary list only ever covers the cour the match landed
+    // on (cour 1 — local season 1). The matched provider's SEQUEL chain
+    // orders the remaining cours; each cour's episode list is pulled under
+    // its own MAL id — cache-backed, network-gated by the same 24h attempt
+    // stamp — and remapped to its cour's season number.
+    const thatAnilist = providers["ANILIST"] as MetadataProvider | undefined;
+    if (gapSeasons.length > 0 && thatAnilist?.sequels) {
+      const anilistRow = await db.externalId.findUnique({
+        where: { mediaItemId_provider: { mediaItemId: seriesId, provider: "ANILIST" } },
+        select: { providerId: true },
+      });
+      if (anilistRow) {
+        // The chain query itself is network — gated by the stamp so a
+        // never-resolvable gap (extra seasons that don't exist) can't churn
+        // AniList every sweep. Stamped up front: a failed walk backs off
+        // like any other failed fetch.
+        let chain: Array<{ provider: string; providerId: string }> = [];
+        if (retryDue) {
+          await stampTitlesAttempt(db, seriesId);
+          chain = await thatAnilist.sequels(anilistRow.providerId);
+        }
+        const jikanEpisodes = providers["MAL"]?.episodes;
+        if (chain.length > 0 && jikanEpisodes) {
+          for (let i = 0; i < chain.length; i++) {
+            const courSeason = i + 2; // chain[0] = cour 2 = local season 2
+            if (!gapSeasons.includes(courSeason)) continue;
+            const node = chain[i]!;
+            if (node.provider !== "MAL") continue;
+            const nodeCached = await db.metadataCache.findUnique({
+              where: { provider_externalId: { provider: "MAL", externalId: node.providerId } },
+            });
+            const nodeFresh =
+              nodeCached !== null && (nodeCached.expiresAt === null || nodeCached.expiresAt > new Date());
+            let courList: EpisodeMetadata[] | undefined = nodeFresh
+              ? ((nodeCached?.payload as Record<string, unknown> | null)?.episodes as EpisodeMetadata[] | undefined)
+              : undefined;
+            if (!courList) {
+              // A TTL-expired row is a designed refetch cadence (ONGOING);
+              // a missing row is a never-attempted cour — stamp-gated so a
+              // dead source can't churn Jikan every sweep.
+              if (!nodeFresh && nodeCached !== null) continue;
+              if (!retryDue) continue;
+              courList = await jikanEpisodes(node.providerId);
+              if (courList.length === 0) continue; // never cache empty lists
+              const { ttlPolicy, expiresAt } = ttlPolicyAndExpiry(
+                (
+                  await db.mediaItem.findUnique({
+                    where: { id: seriesId },
+                    select: { lifecycleState: true },
+                  })
+                )?.lifecycleState ?? "UNKNOWN",
+              );
+              await db.metadataCache.upsert({
+                where: { provider_externalId: { provider: "MAL", externalId: node.providerId } },
+                create: {
+                  provider: "MAL",
+                  externalId: node.providerId,
+                  payload: { episodes: courList } as unknown as Prisma.InputJsonValue,
+                  ttlPolicy,
+                  expiresAt,
+                },
+                update: {
+                  payload: { episodes: courList } as unknown as Prisma.InputJsonValue,
+                  ttlPolicy,
+                  expiresAt,
+                },
+              });
+            }
+            for (const ep of courList) {
+              if (ep.episodeNumber == null) continue;
+              // Gap-fill only — never overwrite a title the primary/
+              // broader-coverage sources already supplied.
+              const key = `${courSeason}:${ep.episodeNumber}`;
+              if (!byKey.has(key)) byKey.set(key, ep.title);
+            }
+            const pairs: { n: number; title: string }[] = courList
+              .filter((ep): ep is EpisodeMetadata & { episodeNumber: number } => ep.episodeNumber != null)
+              .map((ep) => ({ n: ep.episodeNumber, title: ep.title }));
+            if (!titlesBySeason.has(courSeason)) {
+              titlesBySeason.set(courSeason, pairs.sort((a, b) => a.n - b.n).map((p) => p.title));
+            }
+          }
+        }
+      }
+    }
+
+    // Recompute the gaps after the walk — a filled cour shouldn't waste a
+    // TVMaze search.
+    const coveredAfter = new Set([...byKey.keys()].map((k) => Number(k.split(":")[0])));
+    const gapSeasonsAfter = [...localSeasons].filter((s) => !coveredAfter.has(s));
     const tvMaze = providers["TVMAZE"] as MetadataProvider | undefined;
-    if (gapSeasons.length > 0 && tvMaze?.search && tvMaze.episodes) {
+    if (gapSeasonsAfter.length > 0 && retryDue && tvMaze?.search && tvMaze.episodes) {
       const series = await db.mediaItem.findUnique({ where: { id: seriesId }, select: { title: true } });
       // Exact-normalized equality, or containment in the provider title
       // (short local name vs fuller provider title). Never fall back to a

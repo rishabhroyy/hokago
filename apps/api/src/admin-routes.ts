@@ -18,6 +18,7 @@ const queues: Record<QueueName, Queue> = {
   artwork: new Queue(QUEUE_NAMES.ARTWORK, { connection }),
   trickplay: new Queue(QUEUE_NAMES.TRICKPLAY, { connection }),
   "metadata-tvmaze": new Queue(QUEUE_NAMES.METADATA_TVMAZE, { connection }),
+  "metadata-wikipedia": new Queue(QUEUE_NAMES.METADATA_WIKIPEDIA, { connection }),
   "metadata-anilist": new Queue(QUEUE_NAMES.METADATA_ANILIST, { connection }),
   "metadata-mal": new Queue(QUEUE_NAMES.METADATA_MAL, { connection }),
   download: new Queue(QUEUE_NAMES.DOWNLOAD, { connection }),

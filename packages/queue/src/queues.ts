@@ -3,6 +3,7 @@ export const QUEUE_NAMES = {
   ARTWORK: "artwork",
   TRICKPLAY: "trickplay",
   METADATA_TVMAZE: "metadata-tvmaze",
+  METADATA_WIKIPEDIA: "metadata-wikipedia",
   METADATA_ANILIST: "metadata-anilist",
   METADATA_MAL: "metadata-mal",
   DOWNLOAD: "download",

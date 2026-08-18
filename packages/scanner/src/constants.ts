@@ -66,8 +66,11 @@ export const SIGNAL_WEIGHT: Record<string, number> = {
 // / default provider order, used when Library.providerOrder is empty.
 // MOVIE always additionally tries the anime chain regardless of profile (
 // non-negotiable #15) — merged in by callers, not baked into this table.
+// GENERAL MOVIE leads with the keyless Wikipedia resolver (title/overview/
+// poster via the REST summary API — the one keyless movie source; the anime
+// carve-out below catches anime movies).
 export const DEFAULT_PROVIDER_ORDER: Record<string, { SERIES: string[]; MOVIE: string[] }> = {
-  GENERAL: { SERIES: ["TVMAZE"], MOVIE: [] },
+  GENERAL: { SERIES: ["TVMAZE"], MOVIE: ["WIKIPEDIA"] },
   ANIME: { SERIES: ["ANILIST", "MAL"], MOVIE: ["ANILIST", "MAL"] },
 };
 export const ANIME_MOVIE_CARVEOUT = ["ANILIST", "MAL"];
@@ -133,4 +136,26 @@ export function parseSeasonDirName(name: string): number | null {
   // never matches.
   const m = /^(?:season|series|staffel|s)\s*0*(\d{1,3})(?=\s|$)/i.exec(cleaned);
   return m ? Number(m[1]) : null;
+}
+
+/**
+ * Folder-name titles that must never drive provider churn. Two families:
+ * the scan's structural noise (a "S1 - First Stage" season dir scanned
+ * standalone becomes a SERIES titled "S1 - First Stage"; every episode
+ * collection's shared "OVA"/"Specials" folder would too), and download-site
+ * garbage ("watch ... online", "123movies", "YIFY"). The self-healing and
+ * metadata sweeps skip these outright so provider queues don't churn
+ * forever on titles that can never match. A human pin still works — pinned
+ * identities revalidate by exact providerId, never by title search.
+ */
+export function isJunkShowTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t) return true;
+  return (
+    /^(?:s|season|series|staffel)\s*\d{1,3}(?=\s|$)/i.test(t) ||
+    /^(?:ova|ona|specials?|extras?)$/i.test(t) ||
+    /^\d{1,3}\s+-\s+\S/.test(t) ||
+    /^watch\s+/i.test(t) ||
+    /123movies|soap2day|engsub|yify|rarbg|webrip|web-dl|bluray|1080p|720p/i.test(t)
+  );
 }

@@ -7,7 +7,7 @@ export const QueueName = z.enum(["scan", "artwork", "trickplay", "metadata-tvmaz
 export const JobState = z.enum(["waiting", "active", "completed", "failed", "delayed"]);
 
 export const ScanMode = z.enum(["WATCH_AND_PERIODIC", "PERIODIC_ONLY", "MANUAL"]);
-export const ProviderName = z.enum(["LOCAL", "EMBEDDED", "GENERATED", "TVMAZE", "ANILIST", "MAL", "WIKIDATA"]);
+export const ProviderName = z.enum(["LOCAL", "EMBEDDED", "GENERATED", "TVMAZE", "WIKIPEDIA", "ANILIST", "MAL", "WIKIDATA"]);
 
 export const QueueSummary = z.object({
   name: z.string(),

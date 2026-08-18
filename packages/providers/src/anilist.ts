@@ -35,6 +35,18 @@ query ($id: Int) {
   }
 }`;
 
+const SEQUELS_QUERY = `
+query ($id: Int) {
+  Media(id: $id) {
+    relations {
+      edges {
+        relationType
+        node { id idMal type }
+      }
+    }
+  }
+}`;
+
 /** Full detail for an exact id — used for revalidation/pins (Media(id:) is exact, no search ambiguity). */
 const ID_QUERY = `
 query ($id: Int) {
@@ -73,6 +85,11 @@ interface AniListMedia {
 
 interface AniListResponse {
   data?: { Page: { media: AniListMedia[] } };
+}
+
+interface RelationEdge {
+  relationType: string | null;
+  node: { id: number; idMal: number | null; type: string | null };
 }
 
 function lifecycleFromStatus(status: string | null): MetadataLifecycleState {
@@ -169,5 +186,39 @@ export class AniListProvider implements MetadataProvider {
     const body = (await res.json()) as { data?: { Media?: { idMal: number | null } | null } };
     const idMal = body.data?.Media?.idMal;
     return idMal != null ? [{ provider: "MAL", id: String(idMal) }] : [];
+  }
+
+  /**
+   * SEQUEL chain after the matched record, in cour order. Split-record
+   * catalogs (MAL) catalog one entry per cour, so a series matched to cours
+   * 2..N gets its episode lists pulled per-cour from Jikan. Only nodes with a
+   * MAL id are emitted (that's who's episodes enrichment pulls), but idMal-less
+   * nodes are still traversed so the chain doesn't break.
+   */
+  async sequels(providerId: string): Promise<Array<{ provider: string; providerId: string }>> {
+    const chain: Array<{ provider: "MAL"; providerId: string }> = [];
+    const visited = new Set<number>();
+    const queue: number[] = [Number(providerId)];
+    while (chain.length < 24 && queue.length > 0) {
+      const id = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const res = await fetch(BASE_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ query: SEQUELS_QUERY, variables: { id } }),
+      });
+      if (!res.ok) throw new Error(`AniList sequels failed: ${res.status} ${res.statusText}`);
+      const body = (await res.json()) as {
+        data?: { Media?: { relations?: { edges?: RelationEdge[] | null } | null } | null };
+      };
+      const edges = body.data?.Media?.relations?.edges ?? [];
+      for (const edge of edges) {
+        if (edge.relationType !== "SEQUEL" || edge.node.type !== "ANIME") continue;
+        if (edge.node.idMal != null) chain.push({ provider: "MAL", providerId: String(edge.node.idMal) });
+        queue.push(edge.node.id);
+      }
+    }
+    return chain;
   }
 }

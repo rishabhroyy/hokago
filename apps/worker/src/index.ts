@@ -29,13 +29,13 @@ import { probeFile } from "@hokago/scanner/probe";
 import { generateTrickplaySheets, isNothingWrittenError } from "@hokago/scanner/trickplay";
 import { killTrackedChildren, trackedPidCount, trackPid, untrackPid } from "@hokago/scanner/child-registry";
 import { configDir, probeConfigDir, findSidecarArt, upsertArtworkDescriptor } from "@hokago/scanner/artwork";
-import { ARTWORK_SOURCE_PRIORITY } from "@hokago/scanner/constants";
+import { ARTWORK_SOURCE_PRIORITY, isJunkShowTitle } from "@hokago/scanner/constants";
 import { setArtworkHwaccel } from "@hokago/scanner/generate-art";
 import { buildDownloadArgs } from "@hokago/ffmpeg/download";
 import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
 import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, hwActive, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
-import { AniListProvider, JikanProvider, TvMazeProvider, WikidataBridge } from "@hokago/providers";
+import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
@@ -120,6 +120,7 @@ const downloadQueue = new Queue<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, {
 // call to every provider is actually governed by its queue's limiter.
 const METADATA_PROVIDERS: Record<string, MetadataProvider> = {
   TVMAZE: new TvMazeProvider(),
+  WIKIPEDIA: new WikipediaProvider(),
   ANILIST: new AniListProvider(),
   MAL: new JikanProvider(),
 } as const;
@@ -128,6 +129,7 @@ const wikidataBridge = new WikidataBridge();
 
 const METADATA_QUEUE_NAME: Record<string, string> = {
   TVMAZE: QUEUE_NAMES.METADATA_TVMAZE,
+  WIKIPEDIA: QUEUE_NAMES.METADATA_WIKIPEDIA,
   ANILIST: QUEUE_NAMES.METADATA_ANILIST,
   MAL: QUEUE_NAMES.METADATA_MAL,
 };
@@ -138,10 +140,19 @@ const metadataQueues: Record<string, Queue<MetadataJobData>> = {
       attempts: JOB_FAILURE_THRESHOLD,
       backoff: { type: "exponential", delay: 2000 },
       // Postgres (ExternalId/JobFailure), not this terminal job's Redis key, is
- // the source of truth for "does this item still need resolving" (
+      // the source of truth for "does this item still need resolving" (
       // self-healing, non-negotiable #9). Without this, the deterministic jobId
       // (metadataJobId) permanently blocks any later re-enqueue for the same
       // provider+item once the first attempt reaches a terminal state.
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
+  }),
+  WIKIPEDIA: new Queue<MetadataJobData>(QUEUE_NAMES.METADATA_WIKIPEDIA, {
+    connection,
+    defaultJobOptions: {
+      attempts: JOB_FAILURE_THRESHOLD,
+      backoff: { type: "exponential", delay: 2000 },
       removeOnComplete: true,
       removeOnFail: true,
     },
@@ -735,6 +746,11 @@ const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
     concurrency: 3,
     limiter: { max: 20, duration: 10_000 }, // TVmaze: ≥20 calls/10s per IP
   }),
+  WIKIPEDIA: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_WIKIPEDIA, makeProcessMetadata("WIKIPEDIA"), {
+    connection,
+    concurrency: 3,
+    limiter: { max: 30, duration: 60_000 }, // Wikimedia asks for polite volumes; 30/min is gentle
+  }),
   ANILIST: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_ANILIST, makeProcessMetadata("ANILIST"), {
     connection,
     concurrency: 3,
@@ -878,10 +894,21 @@ async function reconcile(): Promise<void> {
 }
 
 /**
- * Metadata leg of reconcile — a MOVIE/SERIES missing an ExternalId for every
- * provider in its own chain has never been successfully resolved (or its
- * match was lost) — re-enqueue against the first provider, same as a fresh
- * onMetadataNeeded.
+ * Metadata leg of reconcile. Two legs:
+ *  - Leg 1: a MOVIE/SERIES missing an ExternalId for every provider in its
+ *    own chain has never been successfully resolved (or its match was lost)
+ *    — re-enqueue against the first provider, same as a fresh onMetadataNeeded.
+ *    Junk folder-names (scan noise like "S1 - First Stage" — one show split
+ *    into several season-folder rows — or "watch ... online" downloads) could
+ *    never match anything and would churn the provider queue every sweep;
+ *    they're skipped outright.
+ *  - Leg 2 (SERIES only): resolved but title-less episodes. The match
+ *    succeeded (a chain ExternalId is held) but enrichment never landed
+ *    per-episode titles — a fetch failed mid-flight, or the primary list only
+ *    covered one cour of a multi-cour show and the walk/TVmaze backfill
+ *    didn't run. Re-drive the enrich path; the per-series network backoff
+ *    inside enrichEpisodeTitles (series.extra.titlesLastAttemptedAt) keeps
+ *    a dead source from being re-questioned every sweep.
  */
 async function reconcileMetadata(): Promise<number> {
   const libraries = await db.library.findMany({ where: { enabled: true } });
@@ -901,6 +928,7 @@ async function reconcileMetadata(): Promise<number> {
         },
       });
       for (const item of needingMetadata) {
+        if (isJunkShowTitle(item.title)) continue;
         await enqueueMetadata(chain[0]!, {
           mediaItemId: item.id,
           libraryId: library.id,
@@ -908,8 +936,57 @@ async function reconcileMetadata(): Promise<number> {
           title: item.title,
           year: item.year,
         });
+        metadataReDerived += 1;
       }
-      metadataReDerived += needingMetadata.length;
+
+      // Leg 2 — resolved series whose episodes still lack titles. Enqueing
+      // the first chain provider routes through resolveMetadataStep, whose
+      // fresh-cache fast path calls enrichEpisodeTitles with zero provider
+      // network — the cour walk and backfill inside it do the real work.
+      if (kind === "SERIES") {
+        const resolvedSeries = await db.mediaItem.findMany({
+          where: {
+            libraryId: library.id,
+            kind: "SERIES",
+            state: "OK",
+            externalIds: { some: { provider: { in: chain } } },
+            jobFailures: { none: { jobType: { in: jobTypes }, attempts: { gte: JOB_FAILURE_THRESHOLD } } },
+          },
+          select: { id: true, title: true, year: true },
+        });
+        const candidates = resolvedSeries.filter((s) => !isJunkShowTitle(s.title));
+        if (candidates.length > 0) {
+          const episodes = await db.mediaItem.findMany({
+            where: {
+              kind: "EPISODE",
+              OR: [
+                { parentId: { in: candidates.map((c) => c.id) } },
+                { parent: { parentId: { in: candidates.map((c) => c.id) } } },
+              ],
+            },
+            select: { parentId: true, parent: { select: { parentId: true } }, extra: true },
+          });
+          const titleless = new Map<string, number>();
+          for (const ep of episodes) {
+            const seriesId = ep.parentId ?? ep.parent?.parentId;
+            if (!seriesId) continue;
+            const extra = (ep.extra ?? {}) as Record<string, unknown> | null;
+            if (typeof extra?.episodeTitle === "string" && extra.episodeTitle !== "") continue;
+            titleless.set(seriesId, (titleless.get(seriesId) ?? 0) + 1);
+          }
+          for (const item of candidates) {
+            if ((titleless.get(item.id) ?? 0) === 0) continue;
+            await enqueueMetadata(chain[0]!, {
+              mediaItemId: item.id,
+              libraryId: library.id,
+              kind: "SERIES",
+              title: item.title,
+              year: item.year,
+            });
+            metadataReDerived += 1;
+          }
+        }
+      }
     }
   }
 

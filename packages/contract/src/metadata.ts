@@ -2,8 +2,8 @@
 
 import { z } from "zod";
 
-/** The three keyless providers a manual match can pin against. */
-export const MetadataMatchProvider = z.enum(["TVMAZE", "ANILIST", "MAL"]);
+/** The keyless providers a manual match can pin against. */
+export const MetadataMatchProvider = z.enum(["TVMAZE", "WIKIPEDIA", "ANILIST", "MAL"]);
 export type MetadataMatchProvider = z.infer<typeof MetadataMatchProvider>;
 
 export const MetadataSearchQuery = z.object({

@@ -3,10 +3,15 @@ import { api } from "../api-client";
 import { Icon } from "../ui/icons";
 import { useWiiSound } from "../ui/useWiiSound";
 
-const PROVIDER_LABEL: Record<string, string> = { TVMAZE: "TVmaze", ANILIST: "AniList", MAL: "MyAnimeList" };
+const PROVIDER_LABEL: Record<string, string> = {
+  TVMAZE: "TVmaze",
+  WIKIPEDIA: "Wikipedia",
+  ANILIST: "AniList",
+  MAL: "MyAnimeList",
+};
 
 interface Candidate {
-  provider: "TVMAZE" | "ANILIST" | "MAL";
+  provider: "TVMAZE" | "WIKIPEDIA" | "ANILIST" | "MAL";
   providerId: string;
   title: string;
   year: number | null;

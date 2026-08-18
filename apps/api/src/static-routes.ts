@@ -31,22 +31,24 @@ const ARTWORK_MIME: Record<string, string> = {
 };
 
 // Text subtitle formats only — PGS/VOBSUB/DVBSUB are bitmap and never reach
-// the browser this way (they force server-side burn-in instead).
+// the browser this way (they force server-side burn-in instead). libass
+// (JASSUB's renderer) only parses ASS/SSA, so every non-ASS format is
+// converted to ASS at extraction time: raw SRT/VTT/TX3G bytes would fetch
+// fine but render nothing — a silent dead track.
 const SUBTITLE_MUX: Record<string, string> = {
   ASS: "ass",
   SSA: "ass",
-  SRT: "srt",
-  VTT: "webvtt",
-  // TX3G (mov_text) has no libass parser — ffmpeg converts it to SRT at
-  // extraction time, same bytes the downloads path packages.
-  TX3G: "srt",
+  SRT: "ass",
+  VTT: "ass",
+  // TX3G (mov_text) likewise has no libass parser.
+  TX3G: "ass",
 };
 const SUBTITLE_MIME: Record<string, string> = {
   ASS: "text/x-ssa",
   SSA: "text/x-ssa",
-  SRT: "application/x-subrip",
-  VTT: "text/vtt",
-  TX3G: "application/x-subrip",
+  SRT: "text/x-ssa",
+  VTT: "text/x-ssa",
+  TX3G: "text/x-ssa",
 };
 
 /**

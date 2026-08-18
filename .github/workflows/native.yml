@@ -58,8 +58,7 @@ jobs:
             exit 0
           fi
           gh api "repos/$GITHUB_REPOSITORY/releases" \
-            --jq '.[] | select(.draft == true and .tag_name == $tag) | .id' \
-            --arg tag "$TAG" | while read -r id; do
+            --jq '.[] | select(.draft == true and .tag_name == env.TAG) | .id' | while read -r id; do
             echo "deleting stale duplicate draft $id for $TAG"
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done

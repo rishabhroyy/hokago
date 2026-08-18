@@ -138,8 +138,13 @@ function escapeFilterPath(p: string): string {
 }
 
 /**
- * `-f segment` muxer, not `-f hls` — the app owns playlist content (already
- * built by buildM3u8), ffmpeg only ever produces the .ts bytes.
+ * `-f hls` muxer, not `-f segment` — the app owns playlist content (already
+ * built by buildM3u8), so ffmpeg writes a playlist file nobody reads and only
+ * the .ts bytes matter. `-hls_flags temp_file` renames every segment into
+ * place atomically at the segment boundary (writes segment-N.ts.tmp, closes
+ * it, renames to segment-N.ts when segment-N+1 starts): a segment file
+ * EXISTING means it is complete, which is what lets the API's segment route
+ * serve on existence instead of polling for stability.
  * `-ss` AFTER `-i` is an ACCURATE seek: ffmpeg demuxes to the target and
  * discards everything before it, so the output begins at the exact requested
  * input timestamp — frame-exact by construction, independent of the
@@ -148,7 +153,7 @@ function escapeFilterPath(p: string): string {
  * keyframe gap) and of source B-frames/audio priming. The muxer normalizes
  * the output timeline to ~0, so the client's offset (actualStartMs) matches
  * the browser timeline origin with zero drift.
- * `-segment_start_number` keeps output filenames matching the segment index
+ * `-start_number` keeps output filenames matching the segment index
  * the playlist already promised. `-loglevel error` keeps stderr to
  * failures only (the tail that TranscodeJob.lastError captures).
  */
@@ -274,11 +279,31 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
 
   args.push(
     "-f",
-    "segment",
-    "-segment_time",
+    "hls",
+    "-hls_time",
     String(input.segmentSeconds),
-    "-segment_start_number",
+    "-hls_segment_filename",
+    path.join(input.outputDir, "segment-%d.ts"),
+    "-start_number",
     String(input.startSegment),
+    // The muxer's own playlist (written to hls.m3u8 below) is never read —
+    // the app's playlist.m3u8 is the source of truth. -hls_list_size 0 makes
+    // ffmpeg's playlist list every segment (and stops the muxer trimming
+    // old ones) just in case anything ever does look at it.
+    "-hls_list_size",
+    "0",
+    // temp_file: segment-N.ts.tmp is renamed to segment-N.ts only when the
+    // muxer closes that segment (at the next boundary, or flush at exit) —
+    // a segment file appearing IS the completeness signal. The API's
+    // segment route waits for existence instead of 3 stability polls, which
+    // removes the ~750ms poll floor from every start/seek critical path.
+    // The muxer closes segment-0 when segment-1 begins, so the first
+    // segment still appears only after the first boundary — no earlier than
+    // before, just served the moment it's real. A SIGKILLed child leaves
+    // only a stale .tmp, never a half-written .ts, so the route's 404 on
+    // child death is the only honest answer.
+    "-hls_flags",
+    "temp_file",
     // The mpegts muxer adds a ~1.5s lead on the first packet (PAT/PMT/PCR
     // interleaving at the default muxdelay) — every segment would carry that
     // offset, hls.js's remuxer flags fragments as overlapping the previous
@@ -294,7 +319,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     // every fragment flush with the running timeline instead.
     "-muxdelay",
     "0",
-    path.join(input.outputDir, "segment-%d.ts"),
+    path.join(input.outputDir, "hls.m3u8"),
   );
 
   return args;

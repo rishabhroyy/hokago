@@ -942,18 +942,20 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if (!live) return reply.code(404).send({ error: "no active session" });
       const segPath = path.join(live.outDir, `segment-${req.params.n}.ts`);
 
-      // The segment muxer creates each segment file and fills it as frames
-      // are encoded — `existsSync` alone passes mid-write, and serving a
-      // half-written segment makes hls.js probe/parse garbage (fragParsingError,
-      // stalled playback). Slow encodes (1080p+) make the race almost
-      // guaranteed, which is why they "never stream". Wait for the file to be
-      // stable (size unchanged across two polls) instead — that only happens
-      // when ffmpeg finished writing it. First segment can take a while on a
-      // CPU encode, so fail fast the moment the child dies instead of holding
-      // the request 120s for a file that will never appear.
+      // The hls muxer runs with `-hls_flags temp_file` (see buildFfmpegArgs):
+      // segment-N.ts.tmp is renamed to segment-N.ts only when the muxer
+      // closes that segment at the next boundary — a segment file existing
+      // on disk means it is complete, by construction. So wait for
+      // existence, not stability: the old 3×250ms stability poll added a
+      // fixed ~750ms to every segment fetch (hidden by hls.js prefetch
+      // during playback, but squarely on the critical path for the first
+      // frame after every start/seek). Fail fast the moment the child dies
+      // instead of holding the request 120s for a file that will never
+      // appear — a killed child leaves only a stale .tmp, never a
+      // half-written .ts, so the 404 is the honest answer and the client's
+      // restart reloads a fresh manifest with the new anchor's segment
+      // numbers anyway.
       const deadline = Date.now() + 120_000;
-      let lastSize = -1;
-      let stablePolls = 0;
       while (Date.now() < deadline) {
         const child = live.transcode.child;
         // exitCode and signalCode are mutually exclusive — a SIGKILLed child
@@ -961,33 +963,13 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         // is the "is the child dead at all" check; `&&` here would poll a
         // killed child's missing segments for the full 120s.
         const dead = (child.exitCode ?? child.signalCode) !== null;
-        if (dead && child.exitCode !== 0) {
-          // Child died mid-write (killed or errored): any existing file is
-          // only a partial segment — serving it poisons hls.js's parser.
-          // 404 instead; the client's restart reloads a fresh manifest with
-          // the new anchor's segment numbers anyway.
-          break;
-        }
-        let size = 0;
         try {
-          size = statSync(segPath).size;
+          if (statSync(segPath).size > 0) break;
         } catch {
           // not created yet
           if (dead) break;
         }
-        if (dead && size > 0 && size === lastSize) {
-          // Clean exit = the file it wrote is final on disk — no need to wait
-          // the stability polls out.
-          break;
-        }
-        if (size > 0 && size === lastSize) {
-          stablePolls += 1;
-          if (stablePolls >= 3) break;
-        } else {
-          stablePolls = 0;
-        }
-        lastSize = size;
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
       if (!existsSync(segPath)) return reply.code(404).send({ error: "segment not ready" });
 

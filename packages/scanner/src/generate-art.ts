@@ -21,16 +21,49 @@ export function setArtworkHwaccel(state: HwaccelState | null): void {
   hwState = state;
 }
 
+// Global cap on live ffmpeg children in this process, whatever the job mix
+// (artwork jobs × internal passes, trickplay jobs × per-job tile fan-out).
+// An uncapped wave — 8 trickplay jobs × 4 tiles on a CPU-only box — stacks
+// hundreds of MB per software HEVC-10bit decode and OOMs the host, and the
+// SIGKILLed decodes then look like file failures. HOKAGO_FFMPEG_SPAWNS
+// (default 12) bounds worst-case memory; excess spawns queue FIFO, never
+// fail. CPU-bound decodes just take longer under the queue — correctness
+// is untouched.
+const MAX_FFMPEG_SPAWNS = Math.max(1, Number(process.env.HOKAGO_FFMPEG_SPAWNS ?? 12));
+let activeFfmpegSpawns = 0;
+const ffmpegSpawnWaiters: Array<() => void> = [];
+
+async function withFfmpegSpawn<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeFfmpegSpawns >= MAX_FFMPEG_SPAWNS) {
+    await new Promise<void>((resolve) => {
+      ffmpegSpawnWaiters.push(resolve);
+    });
+  } else {
+    activeFfmpegSpawns++;
+  }
+  try {
+    return await fn();
+  } finally {
+    // Hand the freed slot straight to the next waiter (the active count
+    // stays put); only decrement when nobody is waiting.
+    const next = ffmpegSpawnWaiters.shift();
+    if (next) next();
+    else activeFfmpegSpawns--;
+  }
+}
+
 /** Registers the child's PID so a worker's SIGTERM handler can reap it . */
 export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
-  const effective = hwState ? [...hwDecodeArgs(hwState), ...args] : args;
-  return new Promise((resolve, reject) => {
-    const child = execFile("ffmpeg", effective, { maxBuffer: 32 * 1024 * 1024, timeout: opts?.timeoutMs }, (err, stdout, stderr) => {
-      untrackPid(child.pid);
-      if (err) reject(err);
-      else resolve({ stdout, stderr });
+  return withFfmpegSpawn(() => {
+    const effective = hwState ? [...hwDecodeArgs(hwState), ...args] : args;
+    return new Promise((resolve, reject) => {
+      const child = execFile("ffmpeg", effective, { maxBuffer: 32 * 1024 * 1024, timeout: opts?.timeoutMs }, (err, stdout, stderr) => {
+        untrackPid(child.pid);
+        if (err) reject(err);
+        else resolve({ stdout, stderr });
+      });
+      trackPid(child.pid);
     });
-    trackPid(child.pid);
   });
 }
 

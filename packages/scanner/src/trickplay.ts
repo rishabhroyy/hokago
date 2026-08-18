@@ -31,8 +31,15 @@ const TILE_TIMEOUT_MS = 60_000;
 // a short seek+GOP decode, so a job can safely run several concurrently; the
 // worker's HOKAGO_TRICKPLAY_CONCURRENCY still bounds whole-file jobs. Tuning
 // up helps single-file turnaround (540 tiles for a 90-min movie) at the cost
-// of parallel ffmpeg load on the box.
-const TILE_CONCURRENCY = 4;
+// of parallel ffmpeg load on the box. HOKAGO_TRICKPLAY_TILE_CONCURRENCY
+// (default 4) scales the per-job fan-out — worst-case live spawns are
+// jobs × tiles, so slow software decodes (10-bit HEVC ~600MB each) should
+// lower it, and HOKAGO_FFMPEG_SPAWNS caps the process-wide total regardless.
+function tileConcurrencyFromEnv(): number {
+  const raw = Number(process.env.HOKAGO_TRICKPLAY_TILE_CONCURRENCY ?? 4);
+  return Number.isFinite(raw) ? Math.min(8, Math.max(1, Math.floor(raw))) : 4;
+}
+const TILE_CONCURRENCY = tileConcurrencyFromEnv();
 
 const TILE_FILTER =
   `scale=${TRICKPLAY_TILE_WIDTH}:${TRICKPLAY_TILE_HEIGHT}:force_original_aspect_ratio=decrease,` +

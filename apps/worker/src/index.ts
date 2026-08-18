@@ -315,14 +315,15 @@ async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
     // Fail-soft: a hw-decode failure retires hw (the setter holds the same
     // mutated state) and the BullMQ retry re-runs the job on CPU.
     reportJobHwFailure("artwork", err);
-    // Transient (spawn timeout, EMFILE, disk/pipe blip): never count toward
-    // poison — the periodic metadata sweep and boot reconciler re-drive
-    // missing work. Let BullMQ retry without recording a failure.
+    // Transient (spawn timeout, EMFILE, disk/pipe blip, a signal/OOM-killed
+    // decode): never count toward poison — the periodic metadata sweep and
+    // boot reconciler re-drive missing work. Let BullMQ retry without
+    // recording a failure.
     if (isTransientFfmpegError(err)) throw err;
     const failure = await db.jobFailure.upsert({
       where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK } },
-      create: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK, attempts: 1, lastError: String(err) },
-      update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
+      create: { mediaItemId, jobType: QUEUE_NAMES.ARTWORK, attempts: 1, lastError: describeFfmpegFailure(err) },
+      update: { attempts: { increment: 1 }, lastError: describeFfmpegFailure(err), lastFailedAt: new Date() },
     });
     if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
       // Poison pill: stop retrying, stay playable, surface to admins. The
@@ -382,14 +383,15 @@ async function processTrickplay(job: Job<TrickplayJobData>): Promise<void> {
     // Fail-soft: a hw-decode failure retires hw (the state generateTrickplaySheets
     // holds is the same mutated object) and the BullMQ retry re-runs on CPU.
     reportJobHwFailure("trickplay", err);
-    // Transient (spawn timeout, EMFILE, disk/pipe blip): never count toward
-    // poison — the boot reconciler re-derives missing sheets, and a degraded
-    // moment must not park a library. Let BullMQ retry without recording.
+    // Transient (spawn timeout, EMFILE, disk/pipe blip, a signal/OOM-killed
+    // decode): never count toward poison — the boot reconciler re-derives
+    // missing sheets, and a degraded moment must not park a library. Let
+    // BullMQ retry without recording.
     if (isTransientFfmpegError(err)) throw err;
     const failure = await db.jobFailure.upsert({
       where: { mediaItemId_jobType: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY } },
-      create: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY, attempts: 1, lastError: String(err) },
-      update: { attempts: { increment: 1 }, lastError: String(err), lastFailedAt: new Date() },
+      create: { mediaItemId, jobType: QUEUE_NAMES.TRICKPLAY, attempts: 1, lastError: describeFfmpegFailure(err) },
+      update: { attempts: { increment: 1 }, lastError: describeFfmpegFailure(err), lastFailedAt: new Date() },
     });
     if (failure.attempts >= JOB_FAILURE_THRESHOLD) {
       // Poison pill: stop retrying, stay playable, surface to admins. The
@@ -619,17 +621,62 @@ function isTransientError(err: unknown): boolean {
 
 /**
  * ffmpeg failures that are environmental, not the file's fault — spawn/IO
- * timeouts (execFile kills the child), EMFILE under heavy parallelism, disk
- * or pipe errors. These must never count toward the poison threshold or a
- * briefly loaded box (or a full disk) parks a whole library in minutes. Only
- * deterministic decode/encode failures (corrupt region, unsupported stream)
- * poison. Deterministic-vs-transient is decided by message, same as the
- * metadata path above.
+ * timeouts (execFile kills the child), process deaths by signal (the OOM
+ * killer SIGKILLing decodes under memory pressure), EMFILE under heavy
+ * parallelism, disk or pipe errors. These must never count toward the poison
+ * threshold or a briefly loaded box (or a full disk) parks a whole library in
+ * minutes. Only deterministic decode/encode failures (corrupt region,
+ * unsupported stream) poison. Deterministic-vs-transient is decided by
+ * message, same as the metadata path above.
+ *
+ * Two legs: the message regex catches what survives in JobFailure.lastError
+ * (which now carries a forensic "killed=true signal=SIGKILL" trailer via
+ * describeFfmpegFailure), and the property checks catch the live error object
+ * — node's execFile records signal deaths on `err.killed` / `err.signal` and
+ * timeouts on `err.code = 'ETIMEDOUT'` with no wording in the message. That
+ * message blind spot is what mis-parked healthy files during an OOM storm:
+ * a SIGKILLed decode read as a deterministic file failure and poison-pilled
+ * the item after three attempts.
  */
 function isTransientFfmpegError(err: unknown): boolean {
   const msg = err instanceof Error ? `${err.message} ${String(err.cause ?? "")}` : String(err);
-  return /timed?\s?out|timeout|killed|signal|emfile|enfile|enospc|eio|eintr|epipe|econnreset|enoent|no\s?such\s?file|too\s?many\s?open\s?files|no\s?space\s?left|device\s?or\s?resource\s?busy|spawn\s?\w+\s?emfile/i.test(
-    msg,
+  if (/\btimed?\s?out|timeout|killed|signal|emfile|enfile|enospc|eio|eintr|epipe|econnreset|enoent|no\s?such\s?file|too\s?many\s?open\s?files|no\s?space\s?left|device\s?or\s?resource\s?busy|spawn\s?\w+\s?emfile/i.test(msg)) return true;
+  const e = err as { killed?: boolean; signal?: string; code?: string };
+  return e.killed === true || typeof e.signal === "string" || e.code === "ETIMEDOUT";
+}
+
+/**
+ * Serializes an execFile failure with its killer metadata, so the stored
+ * JobFailure.lastError can tell a signal death (OOM, shutdown) from a real
+ * decode failure — and so the boot reconciler's leg-zero un-poison can match
+ * the class on a plain string. The error message alone carries neither
+ * "killed" nor "signal".
+ */
+function describeFfmpegFailure(err: unknown): string {
+  const base = err instanceof Error ? err.message : String(err);
+  const e = err as { killed?: boolean; signal?: string; code?: string };
+  const extras: string[] = [];
+  if (e.killed) extras.push(`killed=true`);
+  if (e.signal) extras.push(`signal=${e.signal}`);
+  if (e.code) extras.push(`code=${e.code}`);
+  return extras.length > 0 ? `${base} (${extras.join(" ")})` : base;
+}
+
+/**
+ * Legacy JobFailure rows (recorded before describeFfmpegFailure's forensic
+ * trailer): a signal-killed ffmpeg — OOM-killer SIGKILL in particular —
+ * leaves "Command failed: ffmpeg ..." with no ffmpeg-level fatal line (the
+ * child died mid-encode, stderr just stops). Genuinely broken files always
+ * end with a fatal line ("Error while decoding", "Conversion failed",
+ * "cannot open", ...), so its absence is the signature of an environmental
+ * death — clear those poison rows and let the reconciler re-derive the
+ * sheets. Worst case (a file broken in a way that prints no fatal line) it
+ * re-poisons itself after three real failures — self-limiting.
+ */
+function isSilentFfmpegDeath(msg: string): boolean {
+  return (
+    /error: command failed: ffmpeg/i.test(msg) &&
+    !/error while|conversion failed|cannot|invalid|no such file|does not contain|unsupported|failed to|not found|permission denied|no space left|out of memory|segmentation/i.test(msg)
   );
 }
 
@@ -796,10 +843,14 @@ async function reconcile(): Promise<void> {
   // Trickplay leg zero: un-poison rows that the old accounting poisoned by
   // mistake. Pre-fix, every failure counted — a tail keyframe-seek past the
   // last decodable frame ("nothing was written"), a spawn timeout, an EMFILE
-  // blip — so healthy files with audio tails/padding got parked. Those error
-  // classes are now benign by definition (the generator black-cells the tail,
-  // transient errors don't count); clear them so the reconciler re-derives
-  // the missing sheets instead of skipping the item forever.
+  // blip, or a decode SIGKILLed by the OOM killer mid-encode (which dies
+  // with no fatal line — isSilentFfmpegDeath) — so healthy files with audio
+  // tails/padding got parked, and a whole series parked during a memory
+  // storm. Those error classes are now benign by definition (the generator
+  // black-cells the tail, transient errors don't count, a killed decode gets
+  // an explicit "killed=true" trailer in the row); clear them so the
+  // reconciler re-derives the missing sheets instead of skipping the item
+  // forever.
   const stalePoison = await db.jobFailure.findMany({
     where: { jobType: QUEUE_NAMES.TRICKPLAY, attempts: { gte: JOB_FAILURE_THRESHOLD } },
     select: { mediaItemId: true, lastError: true },
@@ -809,6 +860,7 @@ async function reconcile(): Promise<void> {
     return (
       isNothingWrittenError(msg) ||
       isTransientFfmpegError(msg) ||
+      isSilentFfmpegDeath(msg) ||
       /hwaccel|vaapi|qsv|nvenc|cuda|device creation failed|hardware device|cannot allocate memory/i.test(msg)
     );
   });

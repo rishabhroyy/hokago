@@ -28,7 +28,10 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
       .catch(() => {});
     fetchLibraryItems(libraryId)
       .then((list) => {
-        setItems(list);
+        // Downloaded titles (files on the box) lead the tab; everything else
+        // keeps the server's sortTitle order. Stable sort = each group's
+        // internal order is untouched.
+        setItems(list.sort((a, b) => Number(b.isDownloaded) - Number(a.isDownloaded)));
         setLoaded(true);
       })
       .catch(() => setLoaded(true));

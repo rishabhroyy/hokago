@@ -1659,13 +1659,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           <MediaProvider>
             {/* DIRECT_PLAY audio tracks come from the native element and show up
                 in the stock audio menu automatically; these are the subtitles. */}
-            {renderable.map((t) => (
+            {renderable.map((t, index) => (
               <Track
                 key={t.id}
                 id={t.id}
                 src={EMPTY_VTT}
                 kind="subtitles"
-                label={t.title ?? t.lang ?? t.id}
+                // Never show the DB row id — a track with neither title nor
+                // language falls back to a positional label instead.
+                label={t.title ?? t.lang ?? `Subtitle ${index + 1}`}
                 language={t.lang ?? undefined}
                 // The live selection (which may diverge from the remembered
                 // pref) is what a fresh player mount re-activates — a manual

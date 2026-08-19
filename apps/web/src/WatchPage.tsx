@@ -537,11 +537,20 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // shuffles the caption menu. Snapshot the default per player mount instead;
   // remounts (keyNonce) re-snapshot the live selection, mid-mount switches go
   // through the menu's own changeTextTrackMode and never touch `default`.
-  const mountDefaultId = useMemo(
-    () => trackDefaultId,
+  //
+  // A title change (mediaFileId) reuses this same WatchPage instance without
+  // bumping keyNonce, so a memo keyed on keyNonce alone froze at whichever
+  // track (or no-track) happened to exist on the very first mount and never
+  // moved again — the caption menu's notion of "active" drifted from JASSUB's
+  // for every subsequent episode, which is what made the first click in a
+  // session look like a no-op. The tracks-fetch effect below owns the actual
+  // reset once a new title's tracks are known; this only covers the
+  // keyNonce (mid-title remount) case, mirroring the old memo's behavior.
+  const [mountDefaultId, setMountDefaultId] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setMountDefaultId(trackDefaultId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [keyNonce],
-  );
+  }, [keyNonce]);
 
   useEffect(() => {
     if (!mediaItemId) return;
@@ -622,6 +631,18 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         const def = data.audio.find((a) => a.isDefault) ?? data.audio[0];
         const chosen = matchAudioPref(data.audio, prefs.audio) ?? def;
         setSelectedAudioIndex(chosen?.streamIndex ?? null);
+        // Resolve this title's subtitle default the moment its tracks are
+        // known (same shape as defaultSubtitleId above) and apply it to both
+        // JASSUB and the caption menu's default marker directly — waiting on
+        // the render-order-dependent memos left both stuck on the previous
+        // title's (or the pre-fetch, pre-title empty) track id.
+        const renderableSubs = data.subtitles.filter((t) => !t.requiresBurnIn);
+        const subtitleDefault =
+          prefs.subtitle === null
+            ? null
+            : ((matchSubtitlePref(renderableSubs, prefs.subtitle) ?? renderableSubs[0])?.id ?? null);
+        setSubtitleSelection(subtitleDefault);
+        setMountDefaultId(subtitleDefault);
       })
       .catch(() => {});
     api

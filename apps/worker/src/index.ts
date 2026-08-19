@@ -178,7 +178,15 @@ const metadataQueues: Record<string, Queue<MetadataJobData>> = {
 };
 
 async function enqueueScan(libraryId: string): Promise<void> {
-  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId: scanJobId(libraryId) });
+  const jobId = scanJobId(libraryId);
+  // The deterministic jobId (== libraryId) makes `add` return an existing job
+  // without enqueueing a new one. removeOnComplete/removeOnFail only clear
+  // terminal (completed/failed) jobs; a job stuck in a live state (waiting /
+  // active / stalled — a crashed worker, an interrupted scan) would otherwise
+  // block every later scan of this library forever. Drop it first so a rescan
+  // (manual or reconcile) always enqueues a genuinely fresh job.
+  await scanQueue.remove(jobId).catch(() => {});
+  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId });
 }
 
 // Backpressure : one add per file as the scan walks it, never a

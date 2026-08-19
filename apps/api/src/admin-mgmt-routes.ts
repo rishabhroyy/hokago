@@ -41,9 +41,20 @@ const scanQueue = new Queue(QUEUE_NAMES.SCAN, {
   defaultJobOptions: { removeOnComplete: true, removeOnFail: true },
 });
 
-/** enqueueScan with the worker's deterministic jobId — re-enqueuing is a no-op. */
+/**
+ * enqueueScan with the worker's deterministic jobId. The jobId is the
+ * libraryId, so a *kept* job — in any state — makes `add` return the existing
+ * job instead of enqueueing a fresh one (a silent no-op). removeOnComplete /
+ * removeOnFail drop terminal (completed/failed) jobs, but a job stuck in a
+ * live state (waiting/active/stalled — a crashed worker, an interrupted scan)
+ * persists forever and would block every later manual rescan *and* the boot
+ * reconciler's re-enqueue. Force a fresh scan: drop whatever job is current
+ * for the library, then enqueue anew.
+ */
 async function enqueueScan(libraryId: string): Promise<void> {
-  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId: scanJobId(libraryId) });
+  const jobId = scanJobId(libraryId);
+  await scanQueue.remove(jobId).catch(() => {});
+  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId });
 }
 
 /** /admin-api — the management backend: dashboard summary, libraries, accounts,

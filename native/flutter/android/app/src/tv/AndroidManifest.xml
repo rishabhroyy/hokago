@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- tv flavor overlay — merged onto src/main's manifest by Gradle. Adds the
+     leanback launcher entry point so the app shows up on Android TV's home
+     screen; the phone flavor keeps the regular LAUNCHER-only manifest.
+     TODO(task #9 follow-up): android:banner on the <application> needs a real
+     320x180 banner drawable — no source art available yet, launcher falls
+     back to the app icon until one is supplied. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

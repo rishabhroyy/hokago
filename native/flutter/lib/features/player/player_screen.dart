@@ -250,7 +250,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(padding: EdgeInsets.all(16), child: Text('Audio & Subtitles', style: TextStyle(color: HokagoColors.ink, fontWeight: FontWeight.w700))),
+            const Padding(padding: EdgeInsets.all(16), child: Text('Audio & Subtitles', style: HokagoText.section)),
             if (_serverAudioTracks.length > 1) ...[
               const _SheetLabel('Audio'),
               for (final t in _serverAudioTracks)
@@ -344,7 +344,7 @@ class _SheetLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-        child: Align(alignment: Alignment.centerLeft, child: Text(text, style: const TextStyle(color: HokagoColors.ink3, fontSize: 12, fontWeight: FontWeight.w700))),
+        child: Align(alignment: Alignment.centerLeft, child: Text(text.toUpperCase(), style: HokagoText.kicker.copyWith(color: HokagoColors.ink3))),
       );
 }
 

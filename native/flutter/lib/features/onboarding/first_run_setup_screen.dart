@@ -51,7 +51,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Create the admin account', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+                  Text('Create the admin account', style: HokagoText.section),
                   const SizedBox(height: 6),
                   const Text('This server has no account yet — you\'re first.', style: TextStyle(color: HokagoColors.ink2)),
                   const SizedBox(height: 24),

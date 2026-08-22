@@ -26,6 +26,33 @@ abstract final class HokagoRadii {
   static const hero = 28.0;
 }
 
+/// Same purpose-named scale as apps/web/tailwind.config.ts's fontSize block —
+/// font-display (Zen Maru Gothic) for headline-tier text, the default body
+/// font (Plus Jakarta Sans) for everything else, font-mono (JetBrains Mono)
+/// for uppercase kicker labels. Pairing verified against actual web usage
+/// (DetailView.tsx/HomeView.tsx: text-title/-section/-title-xl always ride
+/// with font-display, text-kicker always with font-mono).
+abstract final class HokagoText {
+  static const _display = 'Zen Maru Gothic';
+  static const _sans = 'Plus Jakarta Sans';
+  static const _mono = 'JetBrains Mono';
+
+  static const display = TextStyle(
+      fontFamily: _display, fontSize: 48, height: 1.04, letterSpacing: -0.72, fontWeight: FontWeight.w700, color: HokagoColors.ink);
+  static const titleXl = TextStyle(
+      fontFamily: _display, fontSize: 40, height: 1.04, letterSpacing: -0.4, fontWeight: FontWeight.w900, color: HokagoColors.ink);
+  static const title = TextStyle(
+      fontFamily: _display, fontSize: 28, height: 1.15, letterSpacing: -0.28, fontWeight: FontWeight.w700, color: HokagoColors.ink);
+  static const section = TextStyle(
+      fontFamily: _display, fontSize: 21, height: 1.2, fontWeight: FontWeight.w700, color: HokagoColors.ink);
+  static const cardTitle = TextStyle(fontFamily: _sans, fontSize: 13.5, height: 1.3, fontWeight: FontWeight.w600, color: HokagoColors.ink);
+  static const body = TextStyle(fontFamily: _sans, fontSize: 14.5, height: 1.75, color: HokagoColors.ink2);
+  static const meta = TextStyle(fontFamily: _sans, fontSize: 13, height: 1.5, color: HokagoColors.ink3);
+  static const small = TextStyle(fontFamily: _sans, fontSize: 12, height: 1.4, color: HokagoColors.ink3);
+  static const kicker = TextStyle(
+      fontFamily: _mono, fontSize: 10.5, height: 1.4, fontWeight: FontWeight.w700, letterSpacing: 1.47, color: HokagoColors.gold);
+}
+
 ThemeData buildHokagoTheme() {
   final base = ThemeData.dark(useMaterial3: true);
   final colorScheme = base.colorScheme.copyWith(
@@ -39,6 +66,7 @@ ThemeData buildHokagoTheme() {
     scaffoldBackgroundColor: HokagoColors.bg,
     colorScheme: colorScheme,
     textTheme: base.textTheme.apply(
+      fontFamily: 'Plus Jakarta Sans',
       bodyColor: HokagoColors.ink,
       displayColor: HokagoColors.ink,
     ),
@@ -47,6 +75,7 @@ ThemeData buildHokagoTheme() {
       surfaceTintColor: Colors.transparent,
       foregroundColor: HokagoColors.ink,
       elevation: 0,
+      titleTextStyle: TextStyle(fontFamily: 'Zen Maru Gothic', fontSize: 21, fontWeight: FontWeight.w700, color: HokagoColors.ink),
     ),
     cardTheme: CardThemeData(
       color: HokagoColors.card,
@@ -59,7 +88,7 @@ ThemeData buildHokagoTheme() {
         foregroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+        textStyle: const TextStyle(fontFamily: 'Plus Jakarta Sans', fontWeight: FontWeight.w600, fontSize: 15),
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(

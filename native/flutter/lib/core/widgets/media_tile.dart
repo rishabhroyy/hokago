@@ -27,14 +27,8 @@ class MediaTile extends StatelessWidget {
               child: AuthImage(url: item.posterUrl, borderRadius: BorderRadius.circular(HokagoRadii.tile)),
             ),
             const SizedBox(height: 6),
-            Text(
-              item.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: HokagoColors.ink),
-            ),
-            if (item.year != null)
-              Text('${item.year}', style: const TextStyle(fontSize: 11.5, color: HokagoColors.ink3)),
+            Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: HokagoText.cardTitle),
+            if (item.year != null) Text('${item.year}', style: HokagoText.small),
           ],
         ),
       ),
@@ -64,10 +58,10 @@ class MediaRail extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
               children: [
-                Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: HokagoColors.ink)),
+                Text(title, style: HokagoText.section),
                 if (subtitle != null) ...[
                   const SizedBox(width: 8),
-                  Text(subtitle!, style: const TextStyle(fontSize: 13, color: HokagoColors.ink3)),
+                  Text(subtitle!, style: HokagoText.meta),
                 ],
               ],
             ),

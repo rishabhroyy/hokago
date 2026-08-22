@@ -55,7 +55,7 @@ class _GridTile extends StatelessWidget {
             child: AuthImage(url: item.posterUrl, borderRadius: BorderRadius.circular(HokagoRadii.tile)),
           ),
           const SizedBox(height: 6),
-          Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: HokagoText.cardTitle),
         ],
       ),
     );

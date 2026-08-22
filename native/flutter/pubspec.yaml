@@ -30,3 +30,23 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/fonts/OFL.txt
+  fonts:
+    # Same three families as apps/web/tailwind.config.ts (display/sans/mono) —
+    # bundled as local assets (not google_fonts' runtime CDN fetch) to match
+    # the self-hosted-everything spirit of CLAUDE.md invariant #4. Sourced
+    # from the canonical OFL files in github.com/google/fonts (same upstream
+    # @fontsource/* repackages for the web build).
+    - family: Zen Maru Gothic
+      fonts:
+        - asset: assets/fonts/ZenMaruGothic-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/ZenMaruGothic-Bold.ttf
+          weight: 700
+    - family: Plus Jakarta Sans
+      fonts:
+        - asset: assets/fonts/PlusJakartaSans-Variable.ttf
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Variable.ttf

@@ -96,21 +96,18 @@ class _Hero extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    slide.label.toUpperCase(),
-                    style: const TextStyle(color: HokagoColors.gold, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.1),
-                  ),
+                  Text(slide.label.toUpperCase(), style: HokagoText.kicker),
                   const SizedBox(height: 4),
                   Text(
                     slide.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: HokagoColors.ink, fontSize: 26, fontWeight: FontWeight.w800),
+                    style: HokagoText.titleXl.copyWith(fontSize: 30),
                   ),
                   if (slide.sub != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text(slide.sub!, style: const TextStyle(color: HokagoColors.ink2, fontSize: 13)),
+                      child: Text(slide.sub!, style: HokagoText.meta),
                     ),
                 ],
               ),

@@ -44,7 +44,7 @@ class _ServerSetupScreenState extends ConsumerState<ServerSetupScreen> {
                 children: [
                   const Icon(Icons.local_movies_rounded, size: 56, color: HokagoColors.accent),
                   const SizedBox(height: 16),
-                  Text('hokago', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
+                  Text('hokago', style: HokagoText.title),
                   const SizedBox(height: 6),
                   const Text('Enter your server address to get started.', style: TextStyle(color: HokagoColors.ink2)),
                   const SizedBox(height: 24),

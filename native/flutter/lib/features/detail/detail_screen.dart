@@ -78,7 +78,7 @@ class _DetailContent extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(item.title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: HokagoColors.ink)),
+                Text(item.title, style: HokagoText.titleXl.copyWith(fontSize: 30)),
                 const SizedBox(height: 6),
                 Wrap(
                   spacing: 10,
@@ -99,7 +99,7 @@ class _DetailContent extends StatelessWidget {
                 ],
                 if (item.overview != null) ...[
                   const SizedBox(height: 18),
-                  Text(item.overview!, style: const TextStyle(color: HokagoColors.ink2, height: 1.5, fontSize: 14)),
+                  Text(item.overview!, style: HokagoText.body),
                 ],
               ],
             ),
@@ -114,7 +114,7 @@ class _DetailContent extends StatelessWidget {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Text('Movies', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: HokagoColors.ink)),
+              child: Text('Movies', style: HokagoText.section),
             ),
           ),
         if (item.movies.isNotEmpty)
@@ -132,7 +132,7 @@ class _Meta extends StatelessWidget {
   const _Meta(this.text);
   final String text;
   @override
-  Widget build(BuildContext context) => Text(text, style: const TextStyle(color: HokagoColors.ink3, fontSize: 13));
+  Widget build(BuildContext context) => Text(text, style: HokagoText.meta);
 }
 
 class _EpisodeRow extends StatelessWidget {
@@ -171,7 +171,7 @@ class _EpisodeRow extends StatelessWidget {
         episode.episodeNumber != null ? '${episode.episodeNumber}. ${episode.title}' : episode.title,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: HokagoColors.ink),
+        style: HokagoText.cardTitle,
       ),
       trailing: const Icon(Icons.play_arrow_rounded, color: HokagoColors.ink3),
     );

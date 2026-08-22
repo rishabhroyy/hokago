@@ -38,7 +38,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 children: [
                   const Icon(Icons.local_movies_rounded, size: 48, color: HokagoColors.accent),
                   const SizedBox(height: 16),
-                  Text('Welcome back', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+                  Text('Welcome back', style: HokagoText.section),
                   const SizedBox(height: 20),
                   TextField(controller: _username, decoration: const InputDecoration(labelText: 'Username'), onSubmitted: (_) => _submit()),
                   const SizedBox(height: 12),

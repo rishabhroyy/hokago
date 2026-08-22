@@ -1,7 +1,8 @@
-# hokago — native clients: on every v* tag, build the webview shells
-# (macOS/Windows/Linux via Tauri, iOS via XcodeGen, Android phone+TV via
-# Gradle) and attach them to a GitHub release. release.yml publishes the
-# server image to GHCR; this workflow is the client delivery pipeline.
+# hokago — native clients: on every v* tag, build the desktop webview shell
+# (macOS/Windows/Linux via Tauri) and the native mobile/TV app (iOS + Android
+# phone/TV via Flutter, native/flutter) and attach them to a GitHub release.
+# release.yml publishes the server image to GHCR; this workflow is the client
+# delivery pipeline.
 #
 #   git tag v0.3.0 && git push origin v0.3.0
 #
@@ -12,9 +13,10 @@
 # create` again — that was the split into multiple drafts.
 #
 # Version plumbing: each job strips the leading "v" off the tag and bakes it
-# into the app version (Cargo.toml/tauri.conf.json for Tauri, project.yml for
-# XcodeGen, -PappVersion* for Gradle). The web app reads it back via
-# window.hokagoNative.appVersion and gates on MIN_NATIVE_VERSION.
+# into the app version (Cargo.toml/tauri.conf.json for Tauri, --build-name/
+# --build-number for the Flutter iOS/Android builds). The web app reads its
+# own copy back via window.hokagoNative.appVersion and gates on
+# MIN_NATIVE_VERSION — the Flutter app reads PackageInfo the same way.
 
 name: native
 
@@ -222,51 +224,31 @@ jobs:
       APP_VERSION: ${{ needs.versions.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: subosito/flutter-action@v2
         with:
-          version: 11.13.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Build web SPA (offline bundle)
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter @hokago/db generate
-          pnpm --filter @hokago/contract generate
-          pnpm --filter @hokago/fonts build
-          pnpm -r build
-          rm -rf native/ios/web-dist
-          mkdir -p native/ios/web-dist
-          cp -R apps/web/dist/. native/ios/web-dist/
-      - name: Bake version
-        run: |
-          sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: \"${APP_VERSION}\"/" native/ios/project.yml
-      - name: Generate project
-        working-directory: native/ios
-        run: xcodegen generate
+          channel: stable
+      - name: Install dependencies
+        working-directory: native/flutter
+        run: flutter pub get
       - name: Build simulator app
-        working-directory: native/ios
+        working-directory: native/flutter
         run: |
-          xcodebuild -project hokago.xcodeproj -scheme hokago -configuration Release \
-            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO build
-          ditto -ck --rsrc --sequesterRsrc build/Build/Products/Release-iphonesimulator/hokago.app \
+          flutter build ios --release --simulator \
+            --build-name="$APP_VERSION" --build-number="${{ github.run_number }}"
+          ditto -ck --rsrc --sequesterRsrc build/ios/iphonesimulator/Runner.app \
             "hokago-${APP_VERSION}-ios-simulator.zip"
-      - name: Build device IPA (unsigned — Sideloadly re-signs with your Apple ID)
-        working-directory: native/ios
+      - name: Build device app (unsigned — Sideloadly re-signs with your Apple ID)
+        working-directory: native/flutter
         run: |
-          xcodebuild -project hokago.xcodeproj -scheme hokago -configuration Release \
-            -destination 'generic/platform=iOS' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO build
+          flutter build ios --release --no-codesign \
+            --build-name="$APP_VERSION" --build-number="${{ github.run_number }}"
           rm -rf Payload
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/hokago.app Payload/
+          cp -R build/ios/iphoneos/Runner.app Payload/
           zip -qr "hokago-${APP_VERSION}-ios-sideload.ipa" Payload
           rm -rf Payload
       - name: Upload simulator app + sideload IPA
-        working-directory: native/ios
+        working-directory: native/flutter
         run: |
           gh release upload "$TAG" \
             "hokago-${APP_VERSION}-ios-simulator.zip" \
@@ -283,29 +265,13 @@ jobs:
       APP_VERSION: ${{ needs.versions.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: subosito/flutter-action@v2
         with:
-          version: 11.13.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+          channel: stable
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.14"
-      - name: Build web SPA (offline bundle)
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter @hokago/db generate
-          pnpm --filter @hokago/contract generate
-          pnpm --filter @hokago/fonts build
-          pnpm -r build
-          rm -rf native/android/app/src/main/assets/web-dist
-          mkdir -p native/android/app/src/main/assets/web-dist
-          cp -R apps/web/dist/. native/android/app/src/main/assets/web-dist/
       - name: Prepare release keystore
         shell: bash
         run: |
@@ -313,29 +279,37 @@ jobs:
             echo "::error::Repo secrets are not configured. Set ANDROID_KEYSTORE_BASE64 (base64 of the .keystore file), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD — see docs/native-clients.md § Android signing."
             exit 1
           fi
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > native/android/app/ci-release.keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > native/flutter/android/app/ci-release.keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      - name: Install dependencies
+        working-directory: native/flutter
+        run: flutter pub get
       - name: Build APKs
-        working-directory: native/android
+        working-directory: native/flutter
         env:
-          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/native/android/app/ci-release.keystore
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/native/flutter/android/app/ci-release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           # run_number is monotonic per-repo — a stable, ever-increasing
           # versionCode so upgrades always install over older builds.
-          gradle -PappVersionName="$APP_VERSION" -PappVersionCode="${{ github.run_number }}" assemblePhoneRelease assembleTvRelease
+          flutter build apk --release --flavor phone \
+            --build-name="$APP_VERSION" --build-number="${{ github.run_number }}"
+          flutter build apk --release --flavor tv \
+            --build-name="$APP_VERSION" --build-number="${{ github.run_number }}"
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-phone-release.apk "dist/hokago-${APP_VERSION}-android-phone.apk"
+          cp build/app/outputs/flutter-apk/app-tv-release.apk "dist/hokago-${APP_VERSION}-android-tv.apk"
       - name: Upload APKs
         shell: bash
         run: |
-          ls -la app/build/outputs/apk/phone/release/ app/build/outputs/apk/tv/release/
           gh release upload "$TAG" \
-            app/build/outputs/apk/phone/release/*.apk \
-            app/build/outputs/apk/tv/release/*.apk \
+            dist/hokago-${APP_VERSION}-android-phone.apk \
+            dist/hokago-${APP_VERSION}-android-tv.apk \
             --clobber
-        working-directory: native/android
+        working-directory: native/flutter
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.versions.outputs.tag }}

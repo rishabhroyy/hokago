@@ -55,7 +55,7 @@ class _ZoomOpenOverlay extends StatefulWidget {
   State<_ZoomOpenOverlay> createState() => _ZoomOpenOverlayState();
 }
 
-class _ZoomOpenOverlayState extends State<_ZoomOpenOverlay> with SingleTickerProviderStateMixin {
+class _ZoomOpenOverlayState extends State<_ZoomOpenOverlay> with TickerProviderStateMixin {
   late final AnimationController _grow = AnimationController(vsync: this, duration: const Duration(milliseconds: 340));
   late final AnimationController _flash = AnimationController(vsync: this, duration: const Duration(milliseconds: 240));
   late final Animation<Rect?> _rect = RectTween(begin: widget.startRect, end: widget.endRect)

@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/models/browse.dart';
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/auth_image.dart';
+import '../../core/widgets/media_tile.dart';
 
 /// Mirrors browse-api.ts's fetchSearchIndex: every top-level item across
 /// every library, fetched once and filtered client-side (no server search
@@ -31,38 +31,61 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     final index = ref.watch(searchIndexProvider);
     return Scaffold(
-      appBar: AppBar(
-        title: TextField(
-          controller: _controller,
-          autofocus: false,
-          decoration: const InputDecoration(hintText: 'Search your library', border: InputBorder.none),
-          onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: TextField(
+                controller: _controller,
+                autofocus: true,
+                textInputAction: TextInputAction.search,
+                decoration: const InputDecoration(
+                  hintText: 'Search your library',
+                  prefixIcon: Icon(Icons.search_rounded, color: HokagoColors.ink3),
+                ),
+                onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+              ),
+            ),
+            Expanded(
+              child: index.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => Center(child: Text('$e', style: HokagoText.meta)),
+                data: (items) {
+                  if (_query.isEmpty) {
+                    return Center(child: Text('Search titles across every library', style: HokagoText.meta));
+                  }
+                  // Rank: prefix matches first, then containment.
+                  final prefix = <MediaCard>[], rest = <MediaCard>[];
+                  for (final item in items) {
+                    final t = item.title.toLowerCase();
+                    if (t.startsWith(_query)) {
+                      prefix.add(item);
+                    } else if (t.contains(_query)) {
+                      rest.add(item);
+                    }
+                  }
+                  final results = [...prefix, ...rest];
+                  if (results.isEmpty) {
+                    return Center(child: Text('No matches', style: HokagoText.meta));
+                  }
+                  return GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 150,
+                      mainAxisSpacing: 20,
+                      crossAxisSpacing: 14,
+                      childAspectRatio: 0.6,
+                    ),
+                    itemCount: results.length,
+                    itemBuilder: (_, i) => MediaTile(item: results[i], onTap: () => context.push('/title/${results[i].id}')),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-      ),
-      body: index.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e', style: const TextStyle(color: HokagoColors.ink2))),
-        data: (items) {
-          final results = _query.isEmpty ? const <MediaCard>[] : items.where((i) => i.title.toLowerCase().contains(_query)).toList();
-          if (_query.isEmpty) {
-            return const Center(child: Text('Search titles across every library', style: TextStyle(color: HokagoColors.ink3)));
-          }
-          if (results.isEmpty) {
-            return const Center(child: Text('No matches', style: TextStyle(color: HokagoColors.ink3)));
-          }
-          return ListView.builder(
-            itemCount: results.length,
-            itemBuilder: (_, i) {
-              final item = results[i];
-              return ListTile(
-                leading: SizedBox(width: 44, height: 66, child: AuthImage(url: item.posterUrl, borderRadius: BorderRadius.circular(6))),
-                title: Text(item.title, style: const TextStyle(color: HokagoColors.ink)),
-                subtitle: item.year != null ? Text('${item.year}', style: const TextStyle(color: HokagoColors.ink3)) : null,
-                onTap: () => context.push('/title/${item.id}'),
-              );
-            },
-          );
-        },
       ),
     );
   }

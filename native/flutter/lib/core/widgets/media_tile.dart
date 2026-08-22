@@ -11,21 +11,22 @@ import 'auth_image.dart';
 /// style meta line below the bold title. This — not a plain rounded image —
 /// is hokago's actual card language.
 class MediaTile extends StatelessWidget {
-  const MediaTile({super.key, required this.item, required this.onTap, this.width = 140, this.subLabel});
+  const MediaTile({super.key, required this.item, required this.onTap, this.width, this.subLabel});
 
   final MediaCard item;
   final VoidCallback onTap;
-  final double width;
+  /// Forces intrinsic width — needed inside an unconstrained horizontal
+  /// ListView (MediaRail). Leave null inside a GridView, which already gives
+  /// a tight width per cell; forcing a mismatched SizedBox there overflows.
+  final double? width;
   final String? subLabel;
 
   @override
   Widget build(BuildContext context) {
     final hue = hueFor(item.id);
-    return SizedBox(
-      width: width,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Column(
+    final column = GestureDetector(
+      onTap: onTap,
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DecoratedBox(
@@ -66,8 +67,8 @@ class MediaTile extends StatelessWidget {
               ),
           ],
         ),
-      ),
     );
+    return width != null ? SizedBox(width: width, child: column) : column;
   }
 }
 
@@ -116,7 +117,7 @@ class MediaRail extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: items.length,
               separatorBuilder: (_, __) => const SizedBox(width: 14),
-              itemBuilder: (_, i) => MediaTile(item: items[i], onTap: () => onTapItem(items[i])),
+              itemBuilder: (_, i) => MediaTile(item: items[i], width: 140, onTap: () => onTapItem(items[i])),
             ),
           ),
         ],

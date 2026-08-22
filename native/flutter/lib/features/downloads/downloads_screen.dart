@@ -4,11 +4,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/downloads/offline_manifest.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/auth_image.dart';
+import '../../core/widgets/hokago_panel.dart';
 
 /// The on-device offline library — mirrors apps/web/src/views/OfflineView.tsx.
 /// Ground truth is the filesystem (reconcile() drops entries whose file
 /// vanished), not the server's download row.
 final offlineEntriesProvider = FutureProvider.autoDispose((ref) => OfflineManifest.instance.reconcile());
+
+String _fmtBytes(int n) {
+  if (n < 1024) return '$n B';
+  if (n < 1024 * 1024) return '${(n / 1024).toStringAsFixed(0)} KB';
+  if (n < 1024 * 1024 * 1024) return '${(n / 1024 / 1024).toStringAsFixed(1)} MB';
+  return '${(n / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+}
 
 class DownloadsScreen extends ConsumerWidget {
   const DownloadsScreen({super.key});
@@ -29,39 +37,60 @@ class DownloadsScreen extends ConsumerWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.download_outlined, color: HokagoColors.ink3, size: 40),
-                    const SizedBox(height: 12),
-                    Text('Nothing downloaded yet', style: HokagoText.body),
-                    const SizedBox(height: 4),
-                    Text('Save an episode or movie from its detail page to watch it offline.',
-                        textAlign: TextAlign.center, style: HokagoText.meta),
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(color: HokagoColors.paper2, borderRadius: BorderRadius.circular(18), border: Border.all(color: HokagoColors.line)),
+                      child: const Icon(Icons.wifi_off_rounded, color: HokagoColors.wiiDeep, size: 24),
+                    ),
+                    const SizedBox(height: 16),
+                    Text('Nothing saved yet', style: HokagoText.section),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Hit the download button on any movie or episode while online — it lands here and plays even with no server reachable.',
+                      textAlign: TextAlign.center,
+                      style: HokagoText.body,
+                    ),
                   ],
                 ),
               ),
             );
           }
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
             itemCount: items.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (_, i) {
               final e = items[i];
-              return ListTile(
-                leading: SizedBox(
-                  width: 48,
-                  height: 68,
-                  child: AuthImage(url: e.posterUrl, borderRadius: BorderRadius.circular(8)),
-                ),
-                title: Text(e.title, style: HokagoText.cardTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  e.subtitle ?? '${(e.sizeBytes / (1024 * 1024)).toStringAsFixed(0)} MB',
-                  style: HokagoText.meta,
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, color: HokagoColors.ink3),
-                  onPressed: () async {
-                    await OfflineManifest.instance.remove(e.downloadId);
-                    ref.invalidate(offlineEntriesProvider);
-                  },
+              return HokagoPanel(
+                borderRadius: 22,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 48,
+                      height: 68,
+                      child: ClipRRect(borderRadius: BorderRadius.circular(10), child: AuthImage(url: e.posterUrl)),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(e.title, style: HokagoText.cardTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 2),
+                          Text(e.subtitle ?? _fmtBytes(e.sizeBytes), style: HokagoText.meta),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline_rounded, color: HokagoColors.ink3),
+                      onPressed: () async {
+                        await OfflineManifest.instance.remove(e.downloadId);
+                        ref.invalidate(offlineEntriesProvider);
+                      },
+                    ),
+                  ],
                 ),
               );
             },

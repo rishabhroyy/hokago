@@ -10,6 +10,7 @@ import '../../features/onboarding/first_run_setup_screen.dart';
 import '../../features/onboarding/server_setup_screen.dart';
 import '../../features/player/player_screen.dart';
 import '../../features/prefs/prefs_screen.dart';
+import '../../features/profiles/profile_picker_screen.dart';
 import '../../features/search/search_screen.dart';
 import '../../features/downloads/downloads_screen.dart';
 import '../../features/shell/app_shell.dart';
@@ -58,8 +59,10 @@ GoRouter buildAppRouter(Ref ref) {
           return path == '/setup' ? null : '/setup';
         case SessionStatus.needsLogin:
           return path == '/login' ? null : '/login';
+        case SessionStatus.needsProfile:
+          return path == '/pick-profile' ? null : '/pick-profile';
         case SessionStatus.authenticated:
-          const gates = {'/setup-server', '/setup', '/login'};
+          const gates = {'/setup-server', '/setup', '/login', '/pick-profile'};
           return gates.contains(path) ? '/' : null;
       }
     },
@@ -67,6 +70,7 @@ GoRouter buildAppRouter(Ref ref) {
       GoRoute(path: '/setup-server', pageBuilder: (_, state) => _slidePage(const ServerSetupScreen(), state)),
       GoRoute(path: '/setup', pageBuilder: (_, state) => _slidePage(const FirstRunSetupScreen(), state)),
       GoRoute(path: '/login', pageBuilder: (_, state) => _slidePage(const LoginScreen(), state)),
+      GoRoute(path: '/pick-profile', pageBuilder: (_, state) => _slidePage(const ProfilePickerScreen(), state)),
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [

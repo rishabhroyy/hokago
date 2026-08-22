@@ -206,4 +206,9 @@ class HokagoApi {
     final res = await _client.dio.get('/auth/devices');
     return (res.data as List).map((e) => DeviceSummary.fromJson(e as Map<String, dynamic>)).toList();
   }
+
+  /// Revokes every session bound to the device (may be this install).
+  Future<void> deleteDevice(String id) async {
+    await _client.dio.delete('/auth/devices/$id');
+  }
 }

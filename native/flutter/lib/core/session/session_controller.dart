@@ -104,21 +104,41 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
+  /// One profile: auto-select it (matches the web's getPrimaryProfile — no
+  /// picker needed when there's nothing to pick). Multiple: land on the
+  /// picker (needsProfile), same as the web's account-switcher intent, just
+  /// surfaced once up front instead of a persistent switcher affordance.
   Future<void> _resolvePrimaryProfile() async {
     final token = await TokenStore.instance.accessToken;
     try {
       final profiles = await api.profiles();
-      final primary = profiles.isNotEmpty ? profiles.first : null;
-      state = state.copyWith(
-        status: SessionStatus.authenticated,
-        profileId: primary?.id,
-        profileName: primary?.name,
-        accessToken: token,
-      );
+      final options = profiles.map((p) => ProfileOption(id: p.id, name: p.name)).toList();
+      if (options.length <= 1) {
+        final only = options.isNotEmpty ? options.first : null;
+        state = state.copyWith(
+          status: SessionStatus.authenticated,
+          profileId: only?.id,
+          profileName: only?.name,
+          accessToken: token,
+          profiles: options,
+        );
+      } else {
+        state = state.copyWith(status: SessionStatus.needsProfile, accessToken: token, profiles: options);
+      }
     } catch (_) {
       state = state.copyWith(status: SessionStatus.authenticated, accessToken: token);
     }
     _startTokenWarmth();
+  }
+
+  void selectProfile(ProfileOption profile) {
+    state = state.copyWith(status: SessionStatus.authenticated, profileId: profile.id, profileName: profile.name);
+  }
+
+  /// Prefs' "switch profile" — drops the active selection and returns to
+  /// the picker without a full re-login.
+  void switchProfile() {
+    if (state.profiles.length > 1) state = state.clearProfile();
   }
 
   Future<void> logout() async {
@@ -132,7 +152,10 @@ class SessionController extends StateNotifier<SessionState> {
     }
     await TokenStore.instance.clearSession();
     _warmthTimer?.cancel();
-    state = state.copyWith(status: SessionStatus.needsLogin, profileId: null, profileName: null);
+    // A fresh SessionState, not copyWith — copyWith's `x ?? this.x` pattern
+    // can't express "clear this field", so passing profileId/profileName as
+    // null there would silently keep the old values.
+    state = SessionState(status: SessionStatus.needsLogin, serverUrl: state.serverUrl);
   }
 
   /// "Change server" — back to the setup screen, keeping no session state.

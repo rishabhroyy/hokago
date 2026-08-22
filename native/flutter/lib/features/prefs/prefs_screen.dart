@@ -6,11 +6,11 @@ import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/theme_mode_controller.dart';
 import '../../core/widgets/hokago_panel.dart';
+import '../devices/device_management_screen.dart';
 
 /// Mirrors apps/web/src/views/PrefsView.tsx's role — account/appearance
-/// settings. v1: appearance (light/dark, the thing Rishabh asked for first)
-/// + server/session info + sign out. Profile switching, device management,
-/// and the rest of the web's prefs surface are a follow-up.
+/// settings: appearance (light/dark), profile switching, device management,
+/// server/session info, sign out.
 class PrefsScreen extends ConsumerWidget {
   const PrefsScreen({super.key});
 
@@ -33,6 +33,32 @@ class PrefsScreen extends ConsumerWidget {
               value: isDark,
               activeThumbColor: HokagoColors.wiiDeep,
               onChanged: (v) => ref.read(themeModeProvider.notifier).setDark(v),
+            ),
+          ),
+          if (session.profiles.length > 1) ...[
+            const SizedBox(height: 24),
+            _SectionLabel('Profile'),
+            const SizedBox(height: 8),
+            HokagoPanel(
+              padding: EdgeInsets.zero,
+              child: ListTile(
+                title: Text(session.profileName ?? '—', style: HokagoText.cardTitle),
+                subtitle: Text('${session.profiles.length} profiles on this account', style: HokagoText.meta),
+                trailing: Icon(Icons.swap_horiz_rounded, color: HokagoColors.ink3),
+                onTap: () => ref.read(sessionProvider.notifier).switchProfile(),
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          _SectionLabel('Devices'),
+          const SizedBox(height: 8),
+          HokagoPanel(
+            padding: EdgeInsets.zero,
+            child: ListTile(
+              title: Text('Manage devices', style: HokagoText.cardTitle),
+              subtitle: Text('See and revoke devices signed into this account', style: HokagoText.meta),
+              trailing: Icon(Icons.chevron_right_rounded, color: HokagoColors.ink3),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DeviceManagementScreen())),
             ),
           ),
           const SizedBox(height: 24),

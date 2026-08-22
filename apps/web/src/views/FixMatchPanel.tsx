@@ -102,9 +102,10 @@ export function FixMatchPanel({
     setBusy(provider);
     api
       .DELETE("/media-items/{id}/metadata-match", {
-        params: { path: { id: itemId } },
-        body: { provider: provider as Candidate["provider"] },
-      })
+        params: { path: { id: itemId }, query: { provider } as unknown as Record<string, never> },
+        // body fallback for older server, query is primary (DELETE bodies are often dropped)
+        body: { provider: provider as Candidate["provider"] } as unknown as Record<string, never>,
+      } as unknown as Parameters<typeof api.DELETE>[1])
       .then(({ data, error }) => {
         if (error || !data) throw new Error("unpin failed");
         onPinned();

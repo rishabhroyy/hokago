@@ -5,6 +5,7 @@ import '../../core/downloads/offline_manifest.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/auth_image.dart';
 import '../../core/widgets/hokago_panel.dart';
+import 'offline_watch_screen.dart';
 
 /// The on-device offline library — mirrors apps/web/src/views/OfflineView.tsx.
 /// Ground truth is the filesystem (reconcile() drops entries whose file
@@ -62,35 +63,42 @@ class DownloadsScreen extends ConsumerWidget {
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (_, i) {
               final e = items[i];
-              return HokagoPanel(
-                borderRadius: 22,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 48,
-                      height: 68,
-                      child: ClipRRect(borderRadius: BorderRadius.circular(10), child: AuthImage(url: e.posterUrl)),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(e.title, style: HokagoText.cardTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          const SizedBox(height: 2),
-                          Text(e.subtitle ?? _fmtBytes(e.sizeBytes), style: HokagoText.meta),
-                        ],
+              return GestureDetector(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => OfflineWatchScreen(localPath: e.localPath, title: e.title)),
+                ),
+                child: HokagoPanel(
+                  borderRadius: 22,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 48,
+                        height: 68,
+                        child: ClipRRect(borderRadius: BorderRadius.circular(10), child: AuthImage(url: e.posterUrl)),
                       ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.delete_outline_rounded, color: HokagoColors.ink3),
-                      onPressed: () async {
-                        await OfflineManifest.instance.remove(e.downloadId);
-                        ref.invalidate(offlineEntriesProvider);
-                      },
-                    ),
-                  ],
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(e.title, style: HokagoText.cardTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: 2),
+                            Text(e.subtitle ?? _fmtBytes(e.sizeBytes), style: HokagoText.meta),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.play_circle_outline_rounded, color: HokagoColors.wiiDeep),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: Icon(Icons.delete_outline_rounded, color: HokagoColors.ink3),
+                        onPressed: () async {
+                          await OfflineManifest.instance.remove(e.downloadId);
+                          ref.invalidate(offlineEntriesProvider);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               );
             },

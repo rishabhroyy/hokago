@@ -41,7 +41,21 @@ const MP4_MOV_CONTAINER = "mov,mp4,m4a,3gp,3g2,mj2";
 // branch parents every file as a MOVIE child of the series — the Mugen Train
 // shape this folder exists for. (Extras/Specials/OVAs are a real season 0 via
 // parseSeasonDirName, not movie containers — intentionally untouched.)
-const NON_SEASON_MOVIE_DIRS = new Set(["movies", "movie", "films", "film"]);
+// Evangelion's "Rebuild" folder is the same shape: 4 movies with leading
+// catalogue numbers ("1. Evangelion - 1.0 ... (2007).mkv") that the fallback
+// would otherwise treat as S01E01-03.
+const NON_SEASON_MOVIE_DIRS = new Set([
+  "movies",
+  "movie",
+  "films",
+  "film",
+  "rebuild",
+  "rebuilds",
+  "movieset",
+  "theatrical",
+  "theater",
+  "theatre",
+]);
 
 /**
  * Directory-hierarchy heuristic ("group first, match second"):
@@ -62,6 +76,12 @@ const NON_SEASON_MOVIE_DIRS = new Set(["movies", "movie", "films", "film"]);
 function isSeasonLikeDirectory(dir: string, files: DiscoveredFile[], profile: ContentProfile): boolean {
   if (NON_SEASON_MOVIE_DIRS.has(path.basename(dir).toLowerCase())) return false;
   const parsed = files.map((f) => parseFilename(path.basename(f.path), profile));
+  // Year-bearing files are almost always movies, not episodes — a folder of
+  // "1. Movie (2007).mkv" entries would otherwise be majority episode-like
+  // via the leading-number fallback and become a fake season. Require that a
+  // season-like folder not be dominated by year-carrying files.
+  const yearBearing = parsed.filter((p) => p.year !== null).length;
+  if (yearBearing / files.length >= 0.5) return false;
   const seasoned = parsed.filter((p) => p.episode !== null).length;
   return seasoned / files.length >= 0.5;
 }
@@ -402,21 +422,45 @@ async function ingestLeafItem(
     mediaItemId = existingFile.mediaItemId;
     oldParentId = existingFile.mediaItem.parentId;
   } else {
-    const item = await db.mediaItem.create({
-      data: {
-        libraryId,
-        parentId,
-        kind,
-        title,
-        sortTitle: title.toLowerCase(),
-        year: parsed.year,
-        seasonNumber,
-        episodeNumber,
-        runtimeMs: probe?.durationMs ?? null,
-      },
-    });
-    mediaItemId = item.id;
-    huskItemId = item.id;
+    // Deduplicate episode numbers within the same season (Evangelion's
+    // TV Series has Director's Cut duplicates: E21 Director's Cut and E21
+    // regular share S01E21). Without this, the scan creates two
+    // "Episode 21" rows. Reuse the existing episode row and attach this
+    // file as an additional version under the same item (MediaItem can
+    // hold multiple MediaFiles).
+    let dupId: string | null = null;
+    let dupParentId: string | null = null;
+    if (kind === "EPISODE" && episodeNumber !== null && parentId) {
+      const dup = await db.mediaItem.findFirst({
+        where: { parentId, kind: "EPISODE", seasonNumber, episodeNumber },
+        select: { id: true, parentId: true },
+      });
+      if (dup) {
+        dupId = dup.id;
+        dupParentId = dup.parentId;
+      }
+    }
+    if (dupId) {
+      mediaItemId = dupId;
+      oldParentId = dupParentId;
+      huskItemId = null;
+    } else {
+      const item = await db.mediaItem.create({
+        data: {
+          libraryId,
+          parentId,
+          kind,
+          title,
+          sortTitle: title.toLowerCase(),
+          year: parsed.year,
+          seasonNumber,
+          episodeNumber,
+          runtimeMs: probe?.durationMs ?? null,
+        },
+      });
+      mediaItemId = item.id;
+      huskItemId = item.id;
+    }
   }
 
   // Immutable snapshot — existingFile may be replaced by the twin steal

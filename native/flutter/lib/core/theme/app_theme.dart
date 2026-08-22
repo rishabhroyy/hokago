@@ -252,33 +252,5 @@ ThemeData buildHokagoTheme() {
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(color: HokagoColors.wii),
     dividerTheme: DividerThemeData(color: HokagoColors.line, space: 1),
-    // The web is an SPA — route changes are instant, no push/crossfade
-    // animation at all. A crossfade (tried first) still composites the old
-    // and new page's transparent-Scaffold content over the shared wallpaper
-    // simultaneously for the transition's duration, which read as visible
-    // artifacting/mixing between the two pages, not a clean fade — an
-    // instant swap (no animation, matching the web exactly) removes the
-    // compositing window entirely instead of tuning it.
-    pageTransitionsTheme: const PageTransitionsTheme(
-      builders: {
-        TargetPlatform.iOS: _InstantPageTransitionsBuilder(),
-        TargetPlatform.android: _InstantPageTransitionsBuilder(),
-      },
-    ),
   );
-}
-
-class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
-  const _InstantPageTransitionsBuilder();
-
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    return child;
-  }
 }

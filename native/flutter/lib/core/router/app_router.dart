@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +16,27 @@ import '../../features/shell/app_shell.dart';
 import '../session/session_controller.dart';
 import '../session/session_state.dart';
 import 'session_refresh_notifier.dart';
+
+/// A pure geometric slide — position only, never opacity. An opacity-based
+/// crossfade (tried first) blends the old and new page's content together
+/// for the whole transition, which reads as "morphing" once every Scaffold
+/// is transparent (to show the shared wallpaper) — at any instant during a
+/// slide, each pixel shows only ONE page fully opaque, never a blend, so
+/// there's nothing to morph. Subtle and quick (220ms), not the iOS default
+/// (which also draws a drop shadow under the incoming page).
+CustomTransitionPage<void> _slidePage(Widget child, GoRouterState state) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: const Duration(milliseconds: 220),
+    reverseTransitionDuration: const Duration(milliseconds: 220),
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final offset = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+      final fadeIn = CurvedAnimation(parent: animation, curve: const Interval(0.0, 0.6, curve: Curves.easeOut));
+      return SlideTransition(position: offset, child: FadeTransition(opacity: fadeIn, child: child));
+    },
+  );
+}
 
 /// Paths mirror apps/web/src/router.tsx 1:1 (/, /library/:id, /title/:id,
 /// /watch/:mediaFileId, /search, /downloads) so a deep link or a habit
@@ -42,25 +64,31 @@ GoRouter buildAppRouter(Ref ref) {
       }
     },
     routes: [
-      GoRoute(path: '/setup-server', builder: (_, __) => const ServerSetupScreen()),
-      GoRoute(path: '/setup', builder: (_, __) => const FirstRunSetupScreen()),
-      GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(path: '/setup-server', pageBuilder: (_, state) => _slidePage(const ServerSetupScreen(), state)),
+      GoRoute(path: '/setup', pageBuilder: (_, state) => _slidePage(const FirstRunSetupScreen(), state)),
+      GoRoute(path: '/login', pageBuilder: (_, state) => _slidePage(const LoginScreen(), state)),
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [
-          GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
-          GoRoute(path: '/library/:id', builder: (_, state) => LibraryScreen(libraryId: state.pathParameters['id']!)),
-          GoRoute(path: '/search', builder: (_, __) => const SearchScreen()),
-          GoRoute(path: '/downloads', builder: (_, __) => const DownloadsScreen()),
-          GoRoute(path: '/prefs', builder: (_, __) => const PrefsScreen()),
+          GoRoute(path: '/', pageBuilder: (_, state) => _slidePage(const HomeScreen(), state)),
+          GoRoute(
+            path: '/library/:id',
+            pageBuilder: (_, state) => _slidePage(LibraryScreen(libraryId: state.pathParameters['id']!), state),
+          ),
+          GoRoute(path: '/search', pageBuilder: (_, state) => _slidePage(const SearchScreen(), state)),
+          GoRoute(path: '/downloads', pageBuilder: (_, state) => _slidePage(const DownloadsScreen(), state)),
+          GoRoute(path: '/prefs', pageBuilder: (_, state) => _slidePage(const PrefsScreen(), state)),
         ],
       ),
-      GoRoute(path: '/title/:id', builder: (_, state) => DetailScreen(itemId: state.pathParameters['id']!)),
+      GoRoute(path: '/title/:id', pageBuilder: (_, state) => _slidePage(DetailScreen(itemId: state.pathParameters['id']!), state)),
       GoRoute(
         path: '/watch/:mediaFileId',
-        builder: (_, state) => PlayerScreen(
-          mediaFileId: state.pathParameters['mediaFileId']!,
-          mediaItemId: state.uri.queryParameters['mediaItemId']!,
+        pageBuilder: (_, state) => _slidePage(
+          PlayerScreen(
+            mediaFileId: state.pathParameters['mediaFileId']!,
+            mediaItemId: state.uri.queryParameters['mediaItemId']!,
+          ),
+          state,
         ),
       ),
     ],

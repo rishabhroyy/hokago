@@ -1,28 +1,28 @@
 import 'package:flutter/material.dart';
 
-/// hokago design tokens, ported directly from apps/web/src/app.css's `.dark`
-/// scope + component classes (.btn-primary, .panel, .input) — Rishabh wants
-/// the native app to look as close as possible to the webui, not a generic
-/// native reinterpretation, just laid out for mobile/TV instead of desktop
-/// breakpoints. Values below are copy-pasted from the CSS, not eyeballed.
+/// hokago design tokens, ported directly from apps/web/src/app.css's `:root`
+/// (light — the web's actual default theme, not `.dark`) + component classes
+/// (.btn-primary, .panel, .input). Rishabh's call: light is "cute like Wii,"
+/// dark read as muted/moody on mobile — matches the web's own default
+/// (`.dark` is an opt-in toggle there, not the primary look).
 abstract final class HokagoColors {
-  static const bg = Color(0xFF171410);
-  static const paper = Color(0xFF26221D);
-  static const paper2 = Color(0xFF2E2A24);
-  static const card = Color(0xFF2B2722);
-  static const ink = Color(0xFFF1EADB);
-  static const ink2 = Color(0xFFBCB2A2);
-  static const ink3 = Color(0xFF857D6F);
-  static const line = Color(0xFF3A352E);
-  static const line2 = Color(0xFF4A443B);
-  static const accent = Color(0xFFF07B63);
-  static const accent2 = Color(0xFFF49B87);
-  static const gold = Color(0xFFEDB866);
-  static const wii = Color(0xFF63C3E6);
-  static const wii2 = Color(0xFFA5E7F8);
-  static const wiiDeep = Color(0xFF3FAED6);
-  static const wiiInk = Color(0xFF6ECFF2);
-  // .wii-btn / .btn-primary gradient (same in light+dark — "the color centerpiece").
+  static const bg = Color(0xFFF5EFE4);
+  static const paper = Color(0xFFF6F0E6);
+  static const paper2 = Color(0xFFEFE7D8);
+  static const card = Color(0xFFFFFFFF);
+  static const ink = Color(0xFF35302B);
+  static const ink2 = Color(0xFF72695F);
+  static const ink3 = Color(0xFF8B8177);
+  static const line = Color(0xFFE6DDCE);
+  static const line2 = Color(0xFFD8CEBC);
+  static const accent = Color(0xFFE8664F);
+  static const accent2 = Color(0xFFF0836F);
+  static const gold = Color(0xFFE3A34C);
+  static const wii = Color(0xFF4FB8E0);
+  static const wii2 = Color(0xFF8FE0F5);
+  static const wiiDeep = Color(0xFF2E9BC4);
+  static const wiiInk = Color(0xFF177A9E);
+  // .wii-btn / .btn-primary gradient — same in light+dark, "the color centerpiece".
   static const wiiBtnTop = Color(0xFF45ADDD);
   static const wiiBtnBottom = Color(0xFF187AA5);
 }
@@ -61,21 +61,21 @@ abstract final class HokagoText {
       fontFamily: _mono, fontSize: 10.5, height: 1.4, fontWeight: FontWeight.w700, letterSpacing: 1.47, color: HokagoColors.gold);
 }
 
-/// Matches app.css's --shadow-panel (dark) exactly: inset top highlight +
-/// two-layer soft drop shadow. Used by HokagoPanel and any "floating" card.
+/// Matches app.css's light --shadow-panel: inset top highlight + two-layer
+/// soft warm drop shadow. Used by HokagoPanel and any "floating" card.
 const hokagoPanelShadow = [
-  BoxShadow(color: Color(0x0DFFFFFF), blurRadius: 0, spreadRadius: 0, offset: Offset(0, 1.5)), // inset approximated as a hairline top highlight (Flutter has no true inset shadow)
-  BoxShadow(color: Color(0x73000000), blurRadius: 6, spreadRadius: -2, offset: Offset(0, 2)),
-  BoxShadow(color: Color(0x99000000), blurRadius: 44, spreadRadius: -18, offset: Offset(0, 18)),
+  BoxShadow(color: Color(0xE6FFFFFF), blurRadius: 0, spreadRadius: 0, offset: Offset(0, 1.5)),
+  BoxShadow(color: Color(0x24785038), blurRadius: 6, spreadRadius: -2, offset: Offset(0, 2)),
+  BoxShadow(color: Color(0x59785038), blurRadius: 44, spreadRadius: -18, offset: Offset(0, 18)),
 ];
 
 ThemeData buildHokagoTheme() {
-  final base = ThemeData.dark(useMaterial3: true);
+  final base = ThemeData.light(useMaterial3: true);
   final colorScheme = base.colorScheme.copyWith(
     surface: HokagoColors.paper,
     primary: HokagoColors.accent,
     secondary: HokagoColors.wii,
-    error: const Color(0xFFE5735F),
+    error: const Color(0xFFD9634A),
     onSurface: HokagoColors.ink,
   );
   return base.copyWith(
@@ -101,8 +101,8 @@ ThemeData buildHokagoTheme() {
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(HokagoRadii.tile)),
     ),
-    // Stock ElevatedButton kept as the .btn-ghost-equivalent fallback where a
-    // WiiButton (the real .btn-primary pill) isn't wired yet.
+    // Stock ElevatedButton kept as a fallback where a WiiButton (the real
+    // .btn-primary pill) isn't wired yet.
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: HokagoColors.accent,
@@ -115,7 +115,7 @@ ThemeData buildHokagoTheme() {
     // .input: pill radius, soft paper fill, wii-blue focus ring.
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: const Color(0xFF1F1C17),
+      fillColor: const Color(0xFFFBF8F1),
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(HokagoRadii.pill),

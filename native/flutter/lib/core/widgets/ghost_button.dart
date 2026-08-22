@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// app.css's `.dark .btn-ghost` — frosted charcoal pill, secondary action
-/// (paired with WiiButton for primary). "Details" next to "Play" in the hero.
+/// app.css's `.btn-ghost` (light — the web's default theme) — glossy white
+/// frosted pill, secondary action (paired with WiiButton for primary).
+/// "Details" next to "Play" in the hero.
 class GhostButton extends StatelessWidget {
   const GhostButton({super.key, required this.onPressed, required this.child, this.icon});
   final VoidCallback? onPressed;
@@ -19,11 +20,11 @@ class GhostButton extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
         child: Material(
-          color: const Color(0xE0262219),
+          color: const Color(0xE0FFFFFF),
           child: InkWell(
             onTap: onPressed,
             child: Container(
-              decoration: BoxDecoration(border: Border.all(color: const Color(0x1AFFFFFF))),
+              decoration: BoxDecoration(border: Border.all(color: const Color(0xE6FFFFFF))),
               padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 13),
               child: Row(
                 mainAxisSize: MainAxisSize.min,

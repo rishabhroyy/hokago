@@ -154,11 +154,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl \
 RUN corepack enable
 WORKDIR /repo
 
-COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY packages ./packages
 COPY apps ./apps
 
-RUN pnpm install --frozen-lockfile=false
+# pnpm-lock.yaml wasn't copied into the image before, so a real
+# --frozen-lockfile install was impossible and every release build silently
+# resolved fresh dependency versions from each package.json's caret range —
+# unreproducible, and how a routine upstream fastify/@types patch broke the
+# v0.3.4 image build with zero code changes on our side. Copy the lockfile in
+# and install from it like every other build in this repo does.
+RUN pnpm install --frozen-lockfile
 
 # Codegen is deterministic: generated dirs are gitignored and come along in the
 # COPY above (host artifacts, e.g. the macOS query engine). prisma generate does

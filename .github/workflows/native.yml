@@ -233,7 +233,10 @@ jobs:
       - name: Build simulator app
         working-directory: native/flutter
         run: |
-          flutter build ios --release --simulator \
+          # `flutter build ios --release --simulator` hard-errors — Flutter
+          # only supports --debug for simulator builds. The device build
+          # below stays --release.
+          flutter build ios --debug --simulator \
             --build-name="$APP_VERSION" --build-number="${{ github.run_number }}"
           ditto -ck --rsrc --sequesterRsrc build/ios/iphonesimulator/Runner.app \
             "hokago-${APP_VERSION}-ios-simulator.zip"

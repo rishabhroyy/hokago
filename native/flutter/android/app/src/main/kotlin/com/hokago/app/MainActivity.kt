@@ -1,4 +1,4 @@
-package com.hokago.hokago
+package com.hokago.app
 
 import io.flutter.embedding.android.FlutterActivity
 

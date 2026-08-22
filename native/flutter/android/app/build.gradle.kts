@@ -65,6 +65,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // AGP 9's default resource shrinking wants isMinifyEnabled=true
+            // (code shrinking) to go with it — explicit false here since we
+            // don't ship this with minify on.
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("release")
         }
     }

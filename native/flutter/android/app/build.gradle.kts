@@ -6,7 +6,11 @@ plugins {
 
 android {
     namespace = "com.hokago.app"
-    compileSdk = flutter.compileSdkVersion
+    // flutter.compileSdkVersion (currently 36, the Flutter SDK's bundled
+    // default) is no longer enough — flutter_secure_storage now requires
+    // compiling against API 37. Hardcoded until the Flutter template default
+    // catches up; compileSdk is backward compatible, doesn't affect minSdk.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

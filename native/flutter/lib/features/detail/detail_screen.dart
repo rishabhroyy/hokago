@@ -40,6 +40,14 @@ class DetailScreen extends ConsumerWidget {
       }
       return;
     }
+    if (!context.mounted) return;
+    final variant = await showModalBottomSheet<_DownloadVariant>(
+      context: context,
+      backgroundColor: HokagoColors.paper,
+      builder: (_) => const _DownloadVariantSheet(),
+    );
+    if (variant == null) return; // sheet dismissed without a choice
+
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(SnackBar(content: Text('Downloading ${episode?.title ?? item.title}…')));
     try {
@@ -52,6 +60,8 @@ class DetailScreen extends ConsumerWidget {
             subtitle: episode?.episodeNumber != null ? 'Episode ${episode!.episodeNumber}' : null,
             posterUrl: item.posterUrl,
             durationMs: episode?.runtimeMs,
+            maxHeight: variant.maxHeight,
+            maxBitrateKbps: variant.maxBitrateKbps,
           );
       ref.invalidate(offlineEntriesProvider);
       messenger.showSnackBar(const SnackBar(content: Text('Saved for offline playback')));
@@ -407,4 +417,38 @@ class _Badge extends StatelessWidget {
         decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(HokagoRadii.pill)),
         child: Text(text, style: HokagoText.kicker.copyWith(color: fg, fontSize: 9.5)),
       );
+}
+
+class _DownloadVariant {
+  const _DownloadVariant({this.maxHeight, this.maxBitrateKbps});
+  final int? maxHeight;
+  final int? maxBitrateKbps;
+}
+
+/// "Original" mirrors the web's only option today (createDownload always
+/// sent `{kind: "original"}`) — the transcode variants below are new,
+/// closing the "always full quality" gap.
+class _DownloadVariantSheet extends StatelessWidget {
+  const _DownloadVariantSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget row(String label, String sub, _DownloadVariant variant) => ListTile(
+          title: Text(label, style: HokagoText.cardTitle),
+          subtitle: Text(sub, style: HokagoText.meta),
+          onTap: () => Navigator.pop(context, variant),
+        );
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(padding: const EdgeInsets.all(16), child: Text('Download quality', style: HokagoText.section)),
+          row('Original', 'Full quality, largest file', const _DownloadVariant()),
+          row('1080p', 'Re-encoded, smaller file', const _DownloadVariant(maxHeight: 1080, maxBitrateKbps: 8000)),
+          row('720p', 'Re-encoded, smaller file', const _DownloadVariant(maxHeight: 720, maxBitrateKbps: 3500)),
+          row('480p', 'Re-encoded, smallest file', const _DownloadVariant(maxHeight: 480, maxBitrateKbps: 1500)),
+        ],
+      ),
+    );
+  }
 }

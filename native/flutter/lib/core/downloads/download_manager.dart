@@ -4,6 +4,7 @@ import 'package:background_downloader/background_downloader.dart';
 
 import '../api/hokago_api.dart';
 import '../api/token_store.dart';
+import 'active_downloads.dart';
 import 'offline_manifest.dart';
 
 /// Real, OS-managed downloads — resumable, notification-driven, survives app
@@ -12,15 +13,15 @@ import 'offline_manifest.dart';
 /// apps/web/src/downloads.ts, but the actual byte transfer is native instead
 /// of a single in-webview fetch.
 class DownloadManager {
-  DownloadManager(this._api);
+  DownloadManager(this._api, this._active);
   final HokagoApi _api;
+  final ActiveDownloadsController _active;
 
   static const _pollInterval = Duration(seconds: 2);
   static const _pollTimeout = Duration(minutes: 15);
 
-  final _progress = StreamController<(String downloadId, double progress)>.broadcast();
-  Stream<(String, double)> get progress => _progress.stream;
-
+  /// [maxHeight]/[maxBitrateKbps]: request the transcode variant (smaller
+  /// file, server re-encodes). Both null: original — the raw file, copied.
   Future<void> downloadItem({
     required String mediaItemId,
     required String mediaFileId,
@@ -31,82 +32,91 @@ class DownloadManager {
     String? posterUrl,
     int? durationMs,
     List<String>? subtitleTrackIds,
+    int? maxHeight,
+    int? maxBitrateKbps,
   }) async {
     final created = await _api.createDownload(
       mediaItemId: mediaItemId,
       mediaFileId: mediaFileId,
       deviceId: deviceId,
       subtitleTrackIds: subtitleTrackIds,
+      maxHeight: maxHeight,
+      maxBitrateKbps: maxBitrateKbps,
     );
     final downloadId = created.id;
+    _active.start(downloadId, title: subtitle != null ? '$title — $subtitle' : title, posterUrl: posterUrl);
 
-    final started = DateTime.now();
-    var status = created.status;
-    while (status != 'READY' && status != 'FAILED') {
-      if (DateTime.now().difference(started) > _pollTimeout) {
-        throw TimeoutException('download $downloadId never became ready');
+    try {
+      final started = DateTime.now();
+      var status = created.status;
+      while (status != 'READY' && status != 'FAILED') {
+        if (DateTime.now().difference(started) > _pollTimeout) {
+          throw TimeoutException('download $downloadId never became ready');
+        }
+        await Future.delayed(_pollInterval);
+        final polled = await _api.downloadStatus(downloadId);
+        status = polled.status;
       }
-      await Future.delayed(_pollInterval);
-      final polled = await _api.downloadStatus(downloadId);
-      status = polled.status;
-    }
-    if (status == 'FAILED') throw Exception('server-side download failed');
+      if (status == 'FAILED') throw Exception('server-side download failed');
 
-    final manifest = await _api.downloadArtifact(downloadId);
-    final media = manifest.media;
-    if (media == null) throw Exception('download artifact has no media file');
+      final manifest = await _api.downloadArtifact(downloadId);
+      final media = manifest.media;
+      if (media == null) throw Exception('download artifact has no media file');
 
-    final access = await TokenStore.instance.accessToken;
-    final headers = access != null ? {'Authorization': 'Bearer $access'} : <String, String>{};
+      final access = await TokenStore.instance.accessToken;
+      final headers = access != null ? {'Authorization': 'Bearer $access'} : <String, String>{};
 
-    final task = DownloadTask(
-      taskId: downloadId,
-      url: _api.resolve('/downloads/$downloadId/artifact/media'),
-      filename: media.filename,
-      headers: headers,
-      baseDirectory: BaseDirectory.applicationDocuments,
-      directory: 'hokago',
-      updates: Updates.statusAndProgress,
-    );
+      final task = DownloadTask(
+        taskId: downloadId,
+        url: _api.resolve('/downloads/$downloadId/artifact/media'),
+        filename: media.filename,
+        headers: headers,
+        baseDirectory: BaseDirectory.applicationDocuments,
+        directory: 'hokago',
+        updates: Updates.statusAndProgress,
+      );
 
-    final result = await FileDownloader().download(
-      task,
-      onProgress: (p) => _progress.add((downloadId, p)),
-    );
-    if (result.status != TaskStatus.complete) {
-      throw Exception('download failed: ${result.status}');
-    }
-    final localPath = await task.filePath();
-
-    // Sidecar subtitles/fonts ride along best-effort — a failure here
-    // shouldn't fail the whole download, the media file is already saved.
-    for (final sub in manifest.subtitles) {
-      try {
-        final subTask = DownloadTask(
-          url: _api.resolve('/downloads/$downloadId/artifact/subtitles/${sub.trackId}'),
-          filename: sub.filename,
-          headers: headers,
-          baseDirectory: BaseDirectory.applicationDocuments,
-          directory: 'hokago',
-        );
-        await FileDownloader().download(subTask);
-      } catch (_) {
-        // best-effort sidecar
+      final result = await FileDownloader().download(
+        task,
+        onProgress: (p) => _active.updateProgress(downloadId, p),
+      );
+      if (result.status != TaskStatus.complete) {
+        throw Exception('download failed: ${result.status}');
       }
-    }
+      final localPath = await task.filePath();
 
-    await OfflineManifest.instance.record(OfflineEntry(
-      downloadId: downloadId,
-      mediaItemId: mediaItemId,
-      mediaFileId: mediaFileId,
-      title: title,
-      kind: kind,
-      subtitle: subtitle,
-      posterUrl: posterUrl,
-      durationMs: durationMs,
-      localPath: localPath,
-      sizeBytes: media.sizeBytes ?? 0,
-    ));
+      // Sidecar subtitles/fonts ride along best-effort — a failure here
+      // shouldn't fail the whole download, the media file is already saved.
+      for (final sub in manifest.subtitles) {
+        try {
+          final subTask = DownloadTask(
+            url: _api.resolve('/downloads/$downloadId/artifact/subtitles/${sub.trackId}'),
+            filename: sub.filename,
+            headers: headers,
+            baseDirectory: BaseDirectory.applicationDocuments,
+            directory: 'hokago',
+          );
+          await FileDownloader().download(subTask);
+        } catch (_) {
+          // best-effort sidecar
+        }
+      }
+
+      await OfflineManifest.instance.record(OfflineEntry(
+        downloadId: downloadId,
+        mediaItemId: mediaItemId,
+        mediaFileId: mediaFileId,
+        title: title,
+        kind: kind,
+        subtitle: subtitle,
+        posterUrl: posterUrl,
+        durationMs: durationMs,
+        localPath: localPath,
+        sizeBytes: media.sizeBytes ?? 0,
+      ));
+    } finally {
+      _active.remove(downloadId);
+    }
   }
 
   Future<void> deleteDownload(String downloadId) async {
@@ -117,6 +127,4 @@ class DownloadManager {
       // server row cleanup is best-effort — local copy is already gone
     }
   }
-
-  void dispose() => _progress.close();
 }

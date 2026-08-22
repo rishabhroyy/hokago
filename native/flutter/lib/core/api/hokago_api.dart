@@ -185,17 +185,23 @@ class HokagoApi {
     return (res.data as List).map((e) => DownloadInfo.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// [maxHeight]/[maxBitrateKbps] set: transcode variant (smaller file,
+  /// server-side ffmpeg). Both null: original — the raw file, copied as-is.
   Future<DownloadInfo> createDownload({
     required String mediaItemId,
     required String mediaFileId,
     required String deviceId,
     List<String>? subtitleTrackIds,
+    int? maxHeight,
+    int? maxBitrateKbps,
   }) async {
     final res = await _client.dio.post('/downloads', data: {
       'mediaItemId': mediaItemId,
       'mediaFileId': mediaFileId,
       'deviceId': deviceId,
-      'variant': {'kind': 'original'},
+      'variant': maxHeight != null || maxBitrateKbps != null
+          ? {'kind': 'transcode', if (maxHeight != null) 'maxHeight': maxHeight, if (maxBitrateKbps != null) 'maxBitrateKbps': maxBitrateKbps}
+          : {'kind': 'original'},
       if (subtitleTrackIds != null) 'subtitleTrackIds': subtitleTrackIds,
     });
     return DownloadInfo.fromJson(res.data as Map<String, dynamic>);

@@ -250,14 +250,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(padding: EdgeInsets.all(16), child: Text('Audio & Subtitles', style: HokagoText.section)),
+            Padding(padding: const EdgeInsets.all(16), child: Text('Audio & Subtitles', style: HokagoText.section)),
             if (_serverAudioTracks.length > 1) ...[
               const _SheetLabel('Audio'),
               for (final t in _serverAudioTracks)
                 RadioListTile<int>(
                   value: t.streamIndex,
                   groupValue: _selectedAudioIndex,
-                  title: Text(t.title ?? t.lang ?? 'Track ${t.streamIndex}', style: const TextStyle(color: HokagoColors.ink)),
+                  title: Text(t.title ?? t.lang ?? 'Track ${t.streamIndex}', style: TextStyle(color: HokagoColors.ink)),
                   onChanged: (v) {
                     Navigator.pop(context);
                     if (v != null) _selectAudioTrack(v);
@@ -268,7 +268,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             RadioListTile<String?>(
               value: null,
               groupValue: _selectedServerSubtitle?.id,
-              title: const Text('Off', style: TextStyle(color: HokagoColors.ink)),
+              title: Text('Off', style: TextStyle(color: HokagoColors.ink)),
               onChanged: (_) {
                 Navigator.pop(context);
                 _selectSubtitle(null);
@@ -278,7 +278,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               RadioListTile<String?>(
                 value: t.id,
                 groupValue: _selectedServerSubtitle?.id,
-                title: Text(t.title ?? t.lang ?? t.format, style: const TextStyle(color: HokagoColors.ink)),
+                title: Text(t.title ?? t.lang ?? t.format, style: TextStyle(color: HokagoColors.ink)),
                 onChanged: (_) {
                   Navigator.pop(context);
                   _selectSubtitle(t);

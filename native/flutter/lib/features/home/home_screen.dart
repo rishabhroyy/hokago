@@ -87,9 +87,9 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.wifi_off_rounded, color: HokagoColors.ink3, size: 40),
+            Icon(Icons.wifi_off_rounded, color: HokagoColors.ink3, size: 40),
             const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center, style: const TextStyle(color: HokagoColors.ink2)),
+            Text(message, textAlign: TextAlign.center, style: TextStyle(color: HokagoColors.ink2)),
             const SizedBox(height: 16),
             OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
           ],

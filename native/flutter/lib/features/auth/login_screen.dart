@@ -38,7 +38,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.local_movies_rounded, size: 48, color: HokagoColors.accent),
+                  Icon(Icons.local_movies_rounded, size: 48, color: HokagoColors.accent),
                   const SizedBox(height: 16),
                   Text('Welcome back', style: HokagoText.section),
                   const SizedBox(height: 20),
@@ -66,7 +66,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(height: 8),
                   TextButton(
                     onPressed: () => ref.read(sessionProvider.notifier).changeServer(),
-                    child: Text('Not ${session.serverUrl ?? 'this server'}?', style: const TextStyle(color: HokagoColors.ink2)),
+                    child: Text('Not ${session.serverUrl ?? 'this server'}?', style: TextStyle(color: HokagoColors.ink2)),
                   ),
                 ],
               ),

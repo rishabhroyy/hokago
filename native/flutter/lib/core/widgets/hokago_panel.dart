@@ -25,9 +25,9 @@ class HokagoPanel extends StatelessWidget {
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: const Color(0xDBFFFFFF),
+            color: HokagoColors.panelFill,
             borderRadius: radius,
-            border: Border.all(color: const Color(0xF2FFFFFF)),
+            border: Border.all(color: HokagoColors.panelBorder),
             boxShadow: hokagoPanelShadow,
           ),
           child: child,

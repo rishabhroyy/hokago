@@ -41,7 +41,7 @@ class DownloadsScreen extends ConsumerWidget {
                       width: 56,
                       height: 56,
                       decoration: BoxDecoration(color: HokagoColors.paper2, borderRadius: BorderRadius.circular(18), border: Border.all(color: HokagoColors.line)),
-                      child: const Icon(Icons.wifi_off_rounded, color: HokagoColors.wiiDeep, size: 24),
+                      child: Icon(Icons.wifi_off_rounded, color: HokagoColors.wiiDeep, size: 24),
                     ),
                     const SizedBox(height: 16),
                     Text('Nothing saved yet', style: HokagoText.section),
@@ -84,7 +84,7 @@ class DownloadsScreen extends ConsumerWidget {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.delete_outline_rounded, color: HokagoColors.ink3),
+                      icon: Icon(Icons.delete_outline_rounded, color: HokagoColors.ink3),
                       onPressed: () async {
                         await OfflineManifest.instance.remove(e.downloadId);
                         ref.invalidate(offlineEntriesProvider);

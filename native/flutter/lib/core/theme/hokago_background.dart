@@ -2,15 +2,18 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-/// The "wii-dream" wallpaper from apps/web/src/app.css's light `body::before`
-/// (the web's actual default theme) — four soft radial-gradient auras (warm
-/// top glow, blue top-right, coral left, gold center-bottom) over the cream
-/// paper base. Ellipse sizes/positions are copied 1:1 from the CSS
-/// (percentages of the painted box); Flutter's RadialGradient only draws
-/// circles, so each aura is a unit circle drawn inside a
-/// save/translate/scale(rx,ry)/restore block to get the same ellipse. The
-/// CSS's 28px dot-grid texture is dropped — imperceptible at the sizes this
-/// renders on mobile/TV, not worth a second painter pass.
+import 'app_theme.dart';
+
+/// The "wii-dream" wallpaper from apps/web/src/app.css's `body::before` (both
+/// themes) — four soft radial-gradient auras (warm top glow, blue top-right,
+/// coral left, gold center-bottom) over the paper base. Ellipse sizes/
+/// positions are copied 1:1 from the CSS (percentages of the painted box);
+/// Flutter's RadialGradient only draws circles, so each aura is a unit
+/// circle drawn inside a save/translate/scale(rx,ry)/restore block to get
+/// the same ellipse. The CSS's 28px dot-grid texture is dropped —
+/// imperceptible at the sizes this renders on mobile/TV, not worth a second
+/// painter pass. Reads HokagoColors directly (not a const palette) so it
+/// repaints correctly when the light/dark toggle flips.
 class HokagoBackground extends StatelessWidget {
   const HokagoBackground({super.key, required this.child});
   final Widget child;
@@ -18,32 +21,22 @@ class HokagoBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(color: Color(0xFFF5EFE4)),
+      decoration: BoxDecoration(color: HokagoColors.bg),
       child: CustomPaint(
-        painter: _WallpaperPainter(),
+        painter: _WallpaperPainter(HokagoColors.wallpaperAuras),
         child: child,
       ),
     );
   }
 }
 
-class _Aura {
-  const _Aura(this.cx, this.cy, this.rx, this.ry, this.color);
-  final double cx, cy, rx, ry; // fractions of the canvas size
-  final Color color;
-}
-
 class _WallpaperPainter extends CustomPainter {
-  static const _auras = [
-    _Aura(0.5, -0.10, 1.30, 0.70, Color(0xF2FFF8E9)), // warm top glow, 95%
-    _Aura(0.92, -0.04, 0.48, 0.42, Color(0x384FB8E0)), // blue top-right, 22%
-    _Aura(-0.02, 0.24, 0.42, 0.38, Color(0x24F0836F)), // coral left, 14%
-    _Aura(0.5, 0.70, 0.36, 0.50, Color(0x1AE3A34C)), // gold center-bottom, 10%
-  ];
+  _WallpaperPainter(this.auras);
+  final List<({double cx, double cy, double rx, double ry, Color color})> auras;
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (final a in _auras) {
+    for (final a in auras) {
       final center = Offset(a.cx * size.width, a.cy * size.height);
       final rx = a.rx * size.width;
       final ry = a.ry * size.height;
@@ -59,5 +52,5 @@ class _WallpaperPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _WallpaperPainter oldDelegate) => oldDelegate.auras != auras;
 }

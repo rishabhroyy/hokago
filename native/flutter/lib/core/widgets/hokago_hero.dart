@@ -86,7 +86,7 @@ class _HokagoHeroState extends State<HokagoHero> {
                   Positioned(
                     left: 24,
                     right: 24,
-                    bottom: 24,
+                    bottom: 40,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,

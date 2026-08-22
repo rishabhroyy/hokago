@@ -18,7 +18,12 @@ class AuthImage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
-    final placeholder = Container(color: HokagoColors.card);
+    // Explicit double.infinity on every branch: a bare Container/Image
+    // inside a flexible parent (Expanded, Positioned.fill without an
+    // ancestor SizedBox) sizes to its *content*, not its constraints,
+    // which read as a smaller image with background "lines" down the
+    // sides — force fill so cover-fit always covers the whole box.
+    final placeholder = Container(width: double.infinity, height: double.infinity, color: HokagoColors.card);
     if (url == null || session.serverUrl == null) {
       return ClipRRect(borderRadius: borderRadius ?? BorderRadius.zero, child: placeholder);
     }
@@ -27,11 +32,15 @@ class AuthImage extends ConsumerWidget {
       imageUrl: resolved,
       httpHeaders: session.accessToken != null ? {'Authorization': 'Bearer ${session.accessToken}'} : null,
       fit: fit,
+      width: double.infinity,
+      height: double.infinity,
       placeholder: (_, __) => placeholder,
       errorWidget: (_, __, ___) => Container(
+        width: double.infinity,
+        height: double.infinity,
         color: HokagoColors.card,
         alignment: Alignment.center,
-        child: const Icon(Icons.movie_creation_outlined, color: HokagoColors.ink3),
+        child: Icon(Icons.movie_creation_outlined, color: HokagoColors.ink3),
       ),
     );
     return borderRadius != null ? ClipRRect(borderRadius: borderRadius!, child: image) : image;

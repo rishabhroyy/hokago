@@ -41,7 +41,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 controller: _controller,
                 autofocus: true,
                 textInputAction: TextInputAction.search,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   hintText: 'Search your library',
                   prefixIcon: Icon(Icons.search_rounded, color: HokagoColors.ink3),
                 ),
@@ -76,7 +76,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       maxCrossAxisExtent: 150,
                       mainAxisSpacing: 20,
                       crossAxisSpacing: 14,
-                      childAspectRatio: 0.6,
+                      childAspectRatio: 0.54,
                     ),
                     itemCount: results.length,
                     itemBuilder: (_, i) => MediaTile(item: results[i], onTap: () => context.push('/title/${results[i].id}')),

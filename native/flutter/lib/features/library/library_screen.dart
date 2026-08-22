@@ -29,7 +29,7 @@ class LibraryScreen extends ConsumerWidget {
             maxCrossAxisExtent: 150,
             mainAxisSpacing: 20,
             crossAxisSpacing: 14,
-            childAspectRatio: 0.6,
+            childAspectRatio: 0.54,
           ),
           itemCount: cards.length,
           itemBuilder: (_, i) => MediaTile(item: cards[i], onTap: () => context.push('/title/${cards[i].id}')),

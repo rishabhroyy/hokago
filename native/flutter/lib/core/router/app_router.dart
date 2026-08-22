@@ -8,6 +8,7 @@ import '../../features/library/library_screen.dart';
 import '../../features/onboarding/first_run_setup_screen.dart';
 import '../../features/onboarding/server_setup_screen.dart';
 import '../../features/player/player_screen.dart';
+import '../../features/prefs/prefs_screen.dart';
 import '../../features/search/search_screen.dart';
 import '../../features/downloads/downloads_screen.dart';
 import '../../features/shell/app_shell.dart';
@@ -51,6 +52,7 @@ GoRouter buildAppRouter(Ref ref) {
           GoRoute(path: '/library/:id', builder: (_, state) => LibraryScreen(libraryId: state.pathParameters['id']!)),
           GoRoute(path: '/search', builder: (_, __) => const SearchScreen()),
           GoRoute(path: '/downloads', builder: (_, __) => const DownloadsScreen()),
+          GoRoute(path: '/prefs', builder: (_, __) => const PrefsScreen()),
         ],
       ),
       GoRoute(path: '/title/:id', builder: (_, state) => DetailScreen(itemId: state.pathParameters['id']!)),

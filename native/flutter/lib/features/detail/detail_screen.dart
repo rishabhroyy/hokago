@@ -6,6 +6,7 @@ import '../../core/api/models/browse.dart';
 import '../../core/api/token_store.dart';
 import '../../core/downloads/download_providers.dart';
 import '../../core/session/session_controller.dart';
+import '../../core/text/strip_html.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/hue.dart';
 import '../../core/widgets/auth_image.dart';
@@ -65,7 +66,7 @@ class DetailScreen extends ConsumerWidget {
     return Scaffold(
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e', style: const TextStyle(color: HokagoColors.ink2))),
+        error: (e, _) => Center(child: Text('$e', style: TextStyle(color: HokagoColors.ink2))),
         data: (item) => _DetailContent(
           item: item,
           onPlay: (ep) => _play(context, item, episode: ep),
@@ -97,54 +98,61 @@ class _DetailContent extends StatelessWidget {
     }
     final hue = hueFor(item.id);
 
+    final topInset = MediaQuery.paddingOf(context).top;
+
     return CustomScrollView(
       slivers: [
+        // Banner + overlapping sheet panel share one sliver (a Column, not
+        // two separate ones) — Transform-overlapping content across a
+        // sliver boundary risks the wrong paint order; within one Column
+        // Flutter's normal "later child paints on top" rule is unambiguous.
         SliverToBoxAdapter(
-          child: Stack(
-            clipBehavior: Clip.none,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Banner — backdrop art, or a blurred poster, or the hue fallback.
-              SizedBox(
-                height: 260,
-                width: double.infinity,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: hue)),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (item.backdropUrl != null || item.posterUrl != null) AuthImage(url: item.backdropUrl ?? item.posterUrl),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, HokagoColors.bg],
-                            stops: const [0.3, 1.0],
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Banner — backdrop art, or a blurred poster, or the hue fallback.
+                  SizedBox(
+                    height: 260,
+                    width: double.infinity,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: hue)),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (item.backdropUrl != null || item.posterUrl != null) AuthImage(url: item.backdropUrl ?? item.posterUrl),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [Colors.transparent, HokagoColors.bg],
+                                stops: const [0.3, 1.0],
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                  Positioned(
+                    top: topInset + 8,
+                    left: 16,
+                    child: GhostButton(icon: Icons.arrow_back_rounded, onPressed: () => context.pop(), child: const Text('Back')),
+                  ),
+                ],
               ),
-              Positioned(
-                top: 44,
-                left: 16,
-                child: GhostButton(icon: Icons.arrow_back_rounded, onPressed: () => context.pop(), child: const Text('Back')),
-              ),
-            ],
-          ),
-        ),
-        SliverToBoxAdapter(
-          child: Transform.translate(
-            offset: const Offset(0, -70),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: DecoratedBox(
-                decoration: BoxDecoration(color: HokagoColors.paper, borderRadius: BorderRadius.circular(26), boxShadow: hokagoPanelShadow),
+              Transform.translate(
+                offset: const Offset(0, -70),
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: HokagoColors.paper, borderRadius: BorderRadius.circular(26), boxShadow: hokagoPanelShadow),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // The tilted "channel-framed" poster, sticking up over the banner.
@@ -201,6 +209,8 @@ class _DetailContent extends StatelessWidget {
               ),
             ),
           ),
+            ],
+          ),
         ),
         SliverToBoxAdapter(
           child: Transform.translate(
@@ -235,7 +245,7 @@ class _DetailContent extends StatelessWidget {
                   ),
                   if (item.overview != null) ...[
                     const SizedBox(height: 18),
-                    Text(item.overview!, style: HokagoText.body),
+                    Text(stripHtml(item.overview!), style: HokagoText.body),
                   ],
                 ],
               ),
@@ -281,7 +291,7 @@ class _MetaChip extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(color: HokagoColors.paper2, borderRadius: BorderRadius.circular(HokagoRadii.pill), border: Border.all(color: HokagoColors.line)),
-        child: Text(text, style: const TextStyle(fontFamily: 'Plus Jakarta Sans', fontSize: 12.5, fontWeight: FontWeight.w600, color: HokagoColors.ink2)),
+        child: Text(text, style: TextStyle(fontFamily: 'Plus Jakarta Sans', fontSize: 12.5, fontWeight: FontWeight.w600, color: HokagoColors.ink2)),
       );
 }
 
@@ -296,7 +306,7 @@ class _GenreChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(HokagoRadii.pill),
           border: Border.all(color: HokagoColors.wiiDeep.withValues(alpha: 0.15)),
         ),
-        child: Text(text, style: const TextStyle(fontFamily: 'Plus Jakarta Sans', fontSize: 12.5, fontWeight: FontWeight.w700, color: HokagoColors.wiiDeep)),
+        child: Text(text, style: TextStyle(fontFamily: 'Plus Jakarta Sans', fontSize: 12.5, fontWeight: FontWeight.w700, color: HokagoColors.wiiDeep)),
       );
 }
 
@@ -345,7 +355,7 @@ class EpisodeTile extends StatelessWidget {
                           child: Container(
                             width: 22,
                             height: 22,
-                            decoration: const BoxDecoration(color: HokagoColors.wiiDeep, shape: BoxShape.circle),
+                            decoration: BoxDecoration(color: HokagoColors.wiiDeep, shape: BoxShape.circle),
                             child: const Icon(Icons.check_rounded, color: Colors.white, size: 14),
                           ),
                         ),

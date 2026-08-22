@@ -119,9 +119,28 @@ pub fn injected_script(app_version: &str, app_build: &str) -> String {
           return inv("save_download", {{ url: url, filename: filename }}).then(function (r) {{
             const out = JSON.parse(r);
             if (!out.ok) return Promise.reject(new Error(out.error || "download failed"));
+            if (out.id) {{
+              return new Promise(function(resolve, reject) {{
+                var id = out.id;
+                function onEv(e) {{
+                  var d = e.detail || {};
+                  if (d.id !== id) return;
+                  if (d.type === "download-progress" && d.receivedBytes != null) {{
+                    document.dispatchEvent(new CustomEvent("hokago-native", {{ detail: {{ type: "download-progress", downloadId: id, receivedBytes: d.receivedBytes, totalBytes: d.totalBytes }} }}));
+                  }}
+                  if (d.type === "download-done") {{
+                    window.removeEventListener("hokago-native", onEv);
+                    if (d.ok) resolve({{ localPath: d.localPath, sizeBytes: d.sizeBytes }});
+                    else reject(new Error(d.error || "download failed"));
+                  }}
+                }}
+                window.addEventListener("hokago-native", onEv);
+              }});
+            }}
             return {{ localPath: out.localPath, sizeBytes: out.sizeBytes }};
           }});
         }},
+        cancel: function(id) {{ return inv("cancel_download", {{ id: id }}); }},
         list: function () {{ return inv("downloads_list"); }},
         // Synchronous (the contract requires a plain string): the URL is
         // purely derived — hokago-file:// + the percent-encoded path. Windows

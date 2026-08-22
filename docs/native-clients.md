@@ -412,12 +412,9 @@ contract changes.
   burn-in-on-transcode + text sidecars exist).
 - **`POST /watch-state/sync` doesn't write `WatchDay`** — offline time is not
   credited to history stats. Revisit if clients want it.
-- **Download resume**: the server artifact is idempotent per download, but a
-  client that loses its partial file must restart. Range-resumable client-side
-  downloading is a client concern; the API supports Range on `/artifact/media`.
+- **Download resume (desktop done)**: Tauri desktop now stages to `.part`, resumes via `Range` (206), and caps concurrency at 2. iOS/Android still restart from zero.
 - **Download space/cleanup UI**, per-device download quotas.
-- **Desktop native downloads UI polish** (progress reporting into the web
-  promise; currently the web polls the server `Download` row instead).
+- **Desktop native downloads UI polish (done)**: `save_download` now emits throttled `download-progress` events (150 ms) into the web promise; DetailView shows a determinate bar, cancel is available via `downloads.cancel`.
 - **TV home-screen deep linking** (leanback intent → route) and Android TV
   content rows; the webview currently just launches at the SPA root.
 - **Store signing/notarization** for the store distributions (ad-hoc device

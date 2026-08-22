@@ -96,6 +96,22 @@ class SeekResponse {
       );
 }
 
+class QualitySwitchResponse {
+  final bool restarted;
+  final String method;
+  final int? actualStartMs;
+  final String? playlistUrl;
+  final String? streamUrl;
+  QualitySwitchResponse({required this.restarted, required this.method, required this.actualStartMs, required this.playlistUrl, required this.streamUrl});
+  factory QualitySwitchResponse.fromJson(Map<String, dynamic> j) => QualitySwitchResponse(
+        restarted: j['restarted'] as bool,
+        method: j['method'] as String,
+        actualStartMs: j['actualStartMs'] as int?,
+        playlistUrl: j['playlistUrl'] as String?,
+        streamUrl: j['streamUrl'] as String?,
+      );
+}
+
 class AudioTrackSwitchResponse {
   final bool restarted;
   final int segmentFrom;

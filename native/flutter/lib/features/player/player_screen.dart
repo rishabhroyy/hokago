@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -14,6 +15,22 @@ import '../../core/theme/app_theme.dart';
 
 const _heartbeatInterval = Duration(seconds: 10);
 
+/// Same ladder as apps/web/src/WatchPage.tsx's QUALITY_OPTIONS — encode caps
+/// sent to /playback/{id}/quality. "Original" carries no caps (reset: the
+/// decider re-picks from the device profile's own ceiling).
+class QualityOption {
+  const QualityOption(this.label, {this.maxWidth, this.maxHeight, this.maxVideoBitrateKbps});
+  final String label;
+  final int? maxWidth, maxHeight, maxVideoBitrateKbps;
+}
+
+const _qualityOptions = [
+  QualityOption('Original'),
+  QualityOption('1080p', maxWidth: 1920, maxHeight: 1080, maxVideoBitrateKbps: 8000),
+  QualityOption('720p', maxWidth: 1280, maxHeight: 720, maxVideoBitrateKbps: 3500),
+  QualityOption('480p', maxWidth: 854, maxHeight: 480, maxVideoBitrateKbps: 1500),
+];
+
 /// Native player — libmpv (via media_kit) instead of the web's vidstack +
 /// hls.js + JASSUB stack. libmpv renders ASS/SSA subtitles natively (the
 /// same rendering pedigree JASSUB wraps in WASM), does HLS and fMP4 remux
@@ -22,10 +39,9 @@ const _heartbeatInterval = Duration(seconds: 10);
 /// player screen viable at all.
 ///
 /// Mirrors apps/web/src/WatchPage.tsx's contract semantics (timeline offset,
-/// resume, seek-restart) but NOT its full sophistication: no retry queue for
-/// a busy transcoder, no watch-party sync, no quality menu, no trickplay
-/// scrubber preview yet — deliberately deferred, see task #6 in this
-/// session's plan for the follow-up list.
+/// resume, seek-restart, quality switch, trickplay scrubber) but NOT its
+/// full sophistication: no retry queue for a busy transcoder, no watch-party
+/// sync yet.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key, required this.mediaFileId, required this.mediaItemId});
   final String mediaFileId;
@@ -50,6 +66,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   int? _selectedAudioIndex;
   bool _controlsVisible = true;
   bool _restarting = false;
+  MediaFileTrickplayResponse? _trickplay;
+  String _selectedQuality = _qualityOptions.first.label;
 
   HokagoApi get _api => ref.read(sessionProvider.notifier).api;
 
@@ -145,6 +163,49 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       });
     } catch (_) {
       // no tracks endpoint data — playback still works with the container's own default.
+    }
+    // Scrubber-preview index — absent until sheets are generated; the
+    // scrubber just shows the clock until this arrives, same as the web.
+    final trickplay = await _api.mediaFileTrickplay(widget.mediaFileId);
+    if (mounted && trickplay != null) setState(() => _trickplay = trickplay);
+  }
+
+  Future<void> _selectQuality(QualityOption option) async {
+    final start = _start;
+    if (start == null) return;
+    setState(() => _selectedQuality = option.label);
+    setState(() => _restarting = true);
+    try {
+      final posMs = _absoluteMediaTimeMs;
+      final outcome = await _api.switchQuality(
+        start.sessionId,
+        positionMs: posMs,
+        reset: option.maxWidth == null,
+        maxWidth: option.maxWidth,
+        maxHeight: option.maxHeight,
+        maxVideoBitrateKbps: option.maxVideoBitrateKbps,
+      );
+      // A quality switch can change the method entirely (e.g. REMUX at 1080p
+      // -> TRANSCODE at 480p, or a capped TRANSCODE -> DIRECT_PLAY on reset)
+      // — rebuild `_start` with the new method/URLs so _srcFor picks the
+      // right source next time, not just the old method's.
+      _start = StartPlaybackResponse(
+        sessionId: start.sessionId,
+        method: outcome.method,
+        playlistUrl: outcome.playlistUrl,
+        streamUrl: outcome.streamUrl,
+        resumePositionMs: start.resumePositionMs,
+        absoluteDurationMs: start.absoluteDurationMs,
+        actualStartMs: outcome.actualStartMs,
+      );
+      final newOffset = outcome.actualStartMs ?? posMs;
+      _timelineOffsetMs = newOffset;
+      final cacheBust = DateTime.now().millisecondsSinceEpoch;
+      await _openMedia(_srcFor(_start!, cacheBust: cacheBust), initialSeekSec: ((posMs - newOffset) / 1000).round());
+    } catch (_) {
+      // keep playing at the previous quality
+    } finally {
+      if (mounted) setState(() => _restarting = false);
     }
   }
 
@@ -284,6 +345,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   _selectSubtitle(t);
                 },
               ),
+            const _SheetLabel('Quality'),
+            for (final q in _qualityOptions)
+              RadioListTile<String>(
+                value: q.label,
+                groupValue: _selectedQuality,
+                title: Text(q.label, style: TextStyle(color: HokagoColors.ink)),
+                onChanged: (_) {
+                  Navigator.pop(context);
+                  _selectQuality(q);
+                },
+              ),
           ],
         ),
       ),
@@ -326,6 +398,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 player: _player,
                 timelineOffsetMs: _timelineOffsetMs,
                 absoluteDurationMs: _absoluteDurationMs,
+                trickplay: _trickplay,
+                resolveUrl: _api.resolve,
+                accessToken: ref.watch(sessionProvider).accessToken,
                 onScrub: _onScrub,
                 onBack: () => Navigator.of(context).maybePop(),
                 onTracks: _showTrackSheet,
@@ -356,6 +431,9 @@ class _Controls extends StatelessWidget {
     required this.onScrub,
     required this.onBack,
     required this.onTracks,
+    this.trickplay,
+    this.resolveUrl,
+    this.accessToken,
   });
 
   final Player player;
@@ -364,6 +442,9 @@ class _Controls extends StatelessWidget {
   final void Function(int targetMediaMs) onScrub;
   final VoidCallback onBack;
   final VoidCallback onTracks;
+  final MediaFileTrickplayResponse? trickplay;
+  final String Function(String path)? resolveUrl;
+  final String? accessToken;
 
   String _fmt(Duration d) {
     final s = d.inSeconds;
@@ -438,19 +519,13 @@ class _Controls extends StatelessWidget {
                 final ratio = durMs > 0 ? (curMs / durMs).clamp(0.0, 1.0) : 0.0;
                 return Column(
                   children: [
-                    SliderTheme(
-                      data: SliderThemeData(
-                        trackHeight: 3,
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                        activeTrackColor: HokagoColors.accent,
-                        inactiveTrackColor: Colors.white24,
-                        thumbColor: HokagoColors.accent,
-                      ),
-                      child: Slider(
-                        value: ratio,
-                        onChanged: (v) {},
-                        onChangeEnd: (v) => onScrub((v * durMs).round()),
-                      ),
+                    _Scrubber(
+                      ratio: ratio,
+                      durationMs: durMs,
+                      trickplay: trickplay,
+                      resolveUrl: resolveUrl,
+                      accessToken: accessToken,
+                      onScrubEnd: (v) => onScrub((v * durMs).round()),
                     ),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -466,6 +541,127 @@ class _Controls extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Absolute-position scrubber with a trickplay preview thumbnail — mirrors
+/// WatchPage.tsx's AbsoluteTimeSlider's hoverTile math: tile N lives at
+/// sheets[N ~/ tilesPerSheet], cropped to (N % tilesPerSheet) % cols,
+/// (N % tilesPerSheet) ~/ cols within that sheet's fixed grid. No VTT, pure
+/// arithmetic from the trickplay index the server already returns.
+class _Scrubber extends StatefulWidget {
+  const _Scrubber({
+    required this.ratio,
+    required this.durationMs,
+    required this.onScrubEnd,
+    this.trickplay,
+    this.resolveUrl,
+    this.accessToken,
+  });
+
+  final double ratio;
+  final int durationMs;
+  final void Function(double ratio) onScrubEnd;
+  final MediaFileTrickplayResponse? trickplay;
+  final String Function(String path)? resolveUrl;
+  final String? accessToken;
+
+  @override
+  State<_Scrubber> createState() => _ScrubberState();
+}
+
+class _ScrubberState extends State<_Scrubber> {
+  double? _dragRatio;
+
+  ({TrickplaySheet sheet, int col, int row, int rows})? _tileFor(double ratio) {
+    final tp = widget.trickplay;
+    if (tp == null || widget.durationMs <= 0) return null;
+    final mediaMs = ratio * widget.durationMs;
+    final totalTiles = tp.sheets.fold<int>(0, (sum, s) => sum + s.tiles);
+    if (totalTiles == 0) return null;
+    final tileIndex = (mediaMs / tp.intervalMs).floor().clamp(0, totalTiles - 1);
+    final sheetIndex = (tileIndex / tp.tilesPerSheet).floor();
+    if (sheetIndex >= tp.sheets.length) return null;
+    final sheet = tp.sheets[sheetIndex];
+    final inSheet = tileIndex % tp.tilesPerSheet;
+    final col = inSheet % tp.cols;
+    final rows = (tp.tilesPerSheet / tp.cols).ceil();
+    final row = (inSheet / tp.cols).floor();
+    return (sheet: sheet, col: col, row: row, rows: rows);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = _dragRatio ?? widget.ratio;
+    final tp = widget.trickplay;
+    final tile = _dragRatio != null ? _tileFor(shown) : null;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SizedBox(
+          height: tile != null && tp != null ? 100 : 28,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.bottomCenter,
+            children: [
+              if (tile != null && tp != null && widget.resolveUrl != null)
+                Positioned(
+                  left: (shown.clamp(0.0, 1.0) * constraints.maxWidth - tp.tileWidth / 4).clamp(0.0, constraints.maxWidth - tp.tileWidth / 2),
+                  top: 0,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(6), boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8)]),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: SizedBox(
+                        width: tp.tileWidth / 2,
+                        height: tp.tileHeight / 2,
+                        child: OverflowBox(
+                          maxWidth: tp.tileWidth / 2 * tp.cols,
+                          maxHeight: tp.tileHeight / 2 * tile.rows,
+                          alignment: Alignment.topLeft,
+                          child: Transform.translate(
+                            offset: Offset(-tile.col * tp.tileWidth / 2, -tile.row * tp.tileHeight / 2),
+                            child: CachedNetworkImage(
+                              imageUrl: widget.resolveUrl!(tile.sheet.url),
+                              httpHeaders: widget.accessToken != null ? {'Authorization': 'Bearer ${widget.accessToken}'} : null,
+                              width: tp.tileWidth / 2 * tp.cols,
+                              height: tp.tileHeight / 2 * tile.rows,
+                              fit: BoxFit.fill,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: SliderTheme(
+                  data: SliderThemeData(
+                    trackHeight: 3,
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                    activeTrackColor: HokagoColors.accent,
+                    inactiveTrackColor: Colors.white24,
+                    thumbColor: HokagoColors.accent,
+                  ),
+                  child: Slider(
+                    value: shown.clamp(0.0, 1.0),
+                    onChangeStart: (v) => setState(() => _dragRatio = v),
+                    onChanged: (v) => setState(() => _dragRatio = v),
+                    onChangeEnd: (v) {
+                      widget.onScrubEnd(v);
+                      setState(() => _dragRatio = null);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -152,6 +152,24 @@ class HokagoApi {
     return AudioTrackSwitchResponse.fromJson(res.data as Map<String, dynamic>);
   }
 
+  Future<QualitySwitchResponse> switchQuality(
+    String sessionId, {
+    required int positionMs,
+    bool reset = false,
+    int? maxWidth,
+    int? maxHeight,
+    int? maxVideoBitrateKbps,
+  }) async {
+    final res = await _client.dio.post('/playback/$sessionId/quality', data: {
+      'positionMs': positionMs,
+      if (reset) 'reset': true,
+      if (maxWidth != null) 'maxWidth': maxWidth,
+      if (maxHeight != null) 'maxHeight': maxHeight,
+      if (maxVideoBitrateKbps != null) 'maxVideoBitrateKbps': maxVideoBitrateKbps,
+    });
+    return QualitySwitchResponse.fromJson(res.data as Map<String, dynamic>);
+  }
+
   Future<void> heartbeat(String sessionId, {required int positionMs, int? durationMs}) async {
     await _client.dio
         .post('/playback/$sessionId/heartbeat', data: {'positionMs': positionMs, if (durationMs != null) 'durationMs': durationMs});

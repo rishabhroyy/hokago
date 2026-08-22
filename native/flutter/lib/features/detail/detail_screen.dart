@@ -3,9 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/models/browse.dart';
+import '../../core/api/token_store.dart';
+import '../../core/downloads/download_providers.dart';
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/auth_image.dart';
+import '../../core/widgets/wii_button.dart';
+import '../downloads/downloads_screen.dart';
 
 final detailProvider = FutureProvider.autoDispose.family<MediaItemDetail, String>((ref, itemId) {
   final session = ref.watch(sessionProvider);
@@ -23,6 +27,36 @@ class DetailScreen extends ConsumerWidget {
     context.push('/watch/$mediaFileId?mediaItemId=$mediaItemId');
   }
 
+  Future<void> _download(BuildContext context, WidgetRef ref, MediaItemDetail item, {EpisodeCard? episode}) async {
+    final mediaFileId = episode?.mediaFileId ?? item.mediaFileId;
+    if (mediaFileId == null) return;
+    final deviceId = await TokenStore.instance.deviceId;
+    if (deviceId == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This install has no registered device yet')));
+      }
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(SnackBar(content: Text('Downloading ${episode?.title ?? item.title}…')));
+    try {
+      await ref.read(downloadManagerProvider).downloadItem(
+            mediaItemId: episode?.id ?? item.id,
+            mediaFileId: mediaFileId,
+            deviceId: deviceId,
+            title: episode != null ? item.title : item.title,
+            kind: episode != null ? 'EPISODE' : item.kind,
+            subtitle: episode?.episodeNumber != null ? 'Episode ${episode!.episodeNumber}' : null,
+            posterUrl: item.posterUrl,
+            durationMs: episode?.runtimeMs,
+          );
+      ref.invalidate(offlineEntriesProvider);
+      messenger.showSnackBar(const SnackBar(content: Text('Saved for offline playback')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final detail = ref.watch(detailProvider(itemId));
@@ -30,16 +64,21 @@ class DetailScreen extends ConsumerWidget {
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('$e', style: const TextStyle(color: HokagoColors.ink2))),
-        data: (item) => _DetailContent(item: item, onPlay: (ep) => _play(context, item, episode: ep)),
+        data: (item) => _DetailContent(
+          item: item,
+          onPlay: (ep) => _play(context, item, episode: ep),
+          onDownload: (ep) => _download(context, ref, item, episode: ep),
+        ),
       ),
     );
   }
 }
 
 class _DetailContent extends StatelessWidget {
-  const _DetailContent({required this.item, required this.onPlay});
+  const _DetailContent({required this.item, required this.onPlay, required this.onDownload});
   final MediaItemDetail item;
   final void Function(EpisodeCard?) onPlay;
+  final void Function(EpisodeCard?) onDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -91,10 +130,19 @@ class _DetailContent extends StatelessWidget {
                 ),
                 if (canPlayDirectly) ...[
                   const SizedBox(height: 18),
-                  ElevatedButton.icon(
-                    onPressed: () => onPlay(null),
-                    icon: const Icon(Icons.play_arrow_rounded),
-                    label: Text(resumeMs > 0 ? 'Resume' : 'Play'),
+                  Row(
+                    children: [
+                      WiiButton(
+                        onPressed: () => onPlay(null),
+                        icon: Icons.play_arrow_rounded,
+                        child: Text(resumeMs > 0 ? 'Resume' : 'Play'),
+                      ),
+                      const SizedBox(width: 10),
+                      IconButton.filledTonal(
+                        onPressed: () => onDownload(null),
+                        icon: const Icon(Icons.download_outlined),
+                      ),
+                    ],
                   ),
                 ],
                 if (item.overview != null) ...[
@@ -108,7 +156,11 @@ class _DetailContent extends StatelessWidget {
         if (item.episodes.isNotEmpty)
           SliverList.builder(
             itemCount: item.episodes.length,
-            itemBuilder: (_, i) => _EpisodeRow(episode: item.episodes[i], onTap: () => onPlay(item.episodes[i])),
+            itemBuilder: (_, i) => _EpisodeRow(
+              episode: item.episodes[i],
+              onTap: () => onPlay(item.episodes[i]),
+              onDownload: () => onDownload(item.episodes[i]),
+            ),
           ),
         if (item.movies.isNotEmpty)
           SliverToBoxAdapter(
@@ -120,7 +172,11 @@ class _DetailContent extends StatelessWidget {
         if (item.movies.isNotEmpty)
           SliverList.builder(
             itemCount: item.movies.length,
-            itemBuilder: (_, i) => _EpisodeRow(episode: item.movies[i], onTap: () => onPlay(item.movies[i])),
+            itemBuilder: (_, i) => _EpisodeRow(
+              episode: item.movies[i],
+              onTap: () => onPlay(item.movies[i]),
+              onDownload: () => onDownload(item.movies[i]),
+            ),
           ),
         const SliverToBoxAdapter(child: SizedBox(height: 32)),
       ],
@@ -136,9 +192,10 @@ class _Meta extends StatelessWidget {
 }
 
 class _EpisodeRow extends StatelessWidget {
-  const _EpisodeRow({required this.episode, required this.onTap});
+  const _EpisodeRow({required this.episode, required this.onTap, required this.onDownload});
   final EpisodeCard episode;
   final VoidCallback onTap;
+  final VoidCallback onDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +230,13 @@ class _EpisodeRow extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: HokagoText.cardTitle,
       ),
-      trailing: const Icon(Icons.play_arrow_rounded, color: HokagoColors.ink3),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(icon: const Icon(Icons.download_outlined, color: HokagoColors.ink3), onPressed: onDownload),
+          const Icon(Icons.play_arrow_rounded, color: HokagoColors.ink3),
+        ],
+      ),
     );
   }
 }

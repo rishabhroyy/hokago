@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
-/// hokago design tokens, ported from apps/web/src/app.css's `.dark` scope —
-/// same palette everywhere, native typography (system font) instead of the
-/// web's bundled Zen Maru/Plus Jakarta so each platform feels native.
+/// hokago design tokens, ported directly from apps/web/src/app.css's `.dark`
+/// scope + component classes (.btn-primary, .panel, .input) — Rishabh wants
+/// the native app to look as close as possible to the webui, not a generic
+/// native reinterpretation, just laid out for mobile/TV instead of desktop
+/// breakpoints. Values below are copy-pasted from the CSS, not eyeballed.
 abstract final class HokagoColors {
   static const bg = Color(0xFF171410);
   static const paper = Color(0xFF26221D);
@@ -17,13 +19,19 @@ abstract final class HokagoColors {
   static const accent2 = Color(0xFFF49B87);
   static const gold = Color(0xFFEDB866);
   static const wii = Color(0xFF63C3E6);
+  static const wii2 = Color(0xFFA5E7F8);
   static const wiiDeep = Color(0xFF3FAED6);
+  static const wiiInk = Color(0xFF6ECFF2);
+  // .wii-btn / .btn-primary gradient (same in light+dark — "the color centerpiece").
+  static const wiiBtnTop = Color(0xFF45ADDD);
+  static const wiiBtnBottom = Color(0xFF187AA5);
 }
 
 abstract final class HokagoRadii {
   static const tile = 16.0;
   static const panel = 22.0;
   static const hero = 28.0;
+  static const pill = 999.0;
 }
 
 /// Same purpose-named scale as apps/web/tailwind.config.ts's fontSize block —
@@ -53,6 +61,14 @@ abstract final class HokagoText {
       fontFamily: _mono, fontSize: 10.5, height: 1.4, fontWeight: FontWeight.w700, letterSpacing: 1.47, color: HokagoColors.gold);
 }
 
+/// Matches app.css's --shadow-panel (dark) exactly: inset top highlight +
+/// two-layer soft drop shadow. Used by HokagoPanel and any "floating" card.
+const hokagoPanelShadow = [
+  BoxShadow(color: Color(0x0DFFFFFF), blurRadius: 0, spreadRadius: 0, offset: Offset(0, 1.5)), // inset approximated as a hairline top highlight (Flutter has no true inset shadow)
+  BoxShadow(color: Color(0x73000000), blurRadius: 6, spreadRadius: -2, offset: Offset(0, 2)),
+  BoxShadow(color: Color(0x99000000), blurRadius: 44, spreadRadius: -18, offset: Offset(0, 18)),
+];
+
 ThemeData buildHokagoTheme() {
   final base = ThemeData.dark(useMaterial3: true);
   final colorScheme = base.colorScheme.copyWith(
@@ -63,7 +79,10 @@ ThemeData buildHokagoTheme() {
     onSurface: HokagoColors.ink,
   );
   return base.copyWith(
-    scaffoldBackgroundColor: HokagoColors.bg,
+    // The wallpaper is painted once behind every route (see HokagoBackground
+    // in app.dart's MaterialApp.builder) — Scaffold stays transparent so it
+    // shows through, matching the web's body::before wallpaper layer.
+    scaffoldBackgroundColor: Colors.transparent,
     colorScheme: colorScheme,
     textTheme: base.textTheme.apply(
       fontFamily: 'Plus Jakarta Sans',
@@ -71,7 +90,7 @@ ThemeData buildHokagoTheme() {
       displayColor: HokagoColors.ink,
     ),
     appBarTheme: const AppBarTheme(
-      backgroundColor: HokagoColors.bg,
+      backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       foregroundColor: HokagoColors.ink,
       elevation: 0,
@@ -82,33 +101,38 @@ ThemeData buildHokagoTheme() {
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(HokagoRadii.tile)),
     ),
+    // Stock ElevatedButton kept as the .btn-ghost-equivalent fallback where a
+    // WiiButton (the real .btn-primary pill) isn't wired yet.
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: HokagoColors.accent,
         foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(HokagoRadii.pill))),
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        textStyle: const TextStyle(fontFamily: 'Plus Jakarta Sans', fontWeight: FontWeight.w600, fontSize: 15),
+        textStyle: const TextStyle(fontFamily: 'Plus Jakarta Sans', fontWeight: FontWeight.w700, fontSize: 14.5),
       ),
     ),
+    // .input: pill radius, soft paper fill, wii-blue focus ring.
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: HokagoColors.paper2,
+      fillColor: const Color(0xFF1F1C17),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: HokagoColors.line),
+        borderRadius: BorderRadius.circular(HokagoRadii.pill),
+        borderSide: const BorderSide(color: HokagoColors.line, width: 1.5),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: HokagoColors.line),
+        borderRadius: BorderRadius.circular(HokagoRadii.pill),
+        borderSide: const BorderSide(color: HokagoColors.line, width: 1.5),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(HokagoRadii.pill),
         borderSide: const BorderSide(color: HokagoColors.wii, width: 1.5),
       ),
-      labelStyle: const TextStyle(color: HokagoColors.ink2),
+      labelStyle: const TextStyle(color: HokagoColors.ink3),
+      hintStyle: const TextStyle(color: HokagoColors.ink3),
     ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(color: HokagoColors.accent),
+    progressIndicatorTheme: const ProgressIndicatorThemeData(color: HokagoColors.wii),
     dividerTheme: const DividerThemeData(color: HokagoColors.line, space: 1),
   );
 }

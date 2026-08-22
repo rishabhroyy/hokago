@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/hokago_panel.dart';
+import '../../core/widgets/wii_button.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -30,7 +32,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
+            child: HokagoPanel(
               padding: const EdgeInsets.all(28),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -53,11 +55,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     Text(session.error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
                   ],
                   const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: _submitting ? null : _submit,
-                    child: _submitting
-                        ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Log in'),
+                  Center(
+                    child: WiiButton(
+                      onPressed: _submitting ? null : _submit,
+                      child: _submitting
+                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('Log in'),
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextButton(

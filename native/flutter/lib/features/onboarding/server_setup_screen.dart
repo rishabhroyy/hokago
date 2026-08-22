@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/hokago_panel.dart';
+import '../../core/widgets/wii_button.dart';
 
 class ServerSetupScreen extends ConsumerStatefulWidget {
   const ServerSetupScreen({super.key});
@@ -36,7 +38,7 @@ class _ServerSetupScreenState extends ConsumerState<ServerSetupScreen> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
+            child: HokagoPanel(
               padding: const EdgeInsets.all(28),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -61,11 +63,13 @@ class _ServerSetupScreenState extends ConsumerState<ServerSetupScreen> {
                     Text(error, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
                   ],
                   const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: _connecting ? null : _connect,
-                    child: _connecting
-                        ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Continue'),
+                  Center(
+                    child: WiiButton(
+                      onPressed: _connecting ? null : _connect,
+                      child: _connecting
+                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('Continue'),
+                    ),
                   ),
                 ],
               ),

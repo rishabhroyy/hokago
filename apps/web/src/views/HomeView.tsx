@@ -83,10 +83,6 @@ export function HomeView() {
   const openDetail = (item: TileItem) => navigate(paths.detail(item.detailId ?? item.id));
   const prefetch = (item: TileItem) => prefetchMediaItemDetail(item.detailId ?? item.id, profileId);
 
-  // Right-click mark-watched on a tile. Continue-watching reshuffles (a
-  // finished episode rolls onto the next one), so only that rail is refetched
-  // and swapped in place — rows/slides keep their exact arrangement, so the
-  // page never visibly "refreshes" just because one poster was marked watched.
   const markTileWatched = (item: TileItem, watched: boolean) => {
     if (!profileId) return;
     api
@@ -102,6 +98,27 @@ export function HomeView() {
         if (data) setHome((h) => (h ? { ...h, continueWatching: data } : h));
       })
       .catch((err: Error) => console.warn("mark watched failed", err.message));
+  };
+
+  const markTitleWatched = async (item: TileItem, watched: boolean) => {
+    if (!profileId) return;
+    const detailId = item.detailId ?? item.id;
+    try {
+      const { fetchMediaItemDetail } = await import("../browse-api");
+      const detail = await fetchMediaItemDetail(detailId, profileId);
+      const ids: string[] = detail
+        ? detail.kind === "SERIES"
+          ? [...detail.episodes.map((e) => e.id), ...detail.movies.map((e) => e.id)]
+          : [detail.id]
+        : [item.id];
+      await Promise.all(
+        ids.map((id) =>
+          api.POST("/watch-state/{mediaItemId}", { params: { path: { mediaItemId: id } }, body: { profileId, watched } }),
+        ),
+      );
+      const { data } = await api.GET("/continue-watching", { params: { query: { profileId } } });
+      if (data) setHome((h) => (h ? { ...h, continueWatching: data } : h));
+    } catch (e) { console.warn("mass mark failed", (e as Error).message); }
   };
 
   const onTileMenu = (item: TileItem, x: number, y: number) => setTileMenu({ x, y, item });
@@ -173,11 +190,10 @@ export function HomeView() {
           y={tileMenu.y}
           onClose={() => setTileMenu(null)}
           items={[
-            {
-              label: "Mark as watched",
-              icon: "check",
-              onClick: () => markTileWatched(tileMenu.item, true),
-            },
+            { label: "Mark as watched", icon: "check", onClick: () => markTileWatched(tileMenu.item, true) },
+            { label: "Unwatch", icon: "check", onClick: () => markTileWatched(tileMenu.item, false) },
+            { label: "Mark title watched", icon: "check", onClick: () => void markTitleWatched(tileMenu.item, true) },
+            { label: "Unwatch title", icon: "check", onClick: () => void markTitleWatched(tileMenu.item, false) },
           ]}
         />
       )}

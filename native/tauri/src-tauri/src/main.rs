@@ -2,6 +2,7 @@
 
 mod bridge;
 mod config;
+mod downloads;
 
 use std::io::{Read, Seek};
 use tauri::Manager;
@@ -201,6 +202,7 @@ fn main() {
         // the page's own scripts run. Appended to Tauri's own IPC init
         // script, which is injected at document start in every frame.
         .append_invoke_initialization_script(&script)
+        .manage(downloads::DownloadManager::default())
         .invoke_handler(tauri::generate_handler![
             bridge::bridge_info,
             bridge::storage_get,
@@ -213,6 +215,8 @@ fn main() {
             bridge::open_path,
             bridge::show_setup,
             bridge::save_download,
+            downloads::save_download_managed,
+            downloads::cancel_download,
             bridge::downloads_list,
             bridge::downloads_local_url,
             bridge::downloads_read_text,

@@ -207,9 +207,11 @@ export function DetailView({ itemId }: { itemId: string }) {
   const [item, setItem] = useState<MediaItemDetail | null>(null);
   const [selectedAudio, setSelectedAudio] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; ep: EpisodeCard } | null>(null);
+  const [titleMenu, setTitleMenu] = useState<{ x: number; y: number } | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
   const [dlState, setDlState] = useState<"idle" | "building" | "saving" | "done" | "error">("idle");
   const [dlError, setDlError] = useState<string | null>(null);
+  const [dlProgress, setDlProgress] = useState<{ received: number; total: number } | null>(null);
 
   useEffect(() => {
     if (!profileId) return;
@@ -277,7 +279,8 @@ export function DetailView({ itemId }: { itemId: string }) {
       const status = await waitReady(id);
       if (status !== "READY") throw new Error(status === "FAILED" ? "the server failed to build the download" : "download timed out");
       setDlState("saving");
-      const outcome = await saveToDevice(id);
+      setDlProgress({ received: 0, total: 0 });
+      const outcome = await saveToDevice(id, (received, total) => setDlProgress({ received, total }));
       if (!outcome.ok) throw new Error(outcome.error);
       recordLocalDownload(id, { localPath: outcome.localPath, sizeBytes: outcome.sizeBytes });
       // Offline manifest: title/kind/poster captured now, while the server's
@@ -299,8 +302,10 @@ export function DetailView({ itemId }: { itemId: string }) {
         subtitlePaths: [],
       });
       setDlState("done");
+      setDlProgress(null);
     } catch (err) {
       setDlState("error");
+      setDlProgress(null);
       setDlError(err instanceof Error ? err.message : "download failed");
     }
   };
@@ -343,6 +348,14 @@ export function DetailView({ itemId }: { itemId: string }) {
       .catch((err: Error) => console.warn("mark watched failed", err.message));
   };
 
+  const markMass = (ids: string[], watched: boolean) => {
+    if (!profileId || ids.length === 0) return;
+    Promise.all(ids.map((id) => api.POST("/watch-state/{mediaItemId}", { params: { path: { mediaItemId: id } }, body: { profileId, watched } })))
+      .then(() => { invalidateMediaItemDetail(itemId); return fetchMediaItemDetail(itemId, profileId); })
+      .then((detail) => { if (detail) setItem(detail); })
+      .catch((err: Error) => console.warn("mass mark failed", err.message));
+  };
+
   const episodeMenuItems = (ep: EpisodeCard): ContextMenuItem[] => [
     ...(ep.mediaFileId
       ? [{ label: "Play", icon: "play" as const, onClick: () => navigate(paths.player(ep.mediaFileId!, ep.id, profileId ?? "dev")) }]
@@ -351,7 +364,7 @@ export function DetailView({ itemId }: { itemId: string }) {
       ? [{ label: "Watch party", icon: "users" as const, onClick: () => startPartyFor(ep) }]
       : []),
     ...(ep.watched
-      ? [{ label: "Mark as unwatched", icon: "check" as const, onClick: () => markWatched(ep, false) }]
+      ? [{ label: "Unwatch", icon: "check" as const, onClick: () => markWatched(ep, false) }]
       : [{ label: "Mark as watched", icon: "check" as const, onClick: () => markWatched(ep, true) }]),
   ];
 
@@ -383,7 +396,10 @@ export function DetailView({ itemId }: { itemId: string }) {
             </div>
 
             <div className="min-w-0 flex-1 pt-1">
-              <h1 className="mb-3 font-display text-title-xl font-black leading-[1.04] tracking-[-0.01em] [text-wrap:balance]">
+              <h1
+                className="mb-3 font-display text-title-xl font-black leading-[1.04] tracking-[-0.01em] [text-wrap:balance]"
+                onContextMenu={(e) => { e.preventDefault(); setTitleMenu({ x: e.clientX, y: e.clientY }); }}
+              >
                 {item.title}
               </h1>
               {item.originalTitle && item.originalTitle !== item.title && (
@@ -493,6 +509,16 @@ export function DetailView({ itemId }: { itemId: string }) {
                               : "Download"}
                       </button>
                     )}
+                    {dlState === "saving" && dlProgress && dlProgress.total > 0 && (
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-24 overflow-hidden rounded-full bg-line">
+                          <span className="block h-full bg-wii-deep transition-all" style={{ width: `${Math.min(100, Math.round((dlProgress.received / dlProgress.total) * 100))}%` }} />
+                        </span>
+                        <span className="font-mono text-kicker text-ink-3">
+                          {Math.round((dlProgress.received / dlProgress.total) * 100)}% · {(dlProgress.received / 1024 / 1024).toFixed(1)} / {(dlProgress.total / 1024 / 1024 / 1024).toFixed(2)} GB
+                        </span>
+                      </span>
+                    )}
                     {dlState === "error" && dlError && (
                       <span className="text-small font-semibold text-accent">{dlError}</span>
                     )}
@@ -577,6 +603,27 @@ export function DetailView({ itemId }: { itemId: string }) {
       <div className="pb-16" />
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={episodeMenuItems(menu.ep)} onClose={() => setMenu(null)} />
+      )}
+      {titleMenu && (
+        <ContextMenu
+          x={titleMenu.x}
+          y={titleMenu.y}
+          onClose={() => setTitleMenu(null)}
+          items={(() => {
+            const isMovie = item.kind === "MOVIE";
+            const ids = isMovie ? [item.id] : [...item.episodes.map((e) => e.id), ...item.movies.map((e) => e.id)];
+            if (isMovie) {
+              const watched = (item as unknown as { watched?: boolean }).watched;
+              return watched
+                ? [{ label: "Unwatch", icon: "check" as const, onClick: () => markMass(ids, false) }]
+                : [{ label: "Mark as watched", icon: "check" as const, onClick: () => markMass(ids, true) }];
+            }
+            return [
+              { label: "Mark title watched", icon: "check" as const, onClick: () => markMass(ids, true) },
+              { label: "Unwatch title", icon: "check" as const, onClick: () => markMass(ids, false) },
+            ];
+          })()}
+        />
       )}
       {fixOpen && (
         <FixMatchPanel

@@ -79,6 +79,7 @@ export interface NativeBridge {
     localUrl(localPath: string): string;
     /** Reads a local text sidecar (subtitle) back as a string — offline JASSUB. */
     readText?(localPath: string): Promise<string>;
+    cancel?(id: string): Promise<void>;
   };
 }
 

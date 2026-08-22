@@ -382,6 +382,45 @@ Keep both in sync by hand when the contract changes.
   `Range` + COOP/COEP headers (web only); raise buffering/timeouts.
 - **With or without a proxy**: the API binds `0.0.0.0:3000` and serves the
   SPA itself. Everything is origin-relative.
+  `Range` + COOP/COEP headers; raise buffering/timeouts for streaming.
+- **With or without a proxy**: the API binds `0.0.0.0:3000` and serves the SPA
+  itself. Everything is origin-relative so subdomain-proxying works out of the
+  box.
+
+## Where the web app touches the bridge
+
+- `apps/web/src/api-client.ts` — token read/write/erase through
+  `bridge.storage` (fallback `localStorage`), `storeAuthResult`, TV account
+  routing.
+- `apps/web/src/native.ts` — `shellPlatform`, `clientKey`, `getDeviceId`,
+  `startTokenWarmth` (4-min token refresh in shells), `loginPlatform`.
+- `apps/web/src/tv-session.ts` — per-account sessions for TV switchers.
+- `apps/web/src/views/TvAccountsView.tsx`, `ui/TvPairFlow.tsx` — TV account
+  switcher + pairing flow.
+- `apps/web/src/views/DownloadsView.tsx`, `src/downloads.ts`, the DetailView
+  download button — downloads UI (native-only).
+- `apps/web/src/views/NativeUpdateGate.tsx` — stale-shell gate.
+- `apps/web/src/ui/tv-keys.ts` — D-pad → DOM keydown mapping (`useTvKeyboardNav`).
+- `apps/web/src/views/LoginView.tsx` — sends `clientKey`/`deviceName`/`platform`
+  and calls `storeAuthResult`.
+- `apps/web/src/router.tsx` / `App.tsx` / `TopNav.tsx` — TV routes (`/accounts`),
+  downloads route, update gate, TV-gated shell.
+
+## Open items (deliberately not done yet)
+
+- **Offline subtitle burn-in on TV** and full image-subtitle offline (only
+  burn-in-on-transcode + text sidecars exist).
+- **`POST /watch-state/sync` doesn't write `WatchDay`** — offline time is not
+  credited to history stats. Revisit if clients want it.
+- **Download resume (desktop done)**: Tauri desktop now stages to `.part`, resumes via `Range` (206), and caps concurrency at 2. iOS/Android still restart from zero.
+- **Download space/cleanup UI**, per-device download quotas.
+- **Desktop native downloads UI polish (done)**: `save_download` now emits throttled `download-progress` events (150 ms) into the web promise; DetailView shows a determinate bar, cancel is available via `downloads.cancel`.
+- **TV home-screen deep linking** (leanback intent → route) and Android TV
+  content rows; the webview currently just launches at the SPA root.
+- **Store signing/notarization** for the store distributions (ad-hoc device
+  builds ship; macOS notarization + Apple/Play signing are future work).
+- **`git log`/docs**: verify AGENTS.md build-order "Next" line once native
+  shells land.
 
 ## Non-negotiable guardrails
 

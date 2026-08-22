@@ -218,23 +218,24 @@ export async function registerMetadataRoutes(app: ZodFastifyInstance): Promise<v
   );
 
   // ── Unpin ────────────────────────────────────────────────────────────────
-  app.delete(
+  app.delete<{ Params: { id: string }; Querystring: { provider?: string }; Body: { provider?: string } }>(
     "/media-items/:id/metadata-match",
     {
       preHandler: app.authenticate,
       schema: {
         params: MetadataMatchDeleteParams,
-        body: MetadataMatchDeleteBody,
         response: { 200: MetadataMatchDeleteResponse, 404: ErrorResponse },
       },
     },
     async (req, reply) => {
       const item = await db.mediaItem.findUnique({ where: { id: req.params.id }, select: { id: true } });
       if (!item) return reply.code(404).send({ error: "media item not found" });
+      const provider = (req.body as { provider?: string } | undefined)?.provider ?? req.query.provider;
+      if (!provider) return reply.code(400).send({ error: "provider required" });
 
-      await db.externalId.deleteMany({ where: { mediaItemId: item.id, provider: req.body.provider } });
+      await db.externalId.deleteMany({ where: { mediaItemId: item.id, provider } });
       await db.evidence.deleteMany({
-        where: { mediaItemId: item.id, signalType: "PROVIDER_MATCH", source: req.body.provider },
+        where: { mediaItemId: item.id, signalType: "PROVIDER_MATCH", source: provider },
       });
       // Recompute confidence from whatever evidence remains (empty inputs,
       // no owned types — sync only, no pruning).

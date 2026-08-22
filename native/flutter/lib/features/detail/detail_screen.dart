@@ -19,9 +19,51 @@ final detailProvider = FutureProvider.autoDispose.family<MediaItemDetail, String
   return ref.read(sessionProvider.notifier).api.mediaItemDetail(itemId, profileId: session.profileId);
 });
 
+/// The tapped tile's Hero tag + the poster URL it was already showing —
+/// Tile.tsx's zoomOpen, done the idiomatic-Flutter way (a real shared-element
+/// transition instead of a synthetic full-screen overlay). The URL travels
+/// with the tag because the Hero must exist in this screen's FIRST frame to
+/// fly at all — waiting for the detail fetch to resolve is always too late
+/// (a network fetch never lands within one frame), so the loading skeleton
+/// below renders the same poster immediately, using the source tile's own
+/// (already-loaded-or-cached) image instead of the still-loading detail data.
+typedef DetailZoomArgs = ({String heroTag, String? posterUrl});
+
+/// The tilted "channel-framed" poster — identical in the loading skeleton and
+/// the loaded content so the Hero flight lands exactly where the real poster
+/// will be, with nothing to visibly jump once the fetch completes.
+Widget _posterFrame({required String? posterUrl, required List<Color> hue, required String? heroTag}) {
+  final art = ClipRRect(
+    borderRadius: BorderRadius.circular(15),
+    child: posterUrl != null
+        ? AuthImage(url: posterUrl)
+        : DecoratedBox(
+            decoration: BoxDecoration(gradient: LinearGradient(colors: hue)),
+            child: const Icon(Icons.movie_creation_rounded, color: Colors.white, size: 32),
+          ),
+  );
+  return Transform.translate(
+    offset: const Offset(0, -46),
+    child: Transform.rotate(
+      angle: -0.035,
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: HokagoColors.card, borderRadius: BorderRadius.circular(20), boxShadow: hokagoPanelShadow),
+        child: Padding(
+          padding: const EdgeInsets.all(5),
+          child: SizedBox(
+            width: 108,
+            child: AspectRatio(aspectRatio: 2 / 3, child: heroTag != null ? Hero(tag: heroTag, child: art) : art),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class DetailScreen extends ConsumerWidget {
-  const DetailScreen({super.key, required this.itemId});
+  const DetailScreen({super.key, required this.itemId, this.zoom});
   final String itemId;
+  final DetailZoomArgs? zoom;
 
   void _play(BuildContext context, MediaItemDetail item, {EpisodeCard? episode}) {
     final mediaFileId = episode?.mediaFileId ?? item.mediaFileId;
@@ -92,10 +134,11 @@ class DetailScreen extends ConsumerWidget {
     final detail = ref.watch(detailProvider(itemId));
     return Scaffold(
       body: detail.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => _DetailSkeleton(zoom: zoom),
         error: (e, _) => Center(child: Text('$e', style: TextStyle(color: HokagoColors.ink2))),
         data: (item) => _DetailContent(
           item: item,
+          heroTag: zoom?.heroTag,
           onPlay: (ep) => _play(context, item, episode: ep),
           onDownload: (ep) => _download(context, ref, item, episode: ep),
           onParty: (ep) => _startParty(context, ref, item, episode: ep),
@@ -105,9 +148,75 @@ class DetailScreen extends ConsumerWidget {
   }
 }
 
+class _DetailSkeleton extends StatelessWidget {
+  const _DetailSkeleton({required this.zoom});
+  final DetailZoomArgs? zoom;
+
+  @override
+  Widget build(BuildContext context) {
+    final topInset = MediaQuery.paddingOf(context).top;
+    final hue = zoom != null ? hueFor(zoom!.heroTag) : const [Color(0xFFDCE6EA), Color(0xFFC3D1D6)];
+    Widget bar(double width, double height) =>
+        Container(width: width, height: height, decoration: BoxDecoration(color: HokagoColors.line, borderRadius: BorderRadius.circular(6)));
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  SizedBox(
+                    height: 260,
+                    width: double.infinity,
+                    child: DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: hue))),
+                  ),
+                  Positioned(
+                    top: topInset + 8,
+                    left: 16,
+                    child: GhostButton(icon: Icons.arrow_back_rounded, onPressed: () => context.pop(), child: const Text('Back')),
+                  ),
+                ],
+              ),
+              Transform.translate(
+                offset: const Offset(0, -70),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: HokagoColors.paper, borderRadius: BorderRadius.circular(26), boxShadow: hokagoPanelShadow),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _posterFrame(posterUrl: zoom?.posterUrl, hue: hue, heroTag: zoom?.heroTag),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [bar(180, 22), const SizedBox(height: 10), bar(100, 14)],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SliverFillRemaining(hasScrollBody: false, child: Center(child: CircularProgressIndicator())),
+      ],
+    );
+  }
+}
+
 class _DetailContent extends StatelessWidget {
-  const _DetailContent({required this.item, required this.onPlay, required this.onDownload, required this.onParty});
+  const _DetailContent({required this.item, required this.heroTag, required this.onPlay, required this.onDownload, required this.onParty});
   final MediaItemDetail item;
+  final String? heroTag;
   final void Function(EpisodeCard?) onPlay;
   final void Function(EpisodeCard?) onDownload;
   final void Function(EpisodeCard?) onParty;
@@ -185,33 +294,7 @@ class _DetailContent extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // The tilted "channel-framed" poster, sticking up over the banner.
-                      Transform.translate(
-                        offset: const Offset(0, -46),
-                        child: Transform.rotate(
-                          angle: -0.035,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(color: HokagoColors.card, borderRadius: BorderRadius.circular(20), boxShadow: hokagoPanelShadow),
-                            child: Padding(
-                              padding: const EdgeInsets.all(5),
-                              child: SizedBox(
-                                width: 108,
-                                child: AspectRatio(
-                                  aspectRatio: 2 / 3,
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(15),
-                                    child: item.posterUrl != null
-                                        ? AuthImage(url: item.posterUrl)
-                                        : DecoratedBox(
-                                            decoration: BoxDecoration(gradient: LinearGradient(colors: hue)),
-                                            child: const Icon(Icons.movie_creation_rounded, color: Colors.white, size: 32),
-                                          ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
+                      _posterFrame(posterUrl: item.posterUrl, hue: hue, heroTag: heroTag),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Column(

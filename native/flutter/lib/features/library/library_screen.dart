@@ -32,7 +32,14 @@ class LibraryScreen extends ConsumerWidget {
             childAspectRatio: 0.54,
           ),
           itemCount: cards.length,
-          itemBuilder: (_, i) => MediaTile(item: cards[i], onTap: () => context.push('/title/${cards[i].id}')),
+          itemBuilder: (_, i) {
+            final tag = 'poster:${cards[i].id}';
+            return MediaTile(
+              item: cards[i],
+              heroTag: tag,
+              onTap: () => context.push('/title/${cards[i].id}', extra: (heroTag: tag, posterUrl: cards[i].posterUrl)),
+            );
+          },
         ),
       ),
     );

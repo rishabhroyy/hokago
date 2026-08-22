@@ -20,13 +20,14 @@ import '../session/session_controller.dart';
 import '../session/session_state.dart';
 import 'session_refresh_notifier.dart';
 
-/// A pure geometric slide — position only, never opacity. An opacity-based
-/// crossfade (tried first) blends the old and new page's content together
-/// for the whole transition, which reads as "morphing" once every Scaffold
-/// is transparent (to show the shared wallpaper) — at any instant during a
-/// slide, each pixel shows only ONE page fully opaque, never a blend, so
-/// there's nothing to morph. Subtle and quick (220ms), not the iOS default
-/// (which also draws a drop shadow under the incoming page).
+/// A pure geometric slide — position only, NEVER opacity. Any opacity
+/// component (tried twice — a full crossfade, then just a partial fade-in)
+/// blends the old and new page's content together for however long it
+/// lasts, which reads as "morphing" once every Scaffold is transparent (to
+/// show the shared wallpaper) — at any instant during a pure slide, each
+/// pixel shows only ONE page fully opaque, never a blend, so there's
+/// nothing to morph. Subtle and quick (220ms), not the iOS default (which
+/// also draws a drop shadow under the incoming page).
 CustomTransitionPage<void> _slidePage(Widget child, GoRouterState state) {
   return CustomTransitionPage<void>(
     key: state.pageKey,
@@ -35,9 +36,26 @@ CustomTransitionPage<void> _slidePage(Widget child, GoRouterState state) {
     reverseTransitionDuration: const Duration(milliseconds: 220),
     transitionsBuilder: (context, animation, secondaryAnimation, child) {
       final offset = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
-      final fadeIn = CurvedAnimation(parent: animation, curve: const Interval(0.0, 0.6, curve: Curves.easeOut));
-      return SlideTransition(position: offset, child: FadeTransition(opacity: fadeIn, child: child));
+      return SlideTransition(position: offset, child: child);
     },
+  );
+}
+
+/// The ShellRoute's own tab routes (Home/Search/Downloads/Settings) — lateral
+/// switches between siblings, not a drill-down. A push-style slide reads as
+/// "navigating into" a tab, and for the length of the animation both the old
+/// and new tab's full-opacity content are simultaneously on screen mid-slide
+/// (the incoming page sliding in from the side necessarily overlaps the
+/// outgoing one), which is the same "morphing" complaint again just from
+/// geometry instead of opacity. Tabs swap instantly, like every mainstream
+/// tab bar (iOS Tab Bar, Android bottom nav) actually does.
+CustomTransitionPage<void> _tabPage(Widget child, GoRouterState state) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (context, animation, secondaryAnimation, child) => child,
   );
 }
 
@@ -77,17 +95,23 @@ GoRouter buildAppRouter(Ref ref) {
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [
-          GoRoute(path: '/', pageBuilder: (_, state) => _slidePage(const HomeScreen(), state)),
+          GoRoute(path: '/', pageBuilder: (_, state) => _tabPage(const HomeScreen(), state)),
           GoRoute(
             path: '/library/:id',
             pageBuilder: (_, state) => _slidePage(LibraryScreen(libraryId: state.pathParameters['id']!), state),
           ),
-          GoRoute(path: '/search', pageBuilder: (_, state) => _slidePage(const SearchScreen(), state)),
-          GoRoute(path: '/downloads', pageBuilder: (_, state) => _slidePage(const DownloadsScreen(), state)),
-          GoRoute(path: '/prefs', pageBuilder: (_, state) => _slidePage(const PrefsScreen(), state)),
+          GoRoute(path: '/search', pageBuilder: (_, state) => _tabPage(const SearchScreen(), state)),
+          GoRoute(path: '/downloads', pageBuilder: (_, state) => _tabPage(const DownloadsScreen(), state)),
+          GoRoute(path: '/prefs', pageBuilder: (_, state) => _tabPage(const PrefsScreen(), state)),
         ],
       ),
-      GoRoute(path: '/title/:id', pageBuilder: (_, state) => _slidePage(DetailScreen(itemId: state.pathParameters['id']!), state)),
+      GoRoute(
+        path: '/title/:id',
+        pageBuilder: (_, state) => _slidePage(
+          DetailScreen(itemId: state.pathParameters['id']!, zoom: state.extra as DetailZoomArgs?),
+          state,
+        ),
+      ),
       GoRoute(path: '/party', pageBuilder: (_, state) => _slidePage(const PartyJoinScreen(), state)),
       GoRoute(
         path: '/watch/:mediaFileId',

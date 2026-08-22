@@ -79,7 +79,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       childAspectRatio: 0.54,
                     ),
                     itemCount: results.length,
-                    itemBuilder: (_, i) => MediaTile(item: results[i], onTap: () => context.push('/title/${results[i].id}')),
+                    itemBuilder: (_, i) {
+                      final tag = 'poster:${results[i].id}';
+                      return MediaTile(
+                        item: results[i],
+                        heroTag: tag,
+                        onTap: () => context.push('/title/${results[i].id}', extra: (heroTag: tag, posterUrl: results[i].posterUrl)),
+                      );
+                    },
                   );
                 },
               ),

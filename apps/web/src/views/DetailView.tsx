@@ -210,6 +210,7 @@ export function DetailView({ itemId }: { itemId: string }) {
   const [fixOpen, setFixOpen] = useState(false);
   const [dlState, setDlState] = useState<"idle" | "building" | "saving" | "done" | "error">("idle");
   const [dlError, setDlError] = useState<string | null>(null);
+  const [dlProgress, setDlProgress] = useState<{ received: number; total: number } | null>(null);
 
   useEffect(() => {
     if (!profileId) return;
@@ -277,7 +278,8 @@ export function DetailView({ itemId }: { itemId: string }) {
       const status = await waitReady(id);
       if (status !== "READY") throw new Error(status === "FAILED" ? "the server failed to build the download" : "download timed out");
       setDlState("saving");
-      const outcome = await saveToDevice(id);
+      setDlProgress({ received: 0, total: 0 });
+      const outcome = await saveToDevice(id, (received, total) => setDlProgress({ received, total }));
       if (!outcome.ok) throw new Error(outcome.error);
       recordLocalDownload(id, { localPath: outcome.localPath, sizeBytes: outcome.sizeBytes });
       // Offline manifest: title/kind/poster captured now, while the server's
@@ -299,8 +301,10 @@ export function DetailView({ itemId }: { itemId: string }) {
         subtitlePaths: [],
       });
       setDlState("done");
+      setDlProgress(null);
     } catch (err) {
       setDlState("error");
+      setDlProgress(null);
       setDlError(err instanceof Error ? err.message : "download failed");
     }
   };
@@ -492,6 +496,16 @@ export function DetailView({ itemId }: { itemId: string }) {
                               ? "saved to this device ✓"
                               : "Download"}
                       </button>
+                    )}
+                    {dlState === "saving" && dlProgress && dlProgress.total > 0 && (
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-24 overflow-hidden rounded-full bg-line">
+                          <span className="block h-full bg-wii-deep transition-all" style={{ width: `${Math.min(100, Math.round((dlProgress.received / dlProgress.total) * 100))}%` }} />
+                        </span>
+                        <span className="font-mono text-kicker text-ink-3">
+                          {Math.round((dlProgress.received / dlProgress.total) * 100)}% · {(dlProgress.received / 1024 / 1024).toFixed(1)} / {(dlProgress.total / 1024 / 1024 / 1024).toFixed(2)} GB
+                        </span>
+                      </span>
                     )}
                     {dlState === "error" && dlError && (
                       <span className="text-small font-semibold text-accent">{dlError}</span>

@@ -101,6 +101,17 @@ export async function saveToDevice(downloadId: string, onProgress?: (received: n
   const { data, error } = await api.GET("/downloads/{id}/artifact", { params: { path: { id: downloadId } } });
   if (error || !data) return { ok: false, error: error?.error ?? "artifact unavailable" };
 
+  // Wire progress events from the managed download bridge (desktop) — throttled ~150ms from Rust
+  let off: (() => void) | null = null;
+  if (onProgress) {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as { type?: string; receivedBytes?: number; totalBytes?: number };
+      if (d?.type === "download-progress" && typeof d.receivedBytes === "number") onProgress(d.receivedBytes, d.totalBytes ?? d.receivedBytes);
+    };
+    window.addEventListener("hokago-native", handler as EventListener);
+    off = () => window.removeEventListener("hokago-native", handler as EventListener);
+  }
+
   try {
     if (data.media) {
       const saved = await bridge.downloads.save(resolveUrl(data.media.url), data.media.filename);
@@ -117,7 +128,14 @@ export async function saveToDevice(downloadId: string, onProgress?: (received: n
     return { ok: false, error: "artifact has no media file" };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "download failed" };
+  } finally {
+    off?.();
   }
+}
+
+export function cancelSave(id: string): void {
+  const b = getNativeBridge() as unknown as { downloads?: { cancel?: (id: string) => Promise<void> } };
+  b?.downloads?.cancel?.(id).catch(() => {});
 }
 
 export async function deleteDownload(downloadId: string): Promise<void> {

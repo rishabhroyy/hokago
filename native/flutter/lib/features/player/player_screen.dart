@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../core/api/hokago_api.dart';
 import '../../core/api/models/media_files.dart';
 import '../../core/api/models/playback.dart';
+import '../../core/party/party_controller.dart';
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -39,13 +40,16 @@ const _qualityOptions = [
 /// player screen viable at all.
 ///
 /// Mirrors apps/web/src/WatchPage.tsx's contract semantics (timeline offset,
-/// resume, seek-restart, quality switch, trickplay scrubber) but NOT its
-/// full sophistication: no retry queue for a busy transcoder, no watch-party
-/// sync yet.
+/// resume, seek-restart, quality switch, trickplay scrubber, watch-party
+/// sync) but NOT its full sophistication: no retry queue for a busy
+/// transcoder, and party sync always restarts the stream on drift instead of
+/// distinguishing a "covered frontier" fast path that can land with a local
+/// seek alone.
 class PlayerScreen extends ConsumerStatefulWidget {
-  const PlayerScreen({super.key, required this.mediaFileId, required this.mediaItemId});
+  const PlayerScreen({super.key, required this.mediaFileId, required this.mediaItemId, this.partyId});
   final String mediaFileId;
   final String mediaItemId;
+  final String? partyId;
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
@@ -68,6 +72,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _restarting = false;
   MediaFileTrickplayResponse? _trickplay;
   String _selectedQuality = _qualityOptions.first.label;
+  PartyController? _party;
+  StreamSubscription<PartyCommand>? _partySub;
+  StreamSubscription<dynamic>? _partyStateSub;
+  bool _partyApplying = false;
 
   HokagoApi get _api => ref.read(sessionProvider.notifier).api;
 
@@ -76,11 +84,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     super.initState();
     WakelockPlus.enable();
     _startPlayback();
+    final partyId = widget.partyId;
+    final profileId = ref.read(sessionProvider).profileId;
+    if (partyId != null && profileId != null) {
+      final party = PartyController(_api, partyId: partyId, profileId: profileId);
+      _party = party;
+      _partySub = party.commands.listen(_applyPartyCommand);
+      _partyStateSub = party.partyUpdates.listen((_) => setState(() {})); // member list / host / locked changes
+    }
   }
 
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
+    _partySub?.cancel();
+    _partyStateSub?.cancel();
+    final party = _party;
+    if (party != null && !party.isHost) party.leave();
+    party?.dispose();
     final sessionId = _start?.sessionId;
     if (sessionId != null) {
       // Fire-and-forget — mirrors the web's keepalive stop() on unmount.
@@ -89,6 +110,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     WakelockPlus.disable();
     _player.dispose();
     super.dispose();
+  }
+
+  /// Applies a server-issued party command (mine, echoed back, are filtered
+  /// out by PartyController before reaching here). WAITING/PAUSED are a flat
+  /// anchor; PLAYING advances with wall-clock since issuedAt — same math as
+  /// WatchPage.tsx's applyPartyCommand, simplified: always restarts the
+  /// stream on real drift rather than distinguishing a fast local-seek path.
+  Future<void> _applyPartyCommand(PartyCommand cmd) async {
+    if (_start == null || _partyApplying) return;
+    _partyApplying = true;
+    try {
+      final issuedAt = DateTime.tryParse(cmd.issuedAt) ?? DateTime.now();
+      final targetMs = cmd.state == 'PLAYING' ? cmd.positionMs + DateTime.now().difference(issuedAt).inMilliseconds.clamp(0, 1 << 30) : cmd.positionMs;
+      final myMs = _absoluteMediaTimeMs;
+      final drifted = (targetMs - myMs).abs() > 3000;
+      if (drifted) await _onScrub(targetMs, fromParty: true);
+      if (cmd.state == 'PLAYING') {
+        await _player.play();
+      } else {
+        await _player.pause();
+      }
+    } finally {
+      _partyApplying = false;
+    }
   }
 
   Future<void> _startPlayback() async {
@@ -115,6 +160,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       await _openMedia(_srcFor(start), initialSeekSec: localSeekTargetSec);
       _loadTracks();
       _startHeartbeat();
+      if (_party != null) unawaited(_party!.linkSession(start.sessionId));
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not start playback: $e');
@@ -228,28 +274,37 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   int get _absoluteMediaTimeMs => _player.state.position.inMilliseconds + _timelineOffsetMs;
 
-  Future<void> _onScrub(int targetMediaMs) async {
+  Future<void> _onScrub(int targetMediaMs, {bool fromParty = false}) async {
     final start = _start;
     if (start == null) return;
+    // Guests in a live party don't own the timeline — only a party-command-
+    // driven call (fromParty) may move it; a stray manual gesture is a no-op
+    // (the UI also disables the slider, this is the belt-and-suspenders check).
+    if (!fromParty && (_party?.locked ?? false)) return;
     if (start.method == 'DIRECT_PLAY' || start.method == 'DIRECT_STREAM') {
       await _player.seek(Duration(milliseconds: targetMediaMs));
-      return;
-    }
-    setState(() => _restarting = true);
-    try {
-      final outcome = await _api.seek(start.sessionId, targetMediaMs);
-      if (!outcome.restarted) {
-        await _player.seek(Duration(milliseconds: targetMediaMs - _timelineOffsetMs));
-      } else {
-        final newOffset = outcome.actualStartMs ?? targetMediaMs;
-        _timelineOffsetMs = newOffset;
-        final cacheBust = DateTime.now().millisecondsSinceEpoch;
-        await _openMedia(_srcFor(start, cacheBust: cacheBust), initialSeekSec: ((targetMediaMs - newOffset) / 1000).round());
+    } else {
+      setState(() => _restarting = true);
+      try {
+        final outcome = await _api.seek(start.sessionId, targetMediaMs);
+        if (!outcome.restarted) {
+          await _player.seek(Duration(milliseconds: targetMediaMs - _timelineOffsetMs));
+        } else {
+          final newOffset = outcome.actualStartMs ?? targetMediaMs;
+          _timelineOffsetMs = newOffset;
+          final cacheBust = DateTime.now().millisecondsSinceEpoch;
+          await _openMedia(_srcFor(start, cacheBust: cacheBust), initialSeekSec: ((targetMediaMs - newOffset) / 1000).round());
+        }
+      } catch (_) {
+        // leave playback where it is — a failed restart shouldn't kill the session
+      } finally {
+        if (mounted) setState(() => _restarting = false);
       }
-    } catch (_) {
-      // leave playback where it is — a failed restart shouldn't kill the session
-    } finally {
-      if (mounted) setState(() => _restarting = false);
+    }
+    // The host scrubbing is also a timekeeper command — moves the whole room.
+    final party = _party;
+    if (!fromParty && party != null && party.isHost) {
+      unawaited(party.control(_player.state.playing ? 'PLAYING' : 'PAUSED', targetMediaMs));
     }
   }
 
@@ -404,6 +459,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 onScrub: _onScrub,
                 onBack: () => Navigator.of(context).maybePop(),
                 onTracks: _showTrackSheet,
+                partyMemberCount: _party?.party?.members.length,
+                partyLocked: _party?.locked ?? false,
+                onHostToggle: _party != null && _party!.isHost
+                    ? () => unawaited(_party!.control(_player.state.playing ? 'PLAYING' : 'PAUSED', _absoluteMediaTimeMs))
+                    : null,
               )),
             ),
           ],
@@ -434,6 +494,9 @@ class _Controls extends StatelessWidget {
     this.trickplay,
     this.resolveUrl,
     this.accessToken,
+    this.partyMemberCount,
+    this.partyLocked = false,
+    this.onHostToggle,
   });
 
   final Player player;
@@ -445,6 +508,13 @@ class _Controls extends StatelessWidget {
   final MediaFileTrickplayResponse? trickplay;
   final String Function(String path)? resolveUrl;
   final String? accessToken;
+  final int? partyMemberCount;
+  /// Guest in a live party — the host owns play/pause/seek; gestures here
+  /// are inert (mirrors WatchPage.tsx's `locked` prop on the stock slider).
+  final bool partyLocked;
+  /// Host only: called right after a local play/pause toggle so the parent
+  /// can broadcast it as the room's new timekeeper state.
+  final VoidCallback? onHostToggle;
 
   String _fmt(Duration d) {
     final s = d.inSeconds;
@@ -472,28 +542,46 @@ class _Controls extends StatelessWidget {
               child: Row(children: [
                 IconButton(onPressed: onBack, icon: const Icon(Icons.arrow_back_rounded, color: Colors.white)),
                 const Spacer(),
+                if (partyMemberCount != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(HokagoRadii.pill)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.groups_rounded, color: Colors.white, size: 15),
+                      const SizedBox(width: 5),
+                      Text('$partyMemberCount', style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                    ]),
+                  ),
                 IconButton(onPressed: onTracks, icon: const Icon(Icons.subtitles_outlined, color: Colors.white)),
               ]),
             ),
           ),
           const Spacer(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                iconSize: 36,
-                color: Colors.white,
-                onPressed: () => player.seek(player.state.position - const Duration(seconds: 10)),
-                icon: const Icon(Icons.replay_10_rounded),
-              ),
-              const SizedBox(width: 24),
-              StreamBuilder<bool>(
-                stream: player.stream.playing,
-                initialData: player.state.playing,
-                builder: (_, snap) => IconButton(
-                  iconSize: 56,
-                  color: Colors.white,
-                  onPressed: () => player.playOrPause(),
+          IgnorePointer(
+            ignoring: partyLocked,
+            child: Opacity(
+              opacity: partyLocked ? 0.4 : 1,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    iconSize: 36,
+                    color: Colors.white,
+                    onPressed: () => player.seek(player.state.position - const Duration(seconds: 10)),
+                    icon: const Icon(Icons.replay_10_rounded),
+                  ),
+                  const SizedBox(width: 24),
+                  StreamBuilder<bool>(
+                    stream: player.stream.playing,
+                    initialData: player.state.playing,
+                    builder: (_, snap) => IconButton(
+                      iconSize: 56,
+                      color: Colors.white,
+                  onPressed: () {
+                    player.playOrPause();
+                    onHostToggle?.call();
+                  },
                   icon: Icon(snap.data == true ? Icons.pause_rounded : Icons.play_arrow_rounded),
                 ),
               ),
@@ -506,8 +594,12 @@ class _Controls extends StatelessWidget {
               ),
             ],
           ),
+            ),
+          ),
           const Spacer(),
-          Padding(
+          IgnorePointer(
+          ignoring: partyLocked,
+          child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
             child: StreamBuilder<Duration>(
               stream: player.stream.position,
@@ -538,6 +630,7 @@ class _Controls extends StatelessWidget {
                 );
               },
             ),
+          ),
           ),
         ],
       ),

@@ -70,6 +70,23 @@ class DetailScreen extends ConsumerWidget {
     }
   }
 
+  Future<void> _startParty(BuildContext context, WidgetRef ref, MediaItemDetail item, {EpisodeCard? episode}) async {
+    final profileId = ref.read(sessionProvider).profileId;
+    final mediaItemId = episode?.id ?? item.id;
+    if (profileId == null) return;
+    try {
+      final api = ref.read(sessionProvider.notifier).api;
+      final party = await api.createParty(profileId: profileId, mediaItemId: mediaItemId);
+      final fileId = party.mediaFileId ?? episode?.mediaFileId ?? item.mediaFileId;
+      if (fileId == null || !context.mounted) return;
+      context.push('/watch/$fileId?mediaItemId=${party.mediaItemId}&party=${party.id}');
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not start a watch party: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final detail = ref.watch(detailProvider(itemId));
@@ -81,6 +98,7 @@ class DetailScreen extends ConsumerWidget {
           item: item,
           onPlay: (ep) => _play(context, item, episode: ep),
           onDownload: (ep) => _download(context, ref, item, episode: ep),
+          onParty: (ep) => _startParty(context, ref, item, episode: ep),
         ),
       ),
     );
@@ -88,10 +106,11 @@ class DetailScreen extends ConsumerWidget {
 }
 
 class _DetailContent extends StatelessWidget {
-  const _DetailContent({required this.item, required this.onPlay, required this.onDownload});
+  const _DetailContent({required this.item, required this.onPlay, required this.onDownload, required this.onParty});
   final MediaItemDetail item;
   final void Function(EpisodeCard?) onPlay;
   final void Function(EpisodeCard?) onDownload;
+  final void Function(EpisodeCard?) onParty;
 
   @override
   Widget build(BuildContext context) {
@@ -237,21 +256,30 @@ class _DetailContent extends StatelessWidget {
                       children: [for (final g in item.genres.take(6)) _GenreChip(g)],
                     ),
                   if (item.genres.isNotEmpty) const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      if (nextEpisode != null || !isSeries)
-                        WiiButton(
-                          icon: Icons.play_arrow_rounded,
-                          onPressed: () => onPlay(isSeries ? nextEpisode : null),
-                          child: Text(resumeMs > 0 ? 'Resume' : 'Play'),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        if (nextEpisode != null || !isSeries)
+                          WiiButton(
+                            icon: Icons.play_arrow_rounded,
+                            onPressed: () => onPlay(isSeries ? nextEpisode : null),
+                            child: Text(resumeMs > 0 ? 'Resume' : 'Play'),
+                          ),
+                        const SizedBox(width: 10),
+                        GhostButton(
+                          icon: Icons.groups_rounded,
+                          onPressed: () => onParty(isSeries ? nextEpisode : null),
+                          child: const Text('Watch party'),
                         ),
-                      const SizedBox(width: 10),
-                      GhostButton(
-                        icon: Icons.download_outlined,
-                        onPressed: () => onDownload(isSeries ? nextEpisode : null),
-                        child: const Text('Download'),
-                      ),
-                    ],
+                        const SizedBox(width: 10),
+                        GhostButton(
+                          icon: Icons.download_outlined,
+                          onPressed: () => onDownload(isSeries ? nextEpisode : null),
+                          child: const Text('Download'),
+                        ),
+                      ],
+                    ),
                   ),
                   if (item.overview != null) ...[
                     const SizedBox(height: 18),

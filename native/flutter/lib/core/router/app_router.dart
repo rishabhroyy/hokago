@@ -8,6 +8,7 @@ import '../../features/home/home_screen.dart';
 import '../../features/library/library_screen.dart';
 import '../../features/onboarding/first_run_setup_screen.dart';
 import '../../features/onboarding/server_setup_screen.dart';
+import '../../features/party/party_join_screen.dart';
 import '../../features/player/player_screen.dart';
 import '../../features/prefs/prefs_screen.dart';
 import '../../features/profiles/profile_picker_screen.dart';
@@ -85,12 +86,14 @@ GoRouter buildAppRouter(Ref ref) {
         ],
       ),
       GoRoute(path: '/title/:id', pageBuilder: (_, state) => _slidePage(DetailScreen(itemId: state.pathParameters['id']!), state)),
+      GoRoute(path: '/party', pageBuilder: (_, state) => _slidePage(const PartyJoinScreen(), state)),
       GoRoute(
         path: '/watch/:mediaFileId',
         pageBuilder: (_, state) => _slidePage(
           PlayerScreen(
             mediaFileId: state.pathParameters['mediaFileId']!,
             mediaItemId: state.uri.queryParameters['mediaItemId']!,
+            partyId: state.uri.queryParameters['party'],
           ),
           state,
         ),

@@ -6,6 +6,7 @@ import 'models/browse.dart';
 import 'models/downloads.dart';
 import 'models/home.dart';
 import 'models/media_files.dart';
+import 'models/party.dart';
 import 'models/playback.dart';
 import 'models/profile.dart';
 import 'token_store.dart';
@@ -234,5 +235,42 @@ class HokagoApi {
   /// Revokes every session bound to the device (may be this install).
   Future<void> deleteDevice(String id) async {
     await _client.dio.delete('/auth/devices/$id');
+  }
+
+  // ── Watch parties ──────────────────────────────────────────────────────
+  Future<WatchPartyResponse> createParty({required String profileId, required String mediaItemId}) async {
+    final res = await _client.dio.post('/parties', data: {'profileId': profileId, 'mediaItemId': mediaItemId});
+    return WatchPartyResponse.fromJson(res.data as Map<String, dynamic>);
+  }
+
+  Future<WatchPartyResponse> joinParty({required String inviteCode, required String profileId}) async {
+    final res = await _client.dio.post('/parties/join', data: {'inviteCode': inviteCode, 'profileId': profileId});
+    return WatchPartyResponse.fromJson(res.data as Map<String, dynamic>);
+  }
+
+  Future<void> leaveParty(String partyId) async {
+    await _client.dio.post('/parties/$partyId/leave');
+  }
+
+  Future<void> setPartyReady(String partyId, bool ready) async {
+    await _client.dio.post('/parties/$partyId/ready', data: {'ready': ready});
+  }
+
+  Future<void> linkPartySession(String partyId, String sessionId) async {
+    await _client.dio.post('/parties/$partyId/session', data: {'sessionId': sessionId});
+  }
+
+  Future<WatchPartyResponse?> controlParty(String partyId, {required String state, required int positionMs}) async {
+    final res = await _client.dio.post('/parties/$partyId/control', data: {'state': state, 'positionMs': positionMs});
+    return res.data != null ? WatchPartyResponse.fromJson(res.data as Map<String, dynamic>) : null;
+  }
+
+  /// wss://host/ws/party/{partyId}?token=... — browsers can't set WS
+  /// handshake headers, so the access JWT rides as a query param, same as
+  /// the web's connectPartySocket.
+  Future<String> partySocketUrl(String partyId) async {
+    final token = await warmToken() ?? await TokenStore.instance.accessToken;
+    final base = _client.dio.options.baseUrl.replaceFirst(RegExp(r'^http'), 'ws');
+    return '$base/ws/party/${Uri.encodeComponent(partyId)}?token=${Uri.encodeComponent(token ?? '')}';
   }
 }

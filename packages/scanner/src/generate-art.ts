@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { hwDecodeArgs, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
+import { hwDecodeArgs, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { trackPid, untrackPid } from "./child-registry.js";
 
 const POSTER_WIDTH = 1000;
@@ -53,18 +53,40 @@ async function withFfmpegSpawn<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Registers the child's PID so a worker's SIGTERM handler can reap it . */
-export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
+async function runFfmpegInner(args: string[], hw: HwaccelState | null, opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
   return withFfmpegSpawn(() => {
-    const effective = hwState ? [...hwDecodeArgs(hwState), ...args] : args;
+    const effective = hw ? [...hwDecodeArgs(hw), ...args] : args;
     return new Promise((resolve, reject) => {
       const child = execFile("ffmpeg", effective, { maxBuffer: 32 * 1024 * 1024, timeout: opts?.timeoutMs }, (err, stdout, stderr) => {
         untrackPid(child.pid);
-        if (err) reject(err);
-        else resolve({ stdout, stderr });
+        if (err) {
+          const e = err as Error & { stderr?: string };
+          (e as unknown as { stderr: string }).stderr = stderr;
+          reject(e);
+        } else resolve({ stdout, stderr });
       });
       trackPid(child.pid);
     });
   });
+}
+
+export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
+  // JPEG inputs (scoring, poster compose) never benefit from hw decode — force CPU
+  const isJpegInput = args.some((a) => a.endsWith(".jpg") || a.endsWith(".jpeg"));
+  const hw = isJpegInput ? null : hwState;
+  try {
+    return await runFfmpegInner(args, hw, opts);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    const hwHint = /hwaccel|CUDA|vaapi|qsv|nv12|Failed to/i.test(msg + stderr);
+    if (hw && hw.method !== "none" && hwHint) {
+      reportHwFailure(hw.method, msg.slice(0, 200));
+      // Retry once on CPU — a flaky driver must not poison every thumbnail
+      return runFfmpegInner(args, null, opts);
+    }
+    throw err;
+  }
 }
 
 /** Runs a single ffmpeg pass over a short window near sampleAtSec, parses the last crop=W:H:X:Y (— black bars would otherwise skew scoring and composition). */
@@ -97,11 +119,12 @@ async function extractCandidateFrame(
   outPath: string,
 ): Promise<boolean> {
   // JPEG is full-range-only; hw-decoded nv12 frames are limited-range and
-  // mjpeg rejects them — append format=yuvj420p so a hardware decode can't
-  // hang the candidate-frame extraction (and trip reportHwFailure).
-  const vf = cropFilter ? `crop=${cropFilter},thumbnail=50,format=yuvj420p` : "thumbnail=50,format=yuvj420p";
+  // mjpeg rejects them — append format=yuvj420p + setsar=1 so a hardware
+  // decode can't hang the extraction and the output has square pixels.
+  const base = "thumbnail=50,format=yuvj420p,setsar=1";
+  const vf = cropFilter ? `crop=${cropFilter},${base}` : base;
   try {
-    await runFfmpeg(["-y", "-ss", String(atSec), "-i", filePath, "-vf", vf, "-frames:v", "1", outPath]);
+    await runFfmpeg(["-y", "-ss", String(atSec), "-i", filePath, "-vf", vf, "-frames:v", "1", "-q:v", "2", outPath]);
     return true;
   } catch {
     return false;
@@ -198,11 +221,14 @@ export async function selectBestFrame(filePath: string, durationMs: number): Pro
  */
 export async function composePoster(sourceImagePath: string): Promise<Buffer> {
   const outPath = path.join(tmpdir(), `hokago-poster-${randomUUID()}.jpg`);
+  // Ensure square pixels (setsar=1) and full-range yuvj420p for JPEG output;
+  // the previous filter left SAR 179:180 on 4:3 sources, which some browsers
+  // render as slightly stretched ("weird" thumbs). q:v 2 preserves detail.
   const filterComplex =
     `[0:v]scale=${POSTER_WIDTH}:${POSTER_HEIGHT}:force_original_aspect_ratio=increase,` +
-    `crop=${POSTER_WIDTH}:${POSTER_HEIGHT},boxblur=20:20,eq=brightness=-0.15[bg];` +
-    `[0:v]scale=${POSTER_WIDTH}:-1[fg];` +
-    `[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`;
+    `crop=${POSTER_WIDTH}:${POSTER_HEIGHT},setsar=1,boxblur=20:20,eq=brightness=-0.15[bg];` +
+    `[0:v]scale=${POSTER_WIDTH}:-1:flags=lanczos,setsar=1,format=yuvj420p[fg];` +
+    `[bg][fg]overlay=(W-w)/2:(H-h)/2:format=yuv420[out]`;
 
   try {
     await runFfmpeg([
@@ -215,6 +241,8 @@ export async function composePoster(sourceImagePath: string): Promise<Buffer> {
       "[out]",
       "-frames:v",
       "1",
+      "-q:v",
+      "2",
       outPath,
     ]);
     return await readFile(outPath);

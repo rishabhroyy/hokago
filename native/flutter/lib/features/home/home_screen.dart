@@ -7,7 +7,6 @@ import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/hokago_hero.dart';
 import '../../core/widgets/media_tile.dart';
-import '../detail/detail_screen.dart';
 
 final homeProvider = FutureProvider.autoDispose<HomeResponse>((ref) async {
   final session = ref.watch(sessionProvider);
@@ -38,8 +37,8 @@ class _HomeContent extends StatelessWidget {
   const _HomeContent({required this.data});
   final HomeResponse data;
 
-  void _openDetail(BuildContext context, String? id, [DetailZoomArgs? zoom]) {
-    if (id != null) context.push('/title/$id', extra: zoom);
+  void _openDetail(BuildContext context, String? id) {
+    if (id != null) context.push('/title/$id');
   }
 
   void _playSlide(BuildContext context, HomeSlide slide) {
@@ -70,11 +69,10 @@ class _HomeContent extends StatelessWidget {
         for (final row in data.rows)
           SliverToBoxAdapter(
             child: MediaRail(
-              railId: row.id,
               title: row.title,
               subtitle: row.subtitle,
               items: row.items,
-              onTapItem: (item, tag) => _openDetail(context, item.id, (heroTag: tag, posterUrl: item.posterUrl)),
+              onTapItem: (item) => _openDetail(context, item.id),
             ),
           ),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),

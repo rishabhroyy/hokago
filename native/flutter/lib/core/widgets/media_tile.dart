@@ -5,6 +5,7 @@ import '../api/models/playback.dart';
 import '../theme/app_theme.dart';
 import '../theme/hue.dart';
 import 'auth_image.dart';
+import 'zoom_open.dart';
 
 /// The "wii channel" tile — ui/Tile.tsx ported: a glossy card-colored frame
 /// (5px padding, 20px outer / 15px inner radius) around the poster, a
@@ -18,7 +19,6 @@ class MediaTile extends StatelessWidget {
     required this.onTap,
     this.width,
     this.subLabel,
-    this.heroTag,
     this.posterUrlOverride,
     this.landscape = false,
     this.progress,
@@ -32,10 +32,6 @@ class MediaTile extends StatelessWidget {
   /// a tight width per cell; forcing a mismatched SizedBox there overflows.
   final double? width;
   final String? subLabel;
-  /// Ties this tile's art to DetailScreen's poster for a shared-element
-  /// zoom (Tile.tsx's zoomOpen). Omit for rows where the same item can
-  /// appear twice on one screen (Hero + a rail) — Hero tags must be unique.
-  final Object? heroTag;
   /// ui/tile-mapping.ts's continueWatchingToTile: a continuing episode shows
   /// its backdrop, not its poster — landscape reads as "watched so far".
   final String? posterUrlOverride;
@@ -45,6 +41,7 @@ class MediaTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final artKey = GlobalKey();
     final hue = hueFor(item.id);
     final art = posterUrlOverride ?? item.posterUrl;
     final artBox = AspectRatio(
@@ -94,8 +91,13 @@ class MediaTile extends StatelessWidget {
         ),
       ),
     );
+    // Channel color for the tap animation — the same deterministic hue this
+    // tile's own art fallback uses, not a real dominant-color sample off the
+    // poster pixels (that needs a decoded image and a canvas readback; this
+    // is instant and looks right often enough for a 90ms flash of color).
+    final channelColor = Color.lerp(hue.first, Colors.white, 0.12)!;
     final column = GestureDetector(
-      onTap: onTap,
+      onTap: () => zoomOpen(context: context, artKey: artKey, color: channelColor, navigate: onTap),
       child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -108,10 +110,7 @@ class MediaTile extends StatelessWidget {
                   BoxShadow(color: Color(0x99000000), blurRadius: 20, spreadRadius: -10, offset: Offset(0, 10)),
                 ],
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(5),
-                child: heroTag != null ? Hero(tag: heroTag!, child: artBox) : artBox,
-              ),
+              child: Padding(padding: const EdgeInsets.all(5), child: KeyedSubtree(key: artKey, child: artBox)),
             ),
             const SizedBox(height: 8),
             Padding(
@@ -132,16 +131,12 @@ class MediaTile extends StatelessWidget {
 }
 
 class MediaRail extends StatelessWidget {
-  const MediaRail({super.key, required this.railId, required this.title, required this.items, required this.onTapItem, this.subtitle});
+  const MediaRail({super.key, required this.title, required this.items, required this.onTapItem, this.subtitle});
 
-  /// Qualifies each tile's Hero tag ('poster:$railId:$itemId') — the same
-  /// title can appear in two different rails on Home at once, and Flutter
-  /// throws if two mounted Heroes ever share a tag.
-  final String railId;
   final String title;
   final String? subtitle;
   final List<MediaCard> items;
-  final void Function(MediaCard item, String heroTag) onTapItem;
+  final void Function(MediaCard) onTapItem;
 
   @override
   Widget build(BuildContext context) {
@@ -180,10 +175,7 @@ class MediaRail extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: items.length,
               separatorBuilder: (_, __) => const SizedBox(width: 14),
-              itemBuilder: (_, i) {
-                final tag = 'poster:$railId:${items[i].id}';
-                return MediaTile(item: items[i], width: 140, heroTag: tag, onTap: () => onTapItem(items[i], tag));
-              },
+              itemBuilder: (_, i) => MediaTile(item: items[i], width: 140, onTap: () => onTapItem(items[i])),
             ),
           ),
         ],
@@ -195,14 +187,16 @@ class MediaRail extends StatelessWidget {
 /// Continue watching's Row — same "wii channel" tile, but episodes render
 /// landscape (backdrop) with a resume progress bar / NEXT badge, and tapping
 /// lands on the parent series' detail page, not the episode itself. Mirrors
-/// ui/tile-mapping.ts's continueWatchingToTile.
+/// ui/tile-mapping.ts's continueWatchingToTile. Sized wider/shorter than
+/// MediaRail's portrait tiles — a 16:9 backdrop at the same 140 width left a
+/// tall dead gap under the (much shorter) image.
 class ContinueWatchingRail extends StatelessWidget {
   const ContinueWatchingRail({super.key, required this.entries, required this.onTapEntry});
 
+  static const _tileWidth = 200.0;
+  static const _railHeight = 168.0;
+
   final List<ContinueWatchingEntry> entries;
-  // No Hero tag here: this tile shows the episode's landscape backdrop while
-  // DetailScreen always shows the parent series' portrait poster — flying
-  // between two different images would look like a glitch, not a zoom.
   final void Function(ContinueWatchingEntry entry) onTapEntry;
 
   @override
@@ -234,7 +228,7 @@ class ContinueWatchingRail extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           SizedBox(
-            height: 244,
+            height: _railHeight,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -262,7 +256,7 @@ class ContinueWatchingRail extends StatelessWidget {
                     genres: const [],
                     createdAt: null,
                   ),
-                  width: 140,
+                  width: _tileWidth,
                   subLabel: subLabel,
                   posterUrlOverride: isEpisode ? (item.backdropUrl ?? item.posterUrl) : item.posterUrl,
                   landscape: isEpisode,

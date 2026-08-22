@@ -107,10 +107,7 @@ GoRouter buildAppRouter(Ref ref) {
       ),
       GoRoute(
         path: '/title/:id',
-        pageBuilder: (_, state) => _slidePage(
-          DetailScreen(itemId: state.pathParameters['id']!, zoom: state.extra as DetailZoomArgs?),
-          state,
-        ),
+        pageBuilder: (_, state) => _slidePage(DetailScreen(itemId: state.pathParameters['id']!), state),
       ),
       GoRoute(path: '/party', pageBuilder: (_, state) => _slidePage(const PartyJoinScreen(), state)),
       GoRoute(

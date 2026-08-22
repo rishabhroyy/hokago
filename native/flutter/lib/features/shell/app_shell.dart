@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/hokago_icon.dart';
 
 /// Bottom tab bar — hokago has no bottom-nav precedent on the web (desktop
 /// uses a top nav), so this is a mobile-native addition. A conventional
@@ -16,7 +17,7 @@ class AppShell extends StatelessWidget {
   final Widget child;
 
   static const _tabs = ['/', '/search', '/downloads', '/prefs'];
-  static const _icons = [Icons.home_rounded, Icons.search_rounded, Icons.download_rounded, Icons.settings_rounded];
+  static const _icons = [null, 'search', 'download', 'gear'];
   static const _labels = ['Home', 'Search', 'Downloads', 'Settings'];
 
   int _indexFor(String location) {
@@ -63,13 +64,16 @@ class AppShell extends StatelessWidget {
 
 class _TabItem extends StatelessWidget {
   const _TabItem({required this.icon, required this.label, required this.selected, required this.onTap});
-  final IconData icon;
+  /// null = Home — the tab shows the hokago LogoMark instead of a monoline
+  /// icon, so it isn't tinted by the selected/unselected icon color.
+  final String? icon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final tint = selected ? HokagoColors.wiiDeep : HokagoColors.ink3;
     return InkWell(
       onTap: onTap,
       child: Column(
@@ -81,18 +85,12 @@ class _TabItem extends StatelessWidget {
               borderRadius: BorderRadius.circular(HokagoRadii.pill),
               color: selected ? HokagoColors.wii.withValues(alpha: 0.16) : Colors.transparent,
             ),
-            child: Icon(icon, size: 22, color: selected ? HokagoColors.wiiDeep : HokagoColors.ink3),
+            child: icon == null
+                ? Opacity(opacity: selected ? 1 : 0.55, child: const HokagoLogoMark(size: 22))
+                : HokagoIcon(icon!, size: 22, color: tint),
           ),
           const SizedBox(height: 3),
-          Text(
-            label,
-            style: TextStyle(
-              fontFamily: 'Plus Jakarta Sans',
-              fontSize: 11,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
-              color: selected ? HokagoColors.wiiDeep : HokagoColors.ink3,
-            ),
-          ),
+          Text(label, style: HokagoText.small.copyWith(fontSize: 11, fontWeight: selected ? FontWeight.w700 : FontWeight.w600, color: tint)),
         ],
       ),
     );

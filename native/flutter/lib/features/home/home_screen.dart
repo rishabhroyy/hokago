@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/models/home.dart';
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/auth_image.dart';
+import '../../core/widgets/hokago_hero.dart';
 import '../../core/widgets/media_tile.dart';
 
 final homeProvider = FutureProvider.autoDispose<HomeResponse>((ref) async {
@@ -41,14 +41,24 @@ class _HomeContent extends StatelessWidget {
     if (id != null) context.push('/title/$id');
   }
 
+  void _playSlide(BuildContext context, HomeSlide slide) {
+    if (slide.mediaFileId == null || slide.mediaItemId == null) return;
+    context.push('/watch/${slide.mediaFileId}?mediaItemId=${slide.mediaItemId}');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final hero = data.slides.isNotEmpty ? data.slides.first : null;
     return CustomScrollView(
       slivers: [
-        if (hero != null)
-          SliverToBoxAdapter(child: _Hero(slide: hero, onTap: () => _openDetail(context, hero.detailId))),
-        SliverToBoxAdapter(child: const SizedBox(height: 12)),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        if (data.slides.isNotEmpty)
+          SliverToBoxAdapter(
+            child: HokagoHero(
+              slides: data.slides,
+              onPlay: (slide) => _playSlide(context, slide),
+              onDetail: (slide) => _openDetail(context, slide.detailId),
+            ),
+          ),
         for (final row in data.rows)
           SliverToBoxAdapter(
             child: MediaRail(
@@ -60,61 +70,6 @@ class _HomeContent extends StatelessWidget {
           ),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
-    );
-  }
-}
-
-class _Hero extends StatelessWidget {
-  const _Hero({required this.slide, required this.onTap});
-  final HomeSlide slide;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AspectRatio(
-        aspectRatio: 16 / 10,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            AuthImage(url: slide.backdropUrl ?? slide.posterUrl),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, HokagoColors.bg.withValues(alpha: 0.95)],
-                  stops: const [0.4, 1.0],
-                ),
-              ),
-            ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(slide.label.toUpperCase(), style: HokagoText.kicker),
-                  const SizedBox(height: 4),
-                  Text(
-                    slide.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: HokagoText.titleXl.copyWith(fontSize: 30),
-                  ),
-                  if (slide.sub != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(slide.sub!, style: HokagoText.meta),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

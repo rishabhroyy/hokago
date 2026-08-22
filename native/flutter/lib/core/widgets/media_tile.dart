@@ -2,19 +2,25 @@ import 'package:flutter/material.dart';
 
 import '../api/models/browse.dart';
 import '../theme/app_theme.dart';
+import '../theme/hue.dart';
 import 'auth_image.dart';
 
-/// Poster tile — the base unit of every rail/grid, matching the web app's
-/// card language (16px tile radius, title below, year/kind meta).
+/// The "wii channel" tile — ui/Tile.tsx ported: a glossy card-colored frame
+/// (5px padding, 20px outer / 15px inner radius) around the poster, a
+/// deterministic pastel hue-gradient fallback when there's no art, kicker-
+/// style meta line below the bold title. This — not a plain rounded image —
+/// is hokago's actual card language.
 class MediaTile extends StatelessWidget {
-  const MediaTile({super.key, required this.item, required this.onTap, this.width = 132});
+  const MediaTile({super.key, required this.item, required this.onTap, this.width = 140, this.subLabel});
 
   final MediaCard item;
   final VoidCallback onTap;
   final double width;
+  final String? subLabel;
 
   @override
   Widget build(BuildContext context) {
+    final hue = hueFor(item.id);
     return SizedBox(
       width: width,
       child: GestureDetector(
@@ -22,13 +28,42 @@ class MediaTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AspectRatio(
-              aspectRatio: 2 / 3,
-              child: AuthImage(url: item.posterUrl, borderRadius: BorderRadius.circular(HokagoRadii.tile)),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: HokagoColors.card,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: const [
+                  BoxShadow(color: Color(0x73000000), blurRadius: 6, spreadRadius: -2, offset: Offset(0, 2)),
+                  BoxShadow(color: Color(0x99000000), blurRadius: 20, spreadRadius: -10, offset: Offset(0, 10)),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(5),
+                child: AspectRatio(
+                  aspectRatio: 2 / 3,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(15),
+                    child: item.posterUrl != null
+                        ? AuthImage(url: item.posterUrl)
+                        : DecoratedBox(
+                            decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: hue)),
+                            child: const Center(child: Icon(Icons.movie_creation_rounded, color: Colors.white, size: 40)),
+                          ),
+                  ),
+                ),
+              ),
             ),
-            const SizedBox(height: 6),
-            Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: HokagoText.cardTitle),
-            if (item.year != null) Text('${item.year}', style: HokagoText.small),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: HokagoText.cardTitle),
+            ),
+            if (subLabel != null || item.year != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Text((subLabel ?? '${item.year}').toUpperCase(),
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: HokagoText.kicker.copyWith(color: HokagoColors.ink3)),
+              ),
           ],
         ),
       ),
@@ -48,32 +83,39 @@ class MediaRail extends StatelessWidget {
   Widget build(BuildContext context) {
     if (items.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.only(top: 12, bottom: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(title, style: HokagoText.section),
-                if (subtitle != null) ...[
-                  const SizedBox(width: 8),
-                  Text(subtitle!, style: HokagoText.meta),
-                ],
+                // The "channel indicator" accent bar — Row.tsx's ::before pseudo-element.
+                Container(
+                  width: 5,
+                  height: 18,
+                  margin: const EdgeInsets.only(right: 10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(3),
+                    gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [HokagoColors.wii2, HokagoColors.wiiDeep]),
+                    boxShadow: const [BoxShadow(color: Color(0x9963C3E6), blurRadius: 6)],
+                  ),
+                ),
+                Expanded(child: Text(title, style: HokagoText.section)),
+                if (subtitle != null) Text(subtitle!, style: HokagoText.meta),
               ],
             ),
           ),
           const SizedBox(height: 10),
           SizedBox(
-            height: 236,
+            height: 244,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: items.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              separatorBuilder: (_, __) => const SizedBox(width: 14),
               itemBuilder: (_, i) => MediaTile(item: items[i], onTap: () => onTapItem(items[i])),
             ),
           ),

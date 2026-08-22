@@ -1,0 +1,65 @@
+name: hokago
+description: "hokago native mobile client"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.1
+
+dependencies:
+  background_downloader: ^9.5.8
+  cached_network_image: ^3.4.1
+  dio: ^5.11.0
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.6.1
+  flutter_secure_storage: ^11.0.0
+  flutter_svg: ^2.2.1
+  go_router: ^17.5.0
+  media_kit: ^1.2.6
+  media_kit_libs_video: ^1.0.7
+  media_kit_video: ^2.0.1
+  package_info_plus: ^10.2.1
+  path_provider: ^2.1.6
+  uuid: ^4.6.0
+  wakelock_plus: ^1.7.0
+  web_socket_channel: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# Same source art as native/tauri/src-tauri/icons/icon.png (the hokago mark
+# on cream) — `dart run flutter_launcher_icons` regenerates every iOS/Android
+# launcher size from this one file.
+flutter_launcher_icons:
+  image_path: "assets/icon/app_icon.png"
+  ios: true
+  android: true
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/OFL.txt
+    - assets/icon/app_icon.png
+  fonts:
+    # Same three families as apps/web/tailwind.config.ts (display/sans/mono) —
+    # bundled as local assets (not google_fonts' runtime CDN fetch) to match
+    # the self-hosted-everything spirit of CLAUDE.md invariant #4. Sourced
+    # from the canonical OFL files in github.com/google/fonts (same upstream
+    # @fontsource/* repackages for the web build).
+    - family: Zen Maru Gothic
+      fonts:
+        - asset: assets/fonts/ZenMaruGothic-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/ZenMaruGothic-Bold.ttf
+          weight: 700
+    - family: Plus Jakarta Sans
+      fonts:
+        - asset: assets/fonts/PlusJakartaSans-Variable.ttf
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Variable.ttf

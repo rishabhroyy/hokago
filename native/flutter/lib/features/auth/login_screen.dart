@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
@@ -67,6 +68,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   TextButton(
                     onPressed: () => ref.read(sessionProvider.notifier).changeServer(),
                     child: Text('Not ${session.serverUrl ?? 'this server'}?', style: TextStyle(color: HokagoColors.ink2)),
+                  ),
+                  TextButton(
+                    onPressed: () => context.push('/pair'),
+                    child: Text('Pair a TV or device instead', style: TextStyle(color: HokagoColors.ink2)),
                   ),
                 ],
               ),

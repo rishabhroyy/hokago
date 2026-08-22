@@ -104,6 +104,13 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
+  /// Tokens already stored (TV pairing's /auth/pair/status COMPLETE) — just
+  /// needs the same post-login profile resolution login() does, without
+  /// calling login()/completeSetup() again (there's no username/password
+  /// here, and completeSetup is first-run-only — hitting it would try to
+  /// create a *new* admin account instead of using the paired session).
+  Future<void> completePairing() => _resolvePrimaryProfile();
+
   /// One profile: auto-select it (matches the web's getPrimaryProfile — no
   /// picker needed when there's nothing to pick). Multiple: land on the
   /// picker (needsProfile), same as the web's account-switcher intent, just

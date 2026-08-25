@@ -1,11 +1,48 @@
 import 'dart:async';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:dio/dio.dart';
 
 import '../api/hokago_api.dart';
 import '../api/token_store.dart';
 import 'active_downloads.dart';
 import 'offline_manifest.dart';
+
+/// The access token baked into a [DownloadTask]'s headers is a snapshot —
+/// background_downloader hands the OS (URLSession / WorkManager) a static
+/// header and no automatic refresh happens the way HokagoApiClient's Dio
+/// interceptor does for in-app requests. Access tokens are short-lived
+/// (ACCESS_TOKEN_TTL = 15m, apps/api/src/auth.ts) and real media downloads —
+/// large files, background-throttled transfers, spotty mobile networks —
+/// routinely outlive that, so every download that takes longer than 15
+/// minutes end to end 401s and dies with no way to recover. [Auth.onAuth] is
+/// background_downloader's own extension point for exactly this: the native
+/// side calls it before a task (re)starts if the token looks expired, and
+/// substitutes the refreshed `{accessToken}` placeholder into the request
+/// headers. Must be a top-level function — the plugin invokes it via a
+/// callback handle from a background isolate, which rules out a closure or
+/// instance method.
+@pragma('vm:entry-point')
+Future<Task?> _hokagoRefreshDownloadAuth(Task original) async {
+  final auth = original.options?.auth;
+  if (auth == null) return null;
+  final serverUrl = await TokenStore.instance.serverUrl;
+  final refreshToken = await TokenStore.instance.refreshToken;
+  if (serverUrl == null || refreshToken == null) return null;
+  try {
+    final res = await Dio(BaseOptions(baseUrl: serverUrl)).post('/auth/refresh', data: {'refreshToken': refreshToken});
+    final accessToken = res.data['accessToken'] as String;
+    await TokenStore.instance.setAccessToken(accessToken);
+    auth.accessToken = accessToken;
+    final remainingMs = TokenStore.expiresInMs(accessToken);
+    if (remainingMs != null) auth.accessTokenExpiryTime = DateTime.now().add(Duration(milliseconds: remainingMs));
+    return original;
+  } catch (_) {
+    // Refresh token itself is dead (revoked/expired) — nothing to recover;
+    // the task fails and surfaces normally.
+    return null;
+  }
+}
 
 /// Real, OS-managed downloads — resumable, notification-driven, survives app
 /// kill (iOS background URLSession / Android WorkManager under the hood via
@@ -64,16 +101,31 @@ class DownloadManager {
       if (media == null) throw Exception('download artifact has no media file');
 
       final access = await TokenStore.instance.accessToken;
-      final headers = access != null ? {'Authorization': 'Bearer $access'} : <String, String>{};
+      // Auth (not a static header) so a token that expires mid-transfer —
+      // routine for a real media file, see _hokagoRefreshDownloadAuth above —
+      // gets refreshed instead of silently 401ing the download. retries: so
+      // a transient network blip (equally routine on mobile networks over
+      // the minutes-to-hours a large file can take) doesn't kill the whole
+      // download either.
+      Auth authFor(String? accessToken) {
+        final remainingMs = accessToken != null ? TokenStore.expiresInMs(accessToken) : null;
+        return Auth(
+          accessToken: accessToken,
+          accessHeaders: const {'Authorization': 'Bearer {accessToken}'},
+          accessTokenExpiryTime: remainingMs != null ? DateTime.now().add(Duration(milliseconds: remainingMs)) : null,
+          onAuth: _hokagoRefreshDownloadAuth,
+        );
+      }
 
       final task = DownloadTask(
         taskId: downloadId,
         url: _api.resolve('/downloads/$downloadId/artifact/media'),
         filename: media.filename,
-        headers: headers,
         baseDirectory: BaseDirectory.applicationDocuments,
         directory: 'hokago',
         updates: Updates.statusAndProgress,
+        retries: 5,
+        options: TaskOptions(auth: authFor(access)),
       );
 
       final result = await FileDownloader().download(
@@ -92,9 +144,10 @@ class DownloadManager {
           final subTask = DownloadTask(
             url: _api.resolve('/downloads/$downloadId/artifact/subtitles/${sub.trackId}'),
             filename: sub.filename,
-            headers: headers,
             baseDirectory: BaseDirectory.applicationDocuments,
             directory: 'hokago',
+            retries: 3,
+            options: TaskOptions(auth: authFor(access)),
           );
           await FileDownloader().download(subTask);
         } catch (_) {

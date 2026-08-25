@@ -2,6 +2,23 @@ import path from "node:path";
 
 import { hwDecodeArgs, hwEncodeFilterTail, hwEncodeInitArgs, hwEncodeQualityArgs, isHwEncoder, type HwaccelState } from "./hwaccel.js";
 
+// libx264/libx265 preset names, fastest to slowest — same set for both
+// encoders. Software-encode speed is the one lever operators without any
+// hwaccel (no vaapi/qsv/nvenc-capable box) have; HOKAGO_TRANSCODE_PRESET lets
+// them trade encode quality-per-bitrate for speed on a weak CPU instead of
+// eating the "veryfast" default's cost on every session. Validated against
+// this list so a typo falls back to the default instead of ffmpeg rejecting
+// the whole encode.
+const X264_PRESETS = new Set([
+  "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo",
+]);
+const DEFAULT_SOFTWARE_PRESET = "veryfast";
+
+function softwarePreset(): string {
+  const requested = process.env.HOKAGO_TRANSCODE_PRESET;
+  return requested && X264_PRESETS.has(requested) ? requested : DEFAULT_SOFTWARE_PRESET;
+}
+
 /**
  * Full VOD playlist generated upfront — the client sees the whole
  * video as ready-to-seek immediately, even though most segment files don't
@@ -279,7 +296,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // args above.
   const hwQuality = usingHwEncoder && input.hwaccel ? hwEncodeQualityArgs(input.hwaccel, input.maxVideoBitrateKbps) : null;
   if (hwQuality) args.push(...hwQuality);
-  else args.push("-preset", "veryfast", "-crf", "23");
+  else args.push("-preset", softwarePreset(), "-crf", "23");
   // No B-frames: the B-frame reorder puts a pts/dts skew on every keyframe,
   // which the mpegts muxer propagates as a small lead on every segment. With
   // dts == pts the segments stay exactly flush (6.006s spacing, no lead).

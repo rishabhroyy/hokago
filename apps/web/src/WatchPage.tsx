@@ -54,7 +54,7 @@ const HEARTBEAT_MS = 10_000;
 // Mirrors HLS_SEGMENT_SECONDS in packages/ffmpeg (Node-only, not importable
 // here): transcode playlists are numbered in segment units, so the playlist's
 // first segment index (segmentFrom) is derived from this.
-const HLS_SEGMENT_SECONDS = 6;
+const HLS_SEGMENT_SECONDS = 4;
 
 const eq = (a: string | null | undefined, b: string | null | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();

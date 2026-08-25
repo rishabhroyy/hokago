@@ -177,16 +177,10 @@ const metadataQueues: Record<string, Queue<MetadataJobData>> = {
   }),
 };
 
-async function enqueueScan(libraryId: string): Promise<void> {
+async function enqueueScan(libraryId: string, mode: "light" | "heavy" = "light"): Promise<void> {
   const jobId = scanJobId(libraryId);
-  // The deterministic jobId (== libraryId) makes `add` return an existing job
-  // without enqueueing a new one. removeOnComplete/removeOnFail only clear
-  // terminal (completed/failed) jobs; a job stuck in a live state (waiting /
-  // active / stalled — a crashed worker, an interrupted scan) would otherwise
-  // block every later scan of this library forever. Drop it first so a rescan
-  // (manual or reconcile) always enqueues a genuinely fresh job.
   await scanQueue.remove(jobId).catch(() => {});
-  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId });
+  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId, mode }, { jobId });
 }
 
 // Backpressure : one add per file as the scan walks it, never a
@@ -247,7 +241,9 @@ async function enqueueMetadata(providerName: string, job: MetadataJobData): Prom
 
 async function processScan(job: Job<ScanJobData>): Promise<void> {
   const library = await db.library.findUniqueOrThrow({ where: { id: job.data.libraryId } });
+  const lightweight = job.data.mode !== "heavy";
   const summary = await ingestLibrary(db, library.id, library.rootPath, {
+    lightweight,
     resumeFromCursor: library.scanCursor,
     contentProfile: library.contentProfile,
     // Checkpointing: persist progress after every completed
@@ -288,17 +284,20 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
       console.log(`scan ${library.name}: pruned ${pruned.filesRemoved} missing files, ${pruned.itemsRemoved} items, ${pruned.collectionsRemoved} empty collections`);
     }
   }
-  // Rescan = the universal retry. The failure threshold poisons items
-  // (artwork → NEEDS_ATTENTION, metadata → silent); clearing both here lets
-  // the next scan/reconcile re-derive their artwork and metadata jobs from
-  // Postgres. Anything still genuinely broken re-poisons itself — self-
-  // correcting, and it gives admins a working recovery lever for the
-  // attention list instead of a permanent dead end.
-  await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id } } });
-  await db.mediaItem.updateMany({
-    where: { libraryId: library.id, state: "NEEDS_ATTENTION" },
-    data: { state: "OK" },
-  });
+  // Heavy scan = universal retry. Lightweight scans only retry metadata
+  // (cheap network re-drive); heavy work (ffprobe/artwork/trickplay) stays
+  // poisoned until an explicit heavy rescan gives admins a real fix lever
+  // without lightweight periodic churn re-parking the same failures.
+  if (lightweight) {
+    const metaTypes = Object.values(METADATA_QUEUE_NAME);
+    await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id }, jobType: { in: metaTypes } } });
+  } else {
+    await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id } } });
+    await db.mediaItem.updateMany({
+      where: { libraryId: library.id, state: "NEEDS_ATTENTION" },
+      data: { state: "OK" },
+    });
+  }
 }
 
 async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {
@@ -829,8 +828,8 @@ const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
   }),
   MAL: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_MAL, makeProcessMetadata("MAL"), {
     connection,
-    concurrency: 3,
-    limiter: { max: 90, duration: 60_000 }, // Jikan: 3/s nominal, 90/min stays safely under
+    concurrency: 2,
+    limiter: { max: 30, duration: 60_000 }, // Jikan: documented 3/s, 60/min sustained — 30/min + 429 retry keeps us safe vs shared-IP bursts
   }),
 };
 
@@ -1122,3 +1121,13 @@ setInterval(() => {
     })
     .catch((err) => console.error("metadata sweep failed:", err));
 }, metadataSweepMs);
+
+// Lightweight periodic scan for libraries with scanMode WATCH_AND_PERIODIC / PERIODIC_ONLY
+const scanIntervalMs = Math.max(60_000, Number(process.env.HOKAGO_SCAN_INTERVAL_MS ?? 15 * 60_000));
+setInterval(async () => {
+  try {
+    const libs = await db.library.findMany({ where: { enabled: true, scanMode: { in: ["WATCH_AND_PERIODIC", "PERIODIC_ONLY"] } }, select: { id: true } });
+    for (const lib of libs) await enqueueScan(lib.id, "light");
+    if (libs.length > 0) console.log(`scan sweep: enqueued ${libs.length} lightweight scan(s)`);
+  } catch (err) { console.error("scan sweep failed:", err); }
+}, scanIntervalMs);

@@ -16,7 +16,7 @@ export const adminApi = {
   createLibrary: (body: Record<string, unknown>) => unwrap(api.POST("/admin-api/libraries", { body } as never)),
   updateLibrary: (id: string, body: Record<string, unknown>) => unwrap(api.PATCH("/admin-api/libraries/{id}", { params: { path: { id } }, body } as never)),
   deleteLibrary: (id: string) => unwrap(api.DELETE("/admin-api/libraries/{id}", { params: { path: { id } } })),
-  scanLibrary: (id: string) => unwrap(api.POST("/admin-api/libraries/{id}/scan", { params: { path: { id } } })),
+  scanLibrary: (id: string, mode?: "light" | "heavy") => unwrap(api.POST(mode === "light" ? "/admin-api/libraries/{id}/scan/light" as never : "/admin-api/libraries/{id}/scan" as never, { params: { path: { id } } } as never)),
   accounts: () => unwrap(api.GET("/admin-api/accounts")),
   createAccount: (body: Record<string, unknown>) => unwrap(api.POST("/admin-api/accounts", { body } as never)),
   patchAccount: (id: string, body: Record<string, unknown>) => unwrap(api.PATCH("/admin-api/accounts/{id}", { params: { path: { id } }, body } as never)),

@@ -88,25 +88,32 @@ function toMatch(anime: JikanAnime): MetadataMatch {
 export class JikanProvider implements MetadataProvider {
   readonly provider = "MAL" as const;
 
+  private async fetchWithRetry(url: string, headers: Record<string, string> = {}): Promise<Response> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await fetch(url, { headers });
+      if (res.status !== 429) return res;
+      const retryAfter = Number(res.headers.get("retry-after") ?? 2);
+      const delay = Math.min(10, isNaN(retryAfter) ? 2 : retryAfter) * 1000 + Math.random() * 500;
+      await new Promise((r) => setTimeout(r, delay * (attempt + 1)));
+    }
+    // final attempt — let caller handle 429 as transient
+    return fetch(url, { headers });
+  }
+
   async search(query: MetadataQuery, options?: MetadataSearchOptions): Promise<MetadataSearchResult> {
-    // An already-known id revalidates exactly (GET /anime/{id}) — never a
-    // fuzzy title search, so revalidations and manual pins are rename-proof.
     if (options?.existingProviderId) {
-      const res = await fetch(`${BASE_URL}/anime/${encodeURIComponent(options.existingProviderId)}`);
+      const res = await this.fetchWithRetry(`${BASE_URL}/anime/${encodeURIComponent(options.existingProviderId)}`);
       if (res.status === 404) return { matches: [] };
       if (!res.ok) throw new Error(`Jikan id lookup failed: ${res.status} ${res.statusText}`);
-      // v4 wraps single-resource responses in { data: {...} }, same as search
-      // — reading the bare body here produced an all-undefined match whose
-      // title crashed the gate's normalizeTitle as a "deterministic" failure.
       const body = (await res.json()) as { data: JikanAnime };
       return { matches: [toMatch(body.data)] };
     }
 
-    const url = `${BASE_URL}/anime?q=${encodeURIComponent(query.title)}&limit=10`;
+    const url = `${BASE_URL}/anime?q=${encodeURIComponent(query.title)}&limit=10&sfw=true&order_by=popularity&sort=asc`;
     const headers: Record<string, string> = {};
     if (options?.lastModified) headers["if-modified-since"] = options.lastModified;
 
-    const res = await fetch(url, { headers });
+    const res = await this.fetchWithRetry(url, headers);
     if (res.status === 304) return { matches: [], notModified: true, lastModified: options?.lastModified };
     if (!res.ok) throw new Error(`Jikan search failed: ${res.status} ${res.statusText}`);
 
@@ -126,7 +133,7 @@ export class JikanProvider implements MetadataProvider {
     const out: EpisodeMetadata[] = [];
     let page = 1;
     for (;;) {
-      const res = await fetch(`${BASE_URL}/anime/${encodeURIComponent(providerId)}/episodes?page=${page}`);
+      const res = await this.fetchWithRetry(`${BASE_URL}/anime/${encodeURIComponent(providerId)}/episodes?page=${page}`);
       if (!res.ok) {
         if (res.status === 404) break;
         throw new Error(`Jikan episodes failed: ${res.status} ${res.statusText}`);

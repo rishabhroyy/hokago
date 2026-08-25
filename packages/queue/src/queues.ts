@@ -13,6 +13,7 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
 export interface ScanJobData {
   libraryId: string;
+  mode?: "light" | "heavy";
 }
 
 export interface ArtworkJobData {

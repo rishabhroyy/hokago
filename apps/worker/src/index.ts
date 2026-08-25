@@ -177,16 +177,10 @@ const metadataQueues: Record<string, Queue<MetadataJobData>> = {
   }),
 };
 
-async function enqueueScan(libraryId: string): Promise<void> {
+async function enqueueScan(libraryId: string, mode: "light" | "heavy" = "light"): Promise<void> {
   const jobId = scanJobId(libraryId);
-  // The deterministic jobId (== libraryId) makes `add` return an existing job
-  // without enqueueing a new one. removeOnComplete/removeOnFail only clear
-  // terminal (completed/failed) jobs; a job stuck in a live state (waiting /
-  // active / stalled — a crashed worker, an interrupted scan) would otherwise
-  // block every later scan of this library forever. Drop it first so a rescan
-  // (manual or reconcile) always enqueues a genuinely fresh job.
   await scanQueue.remove(jobId).catch(() => {});
-  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId }, { jobId });
+  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId, mode }, { jobId });
 }
 
 // Backpressure : one add per file as the scan walks it, never a
@@ -235,7 +229,9 @@ async function enqueueMetadata(providerName: string, job: MetadataJobData): Prom
 
 async function processScan(job: Job<ScanJobData>): Promise<void> {
   const library = await db.library.findUniqueOrThrow({ where: { id: job.data.libraryId } });
+  const lightweight = job.data.mode !== "heavy";
   const summary = await ingestLibrary(db, library.id, library.rootPath, {
+    lightweight,
     resumeFromCursor: library.scanCursor,
     contentProfile: library.contentProfile,
     // Checkpointing: persist progress after every completed
@@ -272,17 +268,20 @@ async function processScan(job: Job<ScanJobData>): Promise<void> {
       console.log(`scan ${library.name}: pruned ${pruned.filesRemoved} missing files, ${pruned.itemsRemoved} items, ${pruned.collectionsRemoved} empty collections`);
     }
   }
-  // Rescan = the universal retry. The failure threshold poisons items
-  // (artwork → NEEDS_ATTENTION, metadata → silent); clearing both here lets
-  // the next scan/reconcile re-derive their artwork and metadata jobs from
-  // Postgres. Anything still genuinely broken re-poisons itself — self-
-  // correcting, and it gives admins a working recovery lever for the
-  // attention list instead of a permanent dead end.
-  await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id } } });
-  await db.mediaItem.updateMany({
-    where: { libraryId: library.id, state: "NEEDS_ATTENTION" },
-    data: { state: "OK" },
-  });
+  // Heavy scan = universal retry. Lightweight scans only retry metadata
+  // (cheap network re-drive); heavy work (ffprobe/artwork/trickplay) stays
+  // poisoned until an explicit heavy rescan gives admins a real fix lever
+  // without lightweight periodic churn re-parking the same failures.
+  if (lightweight) {
+    const metaTypes = Object.values(METADATA_QUEUE_NAME);
+    await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id }, jobType: { in: metaTypes } } });
+  } else {
+    await db.jobFailure.deleteMany({ where: { mediaItem: { libraryId: library.id } } });
+    await db.mediaItem.updateMany({
+      where: { libraryId: library.id, state: "NEEDS_ATTENTION" },
+      data: { state: "OK" },
+    });
+  }
 }
 
 async function processArtwork(job: Job<ArtworkJobData>): Promise<void> {

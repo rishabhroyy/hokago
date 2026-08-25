@@ -649,20 +649,15 @@ export async function storeArtwork(
 }
 
 export interface IngestOptions {
-  /** Skip directories at/before this sorted path — resume after a checkpointed interruption. */
   resumeFromCursor?: string | null;
-  /** Called after a directory's MediaItem/Evidence work is fully committed — persist as the new scanCursor. */
   onDirectoryComplete?: (dir: string) => Promise<void>;
-  /** Called as directories are processed, (doneDirs, totalDirs) — the scan-progress signal. */
   onScanProgress?: (doneDirs: number, totalDirs: number) => Promise<void>;
-  /** When set, artwork is not resolved inline — each file needing it is handed to this callback instead (queued). */
   onArtworkNeeded?: (job: ArtworkNeeded) => Promise<void>;
-  /** When set, trickplay sheets are not generated inline — handed to this callback instead (queued). */
   onTrickplayNeeded?: (job: TrickplayNeeded) => Promise<void>;
-  /** Called for every MOVIE/SERIES item so network-provider metadata (Step 6) can be queued. */
   onMetadataNeeded?: (job: MetadataNeeded) => Promise<void>;
-  /** Forks the parser registry. Defaults to the library's own profile when omitted. */
   contentProfile?: ContentProfile;
+  /** Lightweight scan: skip ffprobe, artwork, trickplay, and hash reads — only structural changes and metadata retries. */
+  lightweight?: boolean;
 }
 
 export async function ingestLibrary(
@@ -672,10 +667,11 @@ export async function ingestLibrary(
   opts: IngestOptions = {},
 ): Promise<IngestSummary> {
   const profile = opts.contentProfile ?? "GENERAL";
+  const lightweight = !!opts.lightweight;
   const files = await walkVideoFiles(rootPath);
   const byDir = groupByDirectory(files);
-  const deferArtwork = opts.onArtworkNeeded !== undefined;
-  const deferTrickplay = opts.onTrickplayNeeded !== undefined;
+  const deferArtwork = !lightweight && opts.onArtworkNeeded !== undefined;
+  const deferTrickplay = !lightweight && opts.onTrickplayNeeded !== undefined;
 
   // One bulk fetch of every stored file in the library — the per-file lookup
   // ingest used to do (path first, inode fallback) and the rescan gate. The
@@ -707,17 +703,19 @@ export async function ingestLibrary(
   // just those containers and let the leaf's idempotent sync heal the rows.
   // Everything else skips ffprobe — a rescan of a settled library still
   // spawns zero probes.
-  const needsProbe = files.filter((f) => {
-    const row = storedFor(f);
-    if (!row) return true;
-    if (row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime()) return true;
-    if (row.probeFailed) return true;
-    if (row._count.streams === 0) return true;
-    if (MP4_MOV_CONTAINER === row.container && row._count.subtitleTracks === 0) return true;
-    return false;
-  });
-  const probeResults = await mapLimit(needsProbe, PROBE_CONCURRENCY, (f) => probeFile(f.path));
-  const probeByPath = new Map(needsProbe.map((f, i) => [f.path, probeResults[i]]));
+  const needsProbe = lightweight
+    ? []
+    : files.filter((f) => {
+        const row = storedFor(f);
+        if (!row) return true;
+        if (row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime()) return true;
+        if (row.probeFailed) return true;
+        if (row._count.streams === 0) return true;
+        if (MP4_MOV_CONTAINER === row.container && row._count.subtitleTracks === 0) return true;
+        return false;
+      });
+  const probeResults = lightweight ? [] : await mapLimit(needsProbe, PROBE_CONCURRENCY, (f) => probeFile(f.path));
+  const probeByPath = new Map(needsProbe.map((f, i) => [f.path, probeResults[i] as ProbeResult | null]));
   // Cluster/evidence reads the effective duration — fresh probe, else stored.
   const durationByPath = new Map<string, number | null>(
     files.map((f) => [f.path, probeByPath.get(f.path)?.durationMs ?? storedFor(f)?.durationMs ?? null]),

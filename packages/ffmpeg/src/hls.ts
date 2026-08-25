@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { hwDecodeArgs, hwEncodeFilterTail, hwEncodeInitArgs, hwEncodeQualityArgs, type HwaccelState } from "./hwaccel.js";
+import { hwDecodeArgs, hwEncodeFilterTail, hwEncodeInitArgs, hwEncodeQualityArgs, isHwEncoder, type HwaccelState } from "./hwaccel.js";
 
 /**
  * Full VOD playlist generated upfront — the client sees the whole
@@ -176,9 +176,23 @@ function escapeFilterPath(p: string): string {
  * behavior we have today.
  */
 export function buildFfmpegArgs(input: SegmentJobInput): string[] {
+  // pickVideoEncoder (the caller) falls back per-codec to a *software*
+  // encoder whenever this hwaccel method has no compiled-in hw encoder for
+  // the chosen codec (e.g. h264_vaapi present, hevc_vaapi absent) — the
+  // state's `method` stays the active hw method regardless. Encode-side hw
+  // setup (device init, hwupload tail) must only run when the resolved
+  // encoder is actually this method's own — otherwise hw-uploaded frames get
+  // fed to a software encoder that only accepts system memory, ffmpeg aborts
+  // the encode, and the fail-soft path disables hardware acceleration for
+  // every other session on the process even though only this one codec was
+  // unsupported. Decode-side offload (hwDecodeArgs) has no such conflict — it
+  // always lands frames in system memory — so it stays gated on hwaccel being
+  // active at all, independent of which encoder ends up running.
+  const usingHwEncoder = input.hwaccel ? isHwEncoder(input.hwaccel, input.videoCodec ?? "libx264") : false;
   // True only for the nvenc residual path: hardware decode, GPU-resident
   // scale, no CPU-only stage — frames never leave video memory.
   const gpuResidentNvenc =
+    usingHwEncoder &&
     input.hwaccel?.method === "nvenc" &&
     // The residual path's on-GPU scaler is scale_npp (NPP), which only exists
     // when the ffmpeg build was compiled with --enable-libnpp. A build without
@@ -202,7 +216,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     if (gpuResidentNvenc) {
       args.push("-hwaccel", "cuda", "-hwaccel_output_format", "cuda");
     } else {
-      args.push(...hwEncodeInitArgs(input.hwaccel), ...hwDecodeArgs(input.hwaccel));
+      args.push(...(usingHwEncoder ? hwEncodeInitArgs(input.hwaccel) : []), ...hwDecodeArgs(input.hwaccel));
     }
   }
   args.push("-i", input.inputPath);
@@ -235,8 +249,10 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // conversion on-GPU, and `format` can't touch CUDA frames anyway.
   if (!gpuResidentNvenc) videoFilters.push("format=yuv420p");
   // hw encoders take hw-frames (vaapi/qsv): upload the filtered CPU frames
-  // at the end of the chain. nvenc accepts system frames — no tail.
-  const hwTail = input.hwaccel ? hwEncodeFilterTail(input.hwaccel) : [];
+  // at the end of the chain. nvenc accepts system frames — no tail. Gated on
+  // usingHwEncoder, not just input.hwaccel — see the comment at the top of
+  // this function.
+  const hwTail = usingHwEncoder && input.hwaccel ? hwEncodeFilterTail(input.hwaccel) : [];
   if (hwTail.length > 0) videoFilters.push(...hwTail);
 
   if (input.subtitleBurnIn) {
@@ -257,8 +273,11 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
   // the speed/quality tradeoff instead. Hardware encoders get their own
   // equivalent options (hwEncodeQualityArgs) — libx264's preset/crf set is
-  // rejected by vaapi/qsv/nvenc outright.
-  const hwQuality = input.hwaccel ? hwEncodeQualityArgs(input.hwaccel, input.maxVideoBitrateKbps) : null;
+  // rejected by vaapi/qsv/nvenc outright, and just as surely the hw quality
+  // flags (-qp/-global_quality/nvenc presets) are rejected by a software
+  // encoder — gated on usingHwEncoder for the same reason as the filter/init
+  // args above.
+  const hwQuality = usingHwEncoder && input.hwaccel ? hwEncodeQualityArgs(input.hwaccel, input.maxVideoBitrateKbps) : null;
   if (hwQuality) args.push(...hwQuality);
   else args.push("-preset", "veryfast", "-crf", "23");
   // No B-frames: the B-frame reorder puts a pts/dts skew on every keyframe,

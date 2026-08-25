@@ -314,6 +314,24 @@ export function hwEncoderFor(state: HwaccelState, codec: string): string | null 
   return encoder;
 }
 
+/**
+ * True when `encoder` is this state's own hardware encoder name. The h264
+ * encoder gates whether a method is usable at all (GATE_ENCODER), but the
+ * other per-codec hw encoders (hevc/vp9/av1) are compiled-in-or-not
+ * independently — a box can have h264_vaapi with no hevc_vaapi. pickVideoEncoder
+ * silently falls back to a *software* encoder for such a codec while
+ * `HwaccelState.method` stays e.g. "vaapi" the whole time. Callers building
+ * ffmpeg args must gate the encode-side hw device init / hwupload filter tail
+ * on this — not on `state.method !== "none"` alone — or they feed hw-uploaded
+ * frames into a software encoder that only accepts system memory, which
+ * aborts the encode outright and (via the fail-soft path) disables hardware
+ * acceleration for every other, otherwise-fine session on the process.
+ */
+export function isHwEncoder(state: HwaccelState, encoder: string): boolean {
+  if (state.method === "none") return false;
+  return Object.values(HW_ENCODERS[state.method]).includes(encoder);
+}
+
 /** Plain-object snapshot for the admin console / contract schemas. */
 export function hwaccelStatus(state: HwaccelState): {
   requested: HwaccelRequest;

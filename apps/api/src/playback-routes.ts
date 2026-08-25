@@ -882,8 +882,15 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
   // against a half-written file is treated as authoritative, so it never
   // re-fetches and the player stalls at the written frontier with the wrong
   // duration. Instead, block until the remux child exits (the file is
-  // complete) — copy-speed makes this ~3s for an episode, seconds-to-a-minute
-  // for movies — then serve a file whose content-range can never lie.
+  // complete) — copy-speed makes this ~3s for an episode, tens of seconds to
+  // several minutes for a large movie remux — then serve a file whose
+  // content-range can never lie. The ceiling below used to be a flat 60s,
+  // which is well under the copy time of any movie past ~3.5GB (a low bar for
+  // remux-quality sources) — every such request fell through to the
+  // known-bad growing-file race below instead of waiting it out, which is
+  // exactly the "transcoded playback is unbearably slow" symptom for movies
+  // specifically. 30 minutes covers real-world file sizes at the assumed
+  // 60MB/s copy floor and still bounds a genuinely stuck child.
   app.get<{ Params: { sessionId: string } }>(
     "/playback/:sessionId/stream.mp4",
     { preHandler: app.authenticate },
@@ -892,7 +899,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if (!live?.remux) return reply.code(404).send({ error: "no active remux session" });
 
     const child = live.transcode.child;
-    const waitMs = Math.min(60_000, Math.max(5_000, estRemuxRemainingSec(live) * 1000 + 3_000));
+    const waitMs = Math.min(30 * 60_000, Math.max(5_000, estRemuxRemainingSec(live) * 1000 + 3_000));
     const deadline = Date.now() + waitMs;
     // A seek-restart kills the child (SIGKILL → signalCode, not exitCode) and
     // rewrites the file — treat that as "wait's over", the client is

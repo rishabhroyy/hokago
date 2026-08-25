@@ -34,6 +34,8 @@ import {
   SessionParams,
   DeviceSummary,
   DeviceParams,
+  RegisterDeviceBody,
+  RegisterDeviceResponse,
   PairingRequestBody,
   PairingRequestResponse,
   PairingVerifyBody,
@@ -337,6 +339,13 @@ export function buildOpenApiDocument(): OpenAPIObject {
       200: { description: "OK", ...json(RevokedResponse) },
       404: { description: "Device not found", ...json(AuthErrorResponse) },
     },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/auth/device",
+    summary: "Link the authenticated session's install to a Device row",
+    request: { body: json(RegisterDeviceBody) },
+    responses: { 200: { description: "OK", ...json(RegisterDeviceResponse) } },
   });
 
   // First-run setup — the fresh-install wizard. Public by design: there is

@@ -30,6 +30,8 @@ import {
   PairingStatusResponse,
   CreateInviteBody,
   InviteResponse,
+  RegisterDeviceBody,
+  RegisterDeviceResponse,
   ErrorResponse,
 } from "@hokago/contract/auth";
 import { RateLimiter, rateLimited, clientIp } from "./rate-limit.js";
@@ -318,6 +320,25 @@ export async function registerAuthRoutes(app: ZodFastifyInstance): Promise<void>
         if (!ownedIds.has(link.device.id)) merged.push(link.device);
       }
       return merged;
+    },
+  );
+
+  // Links the current session's install to a Device row, same upsert
+  // /auth/login does for clientKey — for a session that was established
+  // before this device existed (older app version, or a login whose
+  // clientKey/platform raced the bridge). Without it, that install can never
+  // pass canDownload()'s deviceId check short of a full log-out/log-in.
+  app.post(
+    "/auth/device",
+    { preHandler: app.authenticate, schema: { body: RegisterDeviceBody, response: { 200: RegisterDeviceResponse } } },
+    async (req) => {
+      const deviceId = await upsertDevice({
+        accountId: req.accountId!,
+        clientKey: req.body.clientKey,
+        name: req.body.deviceName ?? "unknown device",
+        platform: req.body.platform,
+      });
+      return { deviceId };
     },
   );
 

@@ -90,6 +90,23 @@ export type DeviceSummary = z.infer<typeof DeviceSummary>;
 
 export const DeviceParams = z.object({ id: z.string() });
 
+/**
+ * Links the current (already-authenticated) session's install to a Device
+ * row — the same upsert /auth/login does when clientKey is present, exposed
+ * standalone for a session that was established before this device existed
+ * (older app version, or a login that raced the bridge). Without this, an
+ * install stuck on a deviceId-less session can never unlock device-gated
+ * features (downloads) short of a full log-out/log-in.
+ */
+export const RegisterDeviceBody = z.object({
+  clientKey: z.string(),
+  deviceName: z.string().optional(),
+  platform: DevicePlatform,
+});
+export type RegisterDeviceBody = z.infer<typeof RegisterDeviceBody>;
+
+export const RegisterDeviceResponse = z.object({ deviceId: z.string() });
+
 // ── TV-style pairing ─────────────────────────────────────────────────────────
 
 /** Unauthenticated TV: request a code to display. */

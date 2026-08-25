@@ -12,7 +12,7 @@ import {
   needsNativeUpdate,
   type NativePlatform,
 } from "@hokago/native-bridge";
-import { ensureAccessToken } from "./api-client";
+import { api, ensureAccessToken, getDeviceId, storeDeviceId } from "./api-client";
 
 export function shellPlatform(): NativePlatform | null {
   return getNativeBridge()?.platform ?? null;
@@ -22,15 +22,11 @@ export function clientKey(): string | null {
   return getNativeBridge()?.clientKey ?? null;
 }
 
-/** The per-install deviceId the API minted at login/pairing — needed for downloads. */
-export function getDeviceId(): string | null {
-  return localStorage.getItem("hokago_device_id");
-}
-
-export function storeDeviceId(id: string | null): void {
-  if (id) localStorage.setItem("hokago_device_id", id);
-  else localStorage.removeItem("hokago_device_id");
-}
+// Re-exported (not redeclared): storeAuthResult writes deviceId through
+// api-client.ts's bridge-aware read/write, so that's the one copy that must
+// stay canonical — a second, plain-localStorage implementation here would
+// only coincidentally agree with it.
+export { getDeviceId, storeDeviceId };
 
 /**
  * Shells that download files natively keep the access token mirrored into
@@ -45,6 +41,31 @@ export function startTokenWarmth(): void {
   warmTimer = setInterval(() => {
     void ensureAccessToken();
   }, 4 * 60_000);
+}
+
+/**
+ * Device linking (canDownload()'s deviceId check) only happens as a side
+ * effect of /auth/login, when clientKey + platform are present on that
+ * request. A session that predates the shell having a clientKey yet
+ * (upgrading from an older app version, or any session created before
+ * device-gated downloads existed) never gets a deviceId and stays stuck
+ * forever — the app never calls /auth/login again for an already-signed-in
+ * session, so nothing else would ever backfill it. Runs once at boot,
+ * alongside startTokenWarmth; a no-op once a deviceId is already stored.
+ */
+export async function ensureDeviceRegistered(): Promise<void> {
+  const key = clientKey();
+  const platform = loginPlatform();
+  if (!key || !platform || getDeviceId() !== null) return;
+  if (!(await ensureAccessToken())) return; // not signed in yet — /auth/login will link it
+  try {
+    const { data } = await api.POST("/auth/device", {
+      body: { clientKey: key, deviceName: "hokago app", platform },
+    });
+    if (data?.deviceId) storeDeviceId(data.deviceId);
+  } catch {
+    // best-effort — retried on next boot
+  }
 }
 
 export { getNativeBridge, isNative, isTvShell, supportsDownloads, needsNativeUpdate };

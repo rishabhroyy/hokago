@@ -812,8 +812,8 @@ const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
   }),
   MAL: new Worker<MetadataJobData>(QUEUE_NAMES.METADATA_MAL, makeProcessMetadata("MAL"), {
     connection,
-    concurrency: 3,
-    limiter: { max: 90, duration: 60_000 }, // Jikan: 3/s nominal, 90/min stays safely under
+    concurrency: 2,
+    limiter: { max: 30, duration: 60_000 }, // Jikan: documented 3/s, 60/min sustained — 30/min + 429 retry keeps us safe vs shared-IP bursts
   }),
 };
 

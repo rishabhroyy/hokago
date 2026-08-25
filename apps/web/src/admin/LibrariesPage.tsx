@@ -96,8 +96,8 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
     }
   };
 
-  const scan = async (id: string) => {
-    try { await adminApi.scanLibrary(id); toast("scan enqueued"); } catch { toast("scan failed", true); }
+  const scan = async (id: string, mode: "light" | "heavy") => {
+    try { await adminApi.scanLibrary(id, mode); toast(mode === "light" ? "quick scan enqueued" : "full scan enqueued"); } catch { toast("scan failed", true); }
   };
   const del = async (l: Library) => {
     if (!confirm(`Delete library "${l.name}" and all its items? This cannot be undone.`)) return;
@@ -175,7 +175,8 @@ export function LibrariesPage({ toast }: { toast: (msg: string, err?: boolean) =
                   {l.scanProgress ? <ScanProgress lib={l} /> : fmtDate(l.lastScanAt)}
                 </Td>
                 <Td><span className="flex justify-end gap-1.5">
-                  <ActionBtn icon="scan" onClick={() => scan(l.id)}>Scan</ActionBtn>
+                  <ActionBtn icon="scan" onClick={() => scan(l.id, "light")}>Quick scan</ActionBtn>
+                  <ActionBtn icon="scan" onClick={() => scan(l.id, "heavy")}>Full fix</ActionBtn>
                   <ActionBtn icon="edit" onClick={() => openEdit(l)}>Edit</ActionBtn>
                   <ActionBtn danger icon="trash" onClick={() => del(l)}>Delete</ActionBtn>
                 </span></Td>

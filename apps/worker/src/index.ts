@@ -1105,3 +1105,13 @@ setInterval(() => {
     })
     .catch((err) => console.error("metadata sweep failed:", err));
 }, metadataSweepMs);
+
+// Lightweight periodic scan for libraries with scanMode WATCH_AND_PERIODIC / PERIODIC_ONLY
+const scanIntervalMs = Math.max(60_000, Number(process.env.HOKAGO_SCAN_INTERVAL_MS ?? 15 * 60_000));
+setInterval(async () => {
+  try {
+    const libs = await db.library.findMany({ where: { enabled: true, scanMode: { in: ["WATCH_AND_PERIODIC", "PERIODIC_ONLY"] } }, select: { id: true } });
+    for (const lib of libs) await enqueueScan(lib.id, "light");
+    if (libs.length > 0) console.log(`scan sweep: enqueued ${libs.length} lightweight scan(s)`);
+  } catch (err) { console.error("scan sweep failed:", err); }
+}, scanIntervalMs);

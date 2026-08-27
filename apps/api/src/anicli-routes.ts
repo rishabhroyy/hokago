@@ -23,8 +23,10 @@ async function hasFreeSpace(dir: string, needed = MIN_FREE_BYTES): Promise<boole
 }
 
 export async function registerAnicliRoutes(app: ZodFastifyInstance){
-  // Search via ani-cli is delegated to worker; API does validation only
   app.post("/anicli/downloads", { preHandler: app.authenticate }, async (req, reply)=>{
+    // admin-only: acquiring internet titles is privileged
+    const acct = await db.account.findUnique({ where:{ id: req.accountId! }, select:{ isAdmin:true }});
+    if(!acct?.isAdmin) return reply.code(403).send({ error:"admin only"});
     const body = z.object({ libraryId: z.string().uuid(), query: z.string().min(1).max(QUERY_MAX_LEN), episodeRange: z.string().max(20).optional() }).parse(req.body);
     const lib = await db.library.findUnique({ where:{ id: body.libraryId }});
     if(!lib) return reply.code(404).send({ error:"library not found"});

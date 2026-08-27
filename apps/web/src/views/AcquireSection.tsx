@@ -40,6 +40,7 @@ function Postertile({ candidate, onPick, picked }: { candidate: AnicliSearchCand
   const s = useWiiSound();
   const hue = hueFor(candidate.title + (candidate.year ?? ""));
   const icon = iconFor(candidate.title + (candidate.year ?? ""));
+  const poster = candidate.posterUrl ? `/metadata/artwork-proxy?u=${encodeURIComponent(candidate.posterUrl)}` : null;
   return (
     <button
       onClick={() => {
@@ -50,9 +51,9 @@ function Postertile({ candidate, onPick, picked }: { candidate: AnicliSearchCand
         picked ? "shadow-[0_0_0_2.5px_#4FB8E0,0_0_0_5px_rgba(79,184,224,0.4),0_14px_30px_-10px_rgba(120,80,60,0.5)]" : "shadow-[0_10px_26px_-14px_rgba(120,80,60,0.5)]"
       }`}
     >
-      <div className={`relative aspect-[2/3] w-full ${HUE_CLASS[hue]} ${candidate.posterUrl ? "" : "flex items-center justify-center"}`}>
-        {candidate.posterUrl ? (
-          <img src={candidate.posterUrl} alt="" className="h-full w-full object-cover transition-transform duration-300 ease-smooth group-hover:scale-[1.04]" loading="lazy" />
+      <div className={`relative aspect-[2/3] w-full ${HUE_CLASS[hue]} ${poster ? "" : "flex items-center justify-center"}`}>
+        {poster ? (
+          <img src={poster} alt="" className="h-full w-full object-cover transition-transform duration-300 ease-smooth group-hover:scale-[1.04]" loading="lazy" />
         ) : (
           <span className="text-white/85 drop-shadow-sm">
             <Icon name={icon} className="h-12 w-12" />

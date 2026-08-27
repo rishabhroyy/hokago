@@ -14,6 +14,7 @@
     "./admin": "./dist/admin.js",
     "./media-files": "./dist/media-files.js",
     "./downloads": "./dist/downloads.js",
+    "./acquire": "./dist/acquire.js",
     "./watch-party": "./dist/watch-party.js",
     "./metadata": "./dist/metadata.js",
     "./openapi": "./dist/openapi.js",

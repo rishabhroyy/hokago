@@ -232,6 +232,14 @@ enum DownloadStatus {
   FAILED
 }
 
+enum AcquireStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+  CANCELLED
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCOUNTS — no email, anywhere, ever.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -417,6 +425,25 @@ model Download {
   @@index([accountId])
   @@index([deviceId])
   @@map("downloads")
+}
+
+model AcquireJob {
+  id         String        @id @default(uuid()) @db.Uuid
+  accountId  String        @db.Uuid
+  libraryId  String        @db.Uuid
+  providerId String
+  title      String
+  episodes   Int[]         @default([])
+  quality    String        @default("720")
+  status     AcquireStatus @default(QUEUED)
+  progress   Float?
+  error      String?
+  attempts   Int           @default(0)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  @@index([accountId])
+  @@index([status])
+  @@map("acquire_jobs")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -15,11 +15,13 @@ import {
   trickplayJobId,
   metadataJobId,
   downloadJobId,
+  acquireJobId,
   type ScanJobData,
   type ArtworkJobData,
   type TrickplayJobData,
   type MetadataJobData,
   type DownloadJobData,
+  type AcquireJobData,
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
@@ -36,6 +38,7 @@ import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
 import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, hwActive, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
 import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge } from "@hokago/providers";
+import { processAcquire } from "./acquire.js";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
@@ -110,6 +113,10 @@ const downloadQueue = new Queue<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, {
     removeOnComplete: true,
     removeOnFail: true,
   },
+});
+const acquireQueue = new Queue<AcquireJobData>(QUEUE_NAMES.ACQUIRE, {
+  connection,
+  defaultJobOptions: { attempts: 3, backoff: { type: "exponential", delay: 10_000 }, removeOnComplete: true, removeOnFail: true },
 });
 
 // One provider instance and one queue per provider (Step 6) — each
@@ -807,6 +814,8 @@ const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, process
   connection,
   concurrency: downloadConcurrency,
 });
+const acquireConcurrency = Math.max(1, Number(process.env.HOKAGO_ACQUIRE_CONCURRENCY ?? 1));
+const acquireWorker = new Worker<AcquireJobData>(QUEUE_NAMES.ACQUIRE, processAcquire, { connection, concurrency: acquireConcurrency });
 
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.

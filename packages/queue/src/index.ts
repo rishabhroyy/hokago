@@ -16,5 +16,6 @@ export {
   type DownloadJobData,
   type AnicliDownloadJobData,
 } from "./queues.js";
+export { parseAnicliQuery, anicliQuerySeason, type ParsedAnicliQuery } from "./anicli.js";
 export { Queue, Worker, QueueEvents } from "bullmq";
 export type { Job } from "bullmq";

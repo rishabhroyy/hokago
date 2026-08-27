@@ -16,6 +16,7 @@ import {
   metadataJobId,
   downloadJobId,
   anicliJobId,
+  parseAnicliQuery,
   type ScanJobData,
   type ArtworkJobData,
   type TrickplayJobData,
@@ -881,21 +882,14 @@ async function anicliWalkSize(dir: string): Promise<{ bytes: number; files: numb
 
 const sanitizeFolder = (q: string): string => (q.replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 80) || "anicli").trim();
 
-// Split a query like "Frieren S2" into a clean series title + season number so
-// downloads land in a folder structure the scanner reads natively: the season
-// suffix must NOT leak into the series folder name (it becomes the SERIES title
-// and poisons the AniList query) and files belong in a "Season N" subfolder,
-// not flat in Season 1. Mirrors the API's querySeason().
-const ANICLI_SEASON_RE = /^(.*?)\s*[-\s]?\s*(?:season|series|s)\s*0*(\d{1,3})\s*$/i;
-function splitSeasonQuery(q: string): { title: string; season: number | null } {
-  const m = ANICLI_SEASON_RE.exec(q.trim());
-  if (m && m[1]!.trim()) return { title: m[1]!.trim(), season: Number(m[2]) };
-  return { title: q.trim(), season: null };
-}
-
-function seasonTargetDir(root: string, title: string, season: number | null): string {
-  const base = path.join(root, sanitizeFolder(title));
-  return season !== null ? path.join(base, `Season ${season}`) : base;
+// Target folder for a download. The season signal lives only here (ani-cli
+// filenames carry none), so this MUST match the scanner's own season-dir
+// names: flat "<root>/<Series>/" (implicit Season 1), "<root>/<Series>/Season N/",
+// or "<root>/<Series>/Specials/" (season 0). A trailing year is re-attached to
+// the series folder so cleanFolderTitle can feed it to the provider.
+function seasonTargetDir(root: string, title: string, year: number | null, sub: string | null): string {
+  const base = path.join(root, sanitizeFolder(year !== null ? `${title} (${year})` : title));
+  return sub !== null ? path.join(base, sub) : base;
 }
 
 async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
@@ -907,10 +901,11 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
   const staging = anicliStagingDir(rec.library.rootPath, rec.id);
   // Parser-friendly target: split the season suffix off the query so the series
   // folder name stays clean ("Frieren", not "Frieren S2") and episodes land in a
-  // "Season N" subfolder the scanner reads natively. A flat single-season show
-  // (no season token) keeps the folder = title, implicit Season 1.
-  const split = splitSeasonQuery(rec.query);
-  const finalDir = seasonTargetDir(rec.library.rootPath, split.title, split.season);
+  // "Season N" / "Specials" subfolder the scanner reads natively. A flat
+  // single-season show (no season token) keeps the folder = title, implicit
+  // Season 1. A trailing year re-attaches to the series folder for metadata.
+  const parsed = parseAnicliQuery(rec.query);
+  const finalDir = seasonTargetDir(rec.library.rootPath, parsed.title, parsed.year, parsed.sub);
   const cleanup = () => rm(staging, { recursive: true, force: true }).catch(() => {});
   const markFailed = async (err: unknown) => {
     await cleanup();

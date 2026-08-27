@@ -1,5 +1,5 @@
 import { PrismaClient } from "@hokago/db";
-import { Queue, getConnection, QUEUE_NAMES, anicliJobId, type AnicliDownloadJobData } from "@hokago/queue";
+import { Queue, getConnection, QUEUE_NAMES, anicliJobId, parseAnicliQuery, type AnicliDownloadJobData } from "@hokago/queue";
 import { AniListProvider } from "@hokago/providers";
 import type { MetadataQuery } from "@hokago/metadata";
 import { statfs } from "node:fs/promises";
@@ -60,10 +60,6 @@ async function hasFreeSpace(dir: string): Promise<boolean> {
 }
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-const querySeason = (q: string): number | null => {
-  const m = /s(?:eason)?\s*(\d+)/i.exec(q);
-  return m ? Number(m[1]) : null;
-};
 
 export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<void> {
   // ── Search ───────────────────────────────────────────────────────────
@@ -127,9 +123,14 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
       if (global >= ACTIVE_CAP_GLOBAL) return reply.code(429).send({ error: "server busy — max 5 concurrent anicli downloads" });
 
       // Dedup — block an already-on-server show, but allow a NEW season and
-      // allow re-downloading a placeholder tile that never got files.
-      const qNorm = norm(body.query);
-      const qSeason = querySeason(body.query);
+      // allow re-downloading a placeholder tile that never got files. The
+      // series identity the scanner will create is the folder basename we land
+      // in ("Frieren S2" → series "Frieren"; "Demon Slayer (2019)" → series
+      // "Demon Slayer (2019)"), so match against that — not the raw query.
+      const parsed = parseAnicliQuery(body.query);
+      const seriesFolder = parsed.year !== null ? `${parsed.title} (${parsed.year})` : parsed.title;
+      const qNorm = norm(seriesFolder);
+      const qSeason = parsed.season;
       const existing = await db.mediaItem.findMany({
         where: { libraryId: body.libraryId },
         select: { title: true, seasonNumber: true, titles: { select: { value: true } }, files: { select: { id: true } } },
@@ -139,6 +140,9 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
         if (!names.includes(qNorm)) continue;
         if (it.files.length === 0) continue; // placeholder / not-downloaded tile — allowed
         if (qSeason !== null) {
+          // Season 0 (specials/OVA/ONA) lands in a distinct "Specials" folder
+          // that never collides with episode numbering — always allow it.
+          if (qSeason === 0) continue;
           const sameShow = existing.filter((e) => {
             const en = [e.title, ...e.titles.map((t) => t.value)].map(norm);
             return en.some((n) => names.includes(n));

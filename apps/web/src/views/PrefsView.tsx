@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { api } from "../api-client";
-import { refreshPrimaryProfile, usePrimaryProfile } from "../profile";
+import { refreshPrimaryProfile, useIsAdmin, usePrimaryProfile } from "../profile";
 import { Icon } from "../ui/icons";
+import { AcquireSection } from "./AcquireSection";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
@@ -42,7 +43,15 @@ function ErrorText({ children }: { children: string }) {
 
 export function PrefsView() {
   const profile = usePrimaryProfile();
+  const isAdmin = useIsAdmin();
   const fileRef = useRef<HTMLInputElement>(null);
+  const [toast, setToast] = useState<{ msg: string; err?: boolean; id: number } | null>(null);
+  const toastId = useRef(0);
+  const notify = useCallback((msg: string, err?: boolean) => {
+    const id = ++toastId.current;
+    setToast({ msg, err, id });
+    setTimeout(() => setToast((t) => (t?.id === id ? null : t)), 3000);
+  }, []);
 
   const [name, setName] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -223,6 +232,18 @@ export function PrefsView() {
           </div>
         </form>
       </section>
+
+      {isAdmin && <AcquireSection toast={notify} />}
+
+      {toast && (
+        <div
+          className={`fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-full px-5 py-2.5 font-mono text-kicker font-bold uppercase tracking-[0.1em] text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.4),0_10px_26px_-8px_rgba(120,80,60,0.5)] ${
+            toast.err ? "bg-accent" : "bg-wii-deep"
+          }`}
+        >
+          {toast.msg}
+        </div>
+      )}
 
       <section className="panel rounded-[32px] p-10">
         <div className="mb-[18px] flex flex-wrap items-center gap-3">

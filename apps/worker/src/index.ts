@@ -817,13 +817,13 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
   const MIN_FREE = 2*1024*1024*1024;
   const TIMEOUT_MS = 90*60*1000;
   const MAX_BYTES = 60*1024*1024*1024; // 60GB HARD cap per session as requested
-  const BW_LIMIT = process.env.HOKAGO_ANICLI_BW_LIMIT || "5M"; // bandwidth cap protects internet
+  const BW_LIMIT = "5M";
   try{
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});
     const staging = path.join(configDir(), "staging/anicli", rec.id);
     await mkdir(staging,{ recursive:true });
     const dest = staging;
-    try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 5 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
+    try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 2 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
     const { spawn } = await import("node:child_process");
     const cmd = existsSync("/usr/local/bin/ani-cli") ? "ani-cli" : "yt-dlp";
     // yt-dlp: --limit-rate protects bandwidth, --no-part keeps disk simple, --no-continue prevents resume loops
@@ -833,7 +833,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
       // nice -n 19 + ionice -c3 => lowest CPU/IO priority — never starves system
       const child = spawn("nice", ["-n","19","ionice","-c3",cmd,...args], { timeout: TIMEOUT_MS, killSignal:"SIGKILL", env:{ ...process.env, CUDA_VISIBLE_DEVICES:"", NVIDIA_VISIBLE_DEVICES:"" } });
       trackPid(child.pid!);
-      const timer = setTimeout(()=>{ try{ child.kill("SIGKILL"); }catch{}; reject(new Error("timeout — killed after 20m")); }, TIMEOUT_MS);
+      const timer = setTimeout(()=>{ try{ child.kill("SIGKILL"); }catch{}; reject(new Error("timeout — killed after 90m")); }, TIMEOUT_MS);
       child.on("error", (e)=>{ clearTimeout(timer); reject(e); });
       child.on("exit", (code)=>{ clearTimeout(timer); untrackPid(child.pid!); if(code===0) resolve(); else reject(new Error(`${cmd} exited ${code}`)); });
       const poll = setInterval(async()=>{ try{

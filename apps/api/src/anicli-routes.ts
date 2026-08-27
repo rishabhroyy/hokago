@@ -41,22 +41,32 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance){
     ]);
     if(active >= 3) return reply.code(429).send({ error:"too many active downloads (max 3 per account)"});
     if(global >= 5) return reply.code(429).send({ error:"server busy — max 5 concurrent anicli downloads"});
-    // dedup: block if show already exists (any format, manual or downloader), but allow new seasons
+    // dedup: block if show already exists with files, but allow new seasons AND allow tiles marked not-downloaded (entry with no files)
     const norm = (s:string)=> s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
     const qNorm = norm(body.query);
     const qSeason = /s(?:eason)?\s*(\d+)/i.exec(body.query)?.[1] ? Number(/s(?:eason)?\s*(\d+)/i.exec(body.query)![1]) : null;
-    // check Titles + MediaItem.title normalized
     const existing = await db.mediaItem.findMany({ where:{ libraryId: body.libraryId }, select:{ title:true, seasonNumber:true, titles:{select:{value:true}}, files:{select:{id:true}} }});
     for(const it of existing){
       const names = [it.title, ...it.titles.map(t=>t.value)].map(norm);
-      if(names.includes(qNorm) && it.files.length>0){
-        // if query specifies higher season than existing max, allow
+      if(names.includes(qNorm)){
+        // if entry has no files -> it's a placeholder/not-downloaded tile — allow download
+        if(it.files.length===0) continue;
         if(qSeason !== null){
           const maxSeason = Math.max(0, ...existing.filter(e=> names.some(n=> [norm(e.title), ...e.titles.map(t=>norm(t.value))].includes(n))).map(e=> e.seasonNumber ?? 1));
           if(qSeason > maxSeason) continue;
+        } else {
+          // also check filesystem guard: same normalized folder exists under library root
+          const folder = path.join(lib.rootPath, it.title.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80));
+          // if dedup via Title matched, already blocking — no need for extra fs check here
         }
         return reply.code(409).send({ error:"show already exists on server — new seasons allowed (e.g. 'Frieren S2')"});
       }
+    }
+    // filesystem guard for weird manual names that bypass Title table
+    const allFiles = await db.mediaFile.findMany({ where:{ mediaItem:{ libraryId: body.libraryId } }, select:{ path:true }});
+    if(allFiles.some(f=> norm(path.basename(path.dirname(f.path))) === qNorm || norm(path.basename(f.path, path.extname(f.path))) === qNorm)){
+      // only block if not a new season request
+      if(qSeason===null) return reply.code(409).send({ error:"show already exists on server — new seasons allowed"});
     }
     // episode range guard
     if(body.episodeRange && !/^\d+(-\d+)?$/.test(body.episodeRange)) return reply.code(422).send({ error:"episodeRange must be like 1-12 or 5"});

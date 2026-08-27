@@ -232,16 +232,6 @@ enum DownloadStatus {
   FAILED
 }
 
-enum AnicliStatus {
-  QUEUED
-  SEARCHING
-  DOWNLOADING
-  IMPORTING
-  DONE
-  FAILED
-  CANCELLED
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCOUNTS — no email, anywhere, ever.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -263,7 +253,6 @@ model Account {
   deviceAccounts DeviceAccount[]
   pairingCodes PairingCode[] @relation("PairingAccount")
   downloads    Download[] @relation("AccountDownloads")
-  anicliJobs   AnicliDownload[]
 
   @@map("accounts")
 }
@@ -399,29 +388,6 @@ model PairingCode {
 /// /config/downloads/<id>/: media.mp4 (or the original), packaged text
 /// subtitle sidecars, and the fonts ASS tracks need. The worker owns the
 /// ffmpeg for TRANSCODE variants; the API only tracks + serves the result.
-/// Ani-cli internet acquisition — downloads titles directly to server via ani-cli/yt-dlp.
-model AnicliDownload {
-  id           String      @id @default(uuid()) @db.Uuid
-  accountId    String      @db.Uuid
-  account      Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  libraryId    String      @db.Uuid
-  library      Library     @relation(fields: [libraryId], references: [id], onDelete: Cascade)
-  query        String
-  title        String?
-  episodeRange String? // e.g. "1-12" or null = all
-  status       AnicliStatus @default(QUEUED)
-  progress     Json? // { episode, total, percent }
-  bytesWritten BigInt      @default(0)
-  error        String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-
-  @@index([accountId])
-  @@index([libraryId])
-  @@index([status])
-  @@map("anicli_downloads")
-}
-
 model Download {
   id            String         @id @default(uuid()) @db.Uuid
   accountId     String         @db.Uuid
@@ -483,7 +449,6 @@ model Library {
   updatedAt      DateTime       @updatedAt
 
   items          MediaItem[]
-  anicliJobs     AnicliDownload[]
 
   @@map("libraries")
 }

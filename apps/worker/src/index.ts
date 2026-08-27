@@ -809,35 +809,39 @@ const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, process
   concurrency: downloadConcurrency,
 });
 
-// Ani-cli internet acquisition — NEVER retries (attempts:1), bounded timeout/disk checks
+// Ani-cli internet acquisition — NEVER retries (attempts:1), bounded timeout/disk/bandwidth/cpu/gpu
 const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, { connection, defaultJobOptions:{ attempts:1, removeOnComplete:true, removeOnFail:true }});
 async function processAnicli(job: Job<AnicliDownloadJobData>){
   const rec = await db.anicliDownload.findUnique({ where:{ id: job.data.jobId }, include:{ library:true }});
   if(!rec || rec.status==="CANCELLED") return;
-  const MIN_FREE = 2*1024*1024*1024;
-  const TIMEOUT_MS = 30*60*1000;
-  const MAX_BYTES = 20*1024*1024*1024; // 20 GiB cap per job
+  const MIN_FREE = 5*1024*1024*1024; // 5 GiB — extra safe
+  const TIMEOUT_MS = 20*60*1000; // 20m max per title
+  const MAX_BYTES = 10*1024*1024*1024; // 10 GiB cap per job — protects hard drive
+  const BW_LIMIT = process.env.HOKAGO_ANICLI_BW_LIMIT || "5M"; // bandwidth cap protects internet
   try{
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});
     const dest = path.join(rec.library.rootPath, rec.query.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli");
     await mkdir(dest,{ recursive:true });
-    // Disk guard before start
-    try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 2 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
+    try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 5 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
     const { spawn } = await import("node:child_process");
-    // Use ani-cli if available, else yt-dlp fallback — both capped with timeout and max bytes
     const cmd = existsSync("/usr/local/bin/ani-cli") ? "ani-cli" : "yt-dlp";
-    const args = cmd==="ani-cli" ? ["--download", rec.query, "--output", dest] : ["--no-playlist", "-o", path.join(dest,"%(title)s.%(ext)s"), rec.query];
+    // yt-dlp: --limit-rate protects bandwidth, --no-part keeps disk simple, --no-continue prevents resume loops
+    // ani-cli: pass through with low priority (nice) — CPU/GPU not stressed (download is network-bound, no transcode)
+    const args = cmd==="ani-cli" ? ["--download", rec.query, "--output", dest] : ["--no-playlist","--limit-rate",BW_LIMIT,"--no-part","--no-continue","-o", path.join(dest,"%(title)s.%(ext)s"), rec.query];
     await new Promise<void>((resolve, reject)=>{
-      const child = spawn(cmd, args, { timeout: TIMEOUT_MS, killSignal:"SIGKILL" });
-      trackPid(child.pid!); let bytes=0;
-      const timer = setTimeout(()=>{ try{ child.kill("SIGKILL"); }catch{}; reject(new Error("timeout — ani-cli hung, killed after 30m")); }, TIMEOUT_MS);
+      // nice -n 19 + ionice -c3 => lowest CPU/IO priority — never starves system
+      const child = spawn("nice", ["-n","19","ionice","-c3",cmd,...args], { timeout: TIMEOUT_MS, killSignal:"SIGKILL", env:{ ...process.env, CUDA_VISIBLE_DEVICES:"", NVIDIA_VISIBLE_DEVICES:"" } });
+      trackPid(child.pid!);
+      const timer = setTimeout(()=>{ try{ child.kill("SIGKILL"); }catch{}; reject(new Error("timeout — killed after 20m")); }, TIMEOUT_MS);
       child.on("error", (e)=>{ clearTimeout(timer); reject(e); });
       child.on("exit", (code)=>{ clearTimeout(timer); untrackPid(child.pid!); if(code===0) resolve(); else reject(new Error(`${cmd} exited ${code}`)); });
-      // byte cap via polling dest size every 5s
-      const poll = setInterval(async()=>{ try{ const st = await import("node:fs/promises").then(async m=>{
-        let tot=0; const walk=async(d:string)=>{ const es=await m.readdir(d,{withFileTypes:true}); for(const e of es){ const p=path.join(d,e.name); if(e.isDirectory()) await walk(p); else { const s=await m.stat(p); tot+=s.size; }} };
-        await walk(dest); return tot;
-      }); if(st>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("size cap exceeded — killed to protect disk (20 GiB)")); } }catch{} }, 5000);
+      const poll = setInterval(async()=>{ try{
+        let tot=0; const m=await import("node:fs/promises");
+        const walk=async(d:string)=>{ const es=await m.readdir(d,{withFileTypes:true}); for(const e of es){ const p=path.join(d,e.name); if(e.isDirectory()) await walk(p); else { const s=await m.stat(p); tot+=s.size; }}};
+        await walk(dest);
+        if(tot>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("size cap 10 GiB exceeded — killed to protect disk")); }
+        const s2=await m.statfs(dest); if(Number(s2.bfree)*Number(s2.bsize) < 512*1024*1024){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("disk critically low (<512 MiB) — killed")); }
+      }catch{} }, 3000);
       child.on("exit", ()=> clearInterval(poll));
     });
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"IMPORTING"}});
@@ -847,7 +851,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"FAILED", error: String(err).slice(0,1000)}}).catch(()=>{});
   }
 }
-const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, processAnicli, { connection, concurrency:1 });
+const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, processAnicli, { connection, concurrency:1, limiter:{ max:1, duration: 60_000 } });
 
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.

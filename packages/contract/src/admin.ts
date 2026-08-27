@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { ContentProfile, MediaKind } from "./browse.js";
 
-export const QueueName = z.enum(["scan", "artwork", "trickplay", "metadata-tvmaze", "metadata-anilist", "metadata-mal"]);
+export const QueueName = z.enum(["scan", "artwork", "trickplay", "metadata-tvmaze", "metadata-wikipedia", "metadata-anilist", "metadata-mal", "download", "anicli"]);
 export const JobState = z.enum(["waiting", "active", "completed", "failed", "delayed"]);
 
 export const ScanMode = z.enum(["WATCH_AND_PERIODIC", "PERIODIC_ONLY", "MANUAL"]);

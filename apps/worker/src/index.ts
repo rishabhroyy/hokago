@@ -1,7 +1,7 @@
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { existsSync, type Dirent } from "node:fs";
 
 import { PrismaClient } from "@hokago/db";
 import {
@@ -15,11 +15,13 @@ import {
   trickplayJobId,
   metadataJobId,
   downloadJobId,
+  anicliJobId,
   type ScanJobData,
   type ArtworkJobData,
   type TrickplayJobData,
   type MetadataJobData,
   type DownloadJobData,
+  type AnicliDownloadJobData,
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
@@ -808,6 +810,220 @@ const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, process
   concurrency: downloadConcurrency,
 });
 
+// ── ani-cli internet acquisition ─────────────────────────────────────────
+// Hard-safety invariants (never loop, never wear the drive): the queue runs
+// each job at most once (attempts:1) so a failed download is terminal and is
+// never auto-re-driven; files stage on the SAME filesystem as the target
+// library (accurate free-space measurement + a single write pass + atomic
+// final move); a hard timeout, a byte cap and a free-space floor all SIGKILL
+// + clean the staging dir; and the process runs at lowest CPU/IO priority.
+const anicliMaxBytes = (() => {
+  const v = Number(process.env.HOKAGO_ANICLI_MAX_BYTES);
+  return Number.isFinite(v) && v > 0 ? v : 60 * 1024 * 1024 * 1024;
+})();
+const anicliMinFree = (() => {
+  const v = Number(process.env.HOKAGO_ANICLI_MIN_FREE);
+  return Number.isFinite(v) && v > 0 ? v : 2 * 1024 * 1024 * 1024;
+})();
+const anicliFreeFloor = 512 * 1024 * 1024; // kill mid-download if free drops below this
+const anicliTimeoutMs = (() => {
+  const v = Number(process.env.HOKAGO_ANICLI_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 90 * 60 * 1000;
+})();
+const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, {
+  connection,
+  defaultJobOptions: { attempts: 1, removeOnComplete: true, removeOnFail: true },
+});
+
+const anicliStagingDir = (libraryRoot: string, id: string) => path.join(libraryRoot, ".anicli-staging", id);
+
+/** Free bytes a normal process can write (respects reserved blocks). Fail-closed on error. */
+async function anicliFreeBytes(dir: string): Promise<number> {
+  try {
+    const s = await statfs(dir);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch {
+    return 0;
+  }
+}
+
+/** Total bytes + file count under a dir, best-effort (vanished files mid-scan are skipped). */
+async function anicliWalkSize(dir: string): Promise<{ bytes: number; files: number }> {
+  let bytes = 0;
+  let files = 0;
+  const walk = async (d: string): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        await walk(p);
+      } else {
+        try {
+          const st = await stat(p);
+          if (st.isFile()) {
+            bytes += st.size;
+            files += 1;
+          }
+        } catch {
+          // removed mid-walk — skip
+        }
+      }
+    }
+  };
+  await walk(dir).catch(() => {});
+  return { bytes, files };
+}
+
+const sanitizeFolder = (q: string): string => (q.replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 80) || "anicli").trim();
+
+async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
+  const rec = await db.anicliDownload.findUnique({ where: { id: job.data.jobId }, include: { library: true } });
+  // Only a fresh QUEUED row runs. A CANCELLED/DONE/FAILED row (or one the boot
+  // reconciler already terminal-failed) no-ops — a stalled job must never
+  // re-download or resurrect a terminal download.
+  if (!rec || rec.status !== "QUEUED") return;
+  const staging = anicliStagingDir(rec.library.rootPath, rec.id);
+  const finalDir = path.join(rec.library.rootPath, sanitizeFolder(rec.query));
+  const cleanup = () => rm(staging, { recursive: true, force: true }).catch(() => {});
+  const markFailed = async (err: unknown) => {
+    await cleanup();
+    await db.anicliDownload
+      .update({ where: { id: rec.id }, data: { status: "FAILED", error: String(err).slice(0, 1000) } })
+      .catch(() => {});
+  };
+
+  try {
+    // Fail-closed pre-flight: library root must exist, be writable, have room.
+    if (!existsSync(rec.library.rootPath)) throw new Error(`library root missing: ${rec.library.rootPath}`);
+    if ((await anicliFreeBytes(rec.library.rootPath)) < anicliMinFree) {
+      throw new Error("insufficient disk space — need at least 2 GiB free on the library drive");
+    }
+    await rm(path.dirname(staging), { recursive: true, force: true }).catch(() => {});
+    await mkdir(staging, { recursive: true });
+    if ((await anicliFreeBytes(staging)) < anicliMinFree) throw new Error("insufficient disk space on library drive");
+
+    await db.anicliDownload.update({
+      where: { id: rec.id },
+      data: { status: "DOWNLOADING", progress: { bytes: 0, files: 0, percent: null } },
+    });
+
+    const aniCliBin =
+      existsSync("/usr/local/bin/ani-cli") ? "/usr/local/bin/ani-cli" : existsSync("/usr/bin/ani-cli") ? "/usr/bin/ani-cli" : null;
+    const cmd = aniCliBin ?? "yt-dlp";
+    const args = aniCliBin
+      ? (() => {
+          const a: string[] = ["-d", "-S", "1", "-q", "best"];
+          if (rec.episodeRange) a.push("-r", rec.episodeRange);
+          if (rec.dub) a.push("--dub");
+          a.push(rec.query);
+          return a;
+        })()
+      : ["--no-playlist", "--limit-rate", "5M", "--no-part", "--no-continue", "-o", path.join(staging, "%(title)s.%(ext)s"), rec.query];
+
+    // Lowest CPU/IO priority so a download never starves the box (ionice is
+    // Linux util-linux; macOS dev hosts just get nice).
+    const prefix = process.platform === "linux" ? ["nice", "-n", "19", "ionice", "-c3"] : ["nice", "-n", "19"];
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(prefix[0]!, [...prefix.slice(1), cmd, ...args], {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          ANI_CLI_DOWNLOAD_DIR: staging,
+          ANI_CLI_QUALITY: "best",
+          CUDA_VISIBLE_DEVICES: "",
+          NVIDIA_VISIBLE_DEVICES: "",
+        },
+      });
+      trackPid(child.pid!);
+      let killed = false;
+      let poll: ReturnType<typeof setInterval> | undefined;
+      let last = 0;
+
+      const doKill = () => {
+        killed = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+      };
+      const timer = setTimeout(() => {
+        doKill();
+        reject(new Error(`timeout — killed after ${Math.round(anicliTimeoutMs / 60000)}m`));
+      }, anicliTimeoutMs);
+
+      // Drain stdout/stderr so a chatty downloader never blocks on a full pipe.
+      child.stdout?.on("data", () => {});
+      child.stderr?.on("data", () => {});
+
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        if (poll) clearInterval(poll);
+        reject(e);
+      });
+      child.on("exit", (code) => {
+        clearTimeout(timer);
+        if (poll) clearInterval(poll);
+        untrackPid(child.pid!);
+        if (killed) return; // a guard (timeout/bytes/disk) already rejected
+        if (code === 0) resolve();
+        else reject(new Error(`${cmd} exited ${code}`));
+      });
+
+      poll = setInterval(async () => {
+        const size = await anicliWalkSize(staging);
+        if (size.bytes !== last) {
+          last = size.bytes;
+          await db.anicliDownload
+            .update({
+              where: { id: rec.id },
+              data: { progress: { bytes: size.bytes, files: size.files, percent: null }, bytesWritten: BigInt(size.bytes) },
+            })
+            .catch(() => {});
+          await job.updateProgress(size.bytes).catch(() => {});
+        }
+        if (size.bytes > anicliMaxBytes) {
+          doKill();
+          reject(new Error(`byte cap exceeded (${anicliMaxBytes / 1024 ** 3} GiB) — killed`));
+        } else if ((await anicliFreeBytes(staging)) < anicliFreeFloor) {
+          doKill();
+          reject(new Error("disk critically low (<512 MiB free) — killed"));
+        }
+      }, 10_000);
+    });
+
+    // Import: same-filesystem move, never clobber existing files.
+    await db.anicliDownload.update({ where: { id: rec.id }, data: { status: "IMPORTING" } });
+    const size = await anicliWalkSize(staging);
+    await mkdir(finalDir, { recursive: true });
+    const entries = await readdir(staging).catch(() => []);
+    for (const e of entries) {
+      const src = path.join(staging, e);
+      const dst = path.join(finalDir, e);
+      if (existsSync(dst)) continue; // never overwrite an existing file
+      await rename(src, dst).catch(() => {});
+    }
+    await cleanup();
+    await db.anicliDownload.update({
+      where: { id: rec.id },
+      data: { status: "DONE", progress: { bytes: size.bytes, files: size.files, percent: null }, bytesWritten: BigInt(size.bytes) },
+    });
+    await enqueueScan(rec.libraryId, "light").catch(() => {});
+  } catch (err) {
+    await markFailed(err);
+  }
+}
+const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, processAnicli, {
+  connection,
+  concurrency: 1,
+  limiter: { max: 1, duration: 60_000 },
+});
+
+
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.
 const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
@@ -960,6 +1176,52 @@ async function reconcile(): Promise<void> {
   // re-enqueue against the first provider, same as a fresh onMetadataNeeded.
   const metadataReDerived = await reconcileMetadata();
 
+  // Anicli crash recovery. QUEUED rows with no live job are re-enqueued
+  // (attempts:1, so this never re-drives a failure). SEARCHING/DOWNLOADING/
+  // IMPORTING rows mean the previous worker died mid-flight (the queue already
+  // dropped the job) — terminal-fail them and let a light scan index whatever
+  // already landed. Stale staging dirs (no matching active row) are swept so
+  // partial files never accumulate and wear the disk.
+  const anicliJobs = await db.anicliDownload.findMany({
+    where: { status: { in: ["QUEUED", "SEARCHING", "DOWNLOADING", "IMPORTING"] } },
+    select: { id: true, status: true, libraryId: true },
+  });
+  let anicliReenqueued = 0;
+  let anicliFailed = 0;
+  const activeAnicli = new Set<string>();
+  for (const a of anicliJobs) {
+    if (a.status === "QUEUED") {
+      await anicliQueue.add(QUEUE_NAMES.ANICLI, { jobId: a.id }, { jobId: anicliJobId(a.id) }).catch(() => {});
+      activeAnicli.add(a.id);
+      anicliReenqueued += 1;
+    } else {
+      await db.anicliDownload
+        .update({
+          where: { id: a.id },
+          data: { status: "FAILED", error: "worker restarted mid-download — resubmit to retry" },
+        })
+        .catch(() => {});
+      await enqueueScan(a.libraryId, "light").catch(() => {});
+      anicliFailed += 1;
+    }
+  }
+  for (const lib of await db.library.findMany({ where: { contentProfile: "ANIME" }, select: { rootPath: true } })) {
+    const root = path.join(lib.rootPath, ".anicli-staging");
+    let dirs: Dirent[];
+    try {
+      dirs = await readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const d of dirs) {
+      if (!d.isDirectory() || activeAnicli.has(d.name)) continue;
+      await rm(path.join(root, d.name), { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  if (anicliReenqueued > 0 || anicliFailed > 0) {
+    console.log(`reconciler: re-enqueued ${anicliReenqueued} orphan anicli job(s), failed ${anicliFailed} crashed anicli job(s)`);
+  }
+
   console.log(
     `reconciler: ${libraries.length} librar${libraries.length === 1 ? "y" : "ies"} re-enqueued, ` +
       `${needingArtwork.length} artwork job(s) re-derived, ` +
@@ -1085,6 +1347,7 @@ async function shutdown(signal: string): Promise<void> {
       artworkWorker.close(),
       trickplayWorker.close(),
       downloadWorker.close(),
+      anicliWorker.close(),
       ...Object.values(metadataWorkers).map((w) => w.close()),
     ]),
     new Promise((resolve) => setTimeout(resolve, 10_000)),
@@ -1097,6 +1360,7 @@ async function shutdown(signal: string): Promise<void> {
     artworkQueue.close(),
     trickplayQueue.close(),
     downloadQueue.close(),
+    anicliQueue.close(),
     ...Object.values(metadataQueues).map((q) => q.close()),
     connection.quit(),
   ]);

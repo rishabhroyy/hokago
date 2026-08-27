@@ -10,6 +10,7 @@ export type Route =
   | { view: "pair" }
   | { view: "accounts" }
   | { view: "downloads" }
+  | { view: "anicli" }
   | { view: "offline" }
   | { view: "offlineWatch"; downloadId: string; profileId: string }
   | { view: "search"; q: string | null }
@@ -29,6 +30,7 @@ function parse(pathname: string, search: string): Route {
   if (parts[0] === "pair") return { view: "pair" };
   if (parts[0] === "accounts") return { view: "accounts" };
   if (parts[0] === "downloads") return { view: "downloads" };
+  if (parts[0] === "anicli") return { view: "anicli" };
   if (parts[0] === "offline" && parts[1] === "watch" && parts[2]) {
     return { view: "offlineWatch", downloadId: parts[2], profileId: q.get("profileId") ?? "dev" };
   }
@@ -61,6 +63,7 @@ export const paths = {
   pair: () => "/pair",
   accounts: () => "/accounts",
   downloads: () => "/downloads",
+  anicli: () => "/anicli",
   offline: () => "/offline",
   offlineWatch: (downloadId: string, profileId: string) => `/offline/watch/${downloadId}?profileId=${profileId}`,
   search: (query?: string) => (query ? `/search?q=${encodeURIComponent(query)}` : "/search"),

@@ -181,6 +181,20 @@ export function TopNav() {
             <Icon name="users" className="h-[17px] w-[17px]" />
           </button>
         )}
+        {isAdmin && !tv && (
+          <button
+            className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${
+              route.view === "anicli"
+                ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
+                : "text-ink-2 hover:bg-wii/10 hover:text-wii-deep"
+            }`}
+            title="Acquire from Internet"
+            aria-label="Acquire anime from the internet"
+            onClick={(e) => go(paths.anicli(), e)}
+          >
+            <Icon name="cloudsun" className="h-[17px] w-[17px]" />
+          </button>
+        )}
         {!tv && (
           <button
             className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap active:scale-90 ${

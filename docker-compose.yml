@@ -135,6 +135,9 @@ services:
       # at the fixed container path the Library's rootPath records (both API
       # and worker read media files). Sources come from .env; example.env
       # prefills ./data/media/* for a test drive.
+      # NOTE: the ANIME mount must be `:rw` (not `:ro`) to enable the ani-cli
+      # "Acquire from Internet" feature, which stages + imports files into the
+      # library. Movies/TV can stay read-only.
       - ${MEDIA_MOVIES_PATH}:/media/movies:ro
       - ${MEDIA_TV_PATH}:/media/tv:ro
       - ${MEDIA_ANIME_PATH}:/media/anime:ro
@@ -172,4 +175,5 @@ services:
       - ${HOKAGO_CONFIG_DIR}:/config
       - ${MEDIA_MOVIES_PATH}:/media/movies:ro
       - ${MEDIA_TV_PATH}:/media/tv:ro
+      # ANIME must be :rw for ani-cli acquisition (mirror of the API service).
       - ${MEDIA_ANIME_PATH}:/media/anime:ro

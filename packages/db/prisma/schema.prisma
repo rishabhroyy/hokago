@@ -232,6 +232,18 @@ enum DownloadStatus {
   FAILED
 }
 
+/// Internet acquisition job state. Terminal states (DONE / FAILED / CANCELLED)
+/// are never auto-re-driven — the worker runs each job at most once (attempts:1).
+enum AnicliStatus {
+  QUEUED
+  SEARCHING
+  DOWNLOADING
+  IMPORTING
+  DONE
+  FAILED
+  CANCELLED
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCOUNTS — no email, anywhere, ever.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +265,7 @@ model Account {
   deviceAccounts DeviceAccount[]
   pairingCodes PairingCode[] @relation("PairingAccount")
   downloads    Download[] @relation("AccountDownloads")
+  anicliJobs   AnicliDownload[]
 
   @@map("accounts")
 }
@@ -419,6 +432,36 @@ model Download {
   @@map("downloads")
 }
 
+/// A user-initiated internet download of an anime title, executed with ani-cli
+/// on the worker. Files land (atomically) in the target ANIME library so the
+/// scanner picks them up. The row is truth; the ANICLI queue runs it once.
+model AnicliDownload {
+  id           String       @id @default(uuid()) @db.Uuid
+  accountId    String       @db.Uuid
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  libraryId    String       @db.Uuid
+  library      Library      @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  /// Title ani-cli will resolve + download (e.g. "Frieren S2").
+  query        String
+  /// Display title from the search step (informational).
+  title        String?
+  /// "1-12" | "5" | null = all episodes.
+  episodeRange String?
+  dub          Boolean      @default(false)
+  status       AnicliStatus @default(QUEUED)
+  /// { percent?, bytes, files } — live progress, throttled by the worker.
+  progress     Json?
+  bytesWritten BigInt       @default(0)
+  error        String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([accountId])
+  @@index([libraryId])
+  @@index([status])
+  @@map("anicli_downloads")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // LIBRARIES & MEDIA
 // ─────────────────────────────────────────────────────────────────────────────
@@ -449,6 +492,7 @@ model Library {
   updatedAt      DateTime       @updatedAt
 
   items          MediaItem[]
+  anicliJobs     AnicliDownload[]
 
   @@map("libraries")
 }

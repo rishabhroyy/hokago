@@ -16,6 +16,7 @@ import { PartyView } from "./views/PartyView";
 import { NotFoundView } from "./views/NotFoundView";
 import { TvAccountsView } from "./views/TvAccountsView";
 import { DownloadsView } from "./views/DownloadsView";
+import { AnicliView } from "./views/AnicliView";
 import { OfflineView } from "./views/OfflineView";
 import { OfflineWatchPage } from "./views/OfflineWatchPage";
 import { NativeUpdateGate } from "./views/NativeUpdateGate";
@@ -78,6 +79,8 @@ function ShellRoutes({ route }: { route: Route }) {
       return <TvAccountsView />;
     case "downloads":
       return <DownloadsView />;
+    case "anicli":
+      return <AnicliView />;
     case "offline":
       return <OfflineView />;
     case "offlineWatch":

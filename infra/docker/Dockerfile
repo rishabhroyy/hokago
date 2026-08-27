@@ -194,6 +194,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       # the nvidia-container-toolkit mounts the driver .so's at container
       # start. x86-only packages are gated on TARGETARCH (arm64 = CPU).
       libva2 libva-drm2 mesa-va-drivers \
+      # ani-cli internet acquisition (worker): aria2/curl are download
+      # backends ani-cli may prefer, fzf is its (non-interactive here — -S)
+      # menu dep, python3+pip install yt-dlp below, and mpv satisfies ani-cli's
+      # unconditional startup player check (even in --download mode).
+      aria2 python3 python3-pip fzf mpv \
     && if [ "$TARGETARCH" = "amd64" ]; then \
          apt-get install -y --no-install-recommends libvpl2 intel-media-va-driver \
          # NPP runtime libs for the full-GPU nvenc transcode path (scale_npp) —
@@ -227,6 +232,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-$(case ${TARGETARCH} in amd64) echo x64;; *) echo ${TARGETARCH};; esac).tar.xz" -o /tmp/node.tar.xz \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
+    # yt-dlp (pinned) + ani-cli (pinned commit) for the worker's internet
+    # acquisition. A pinned build fails loudly if the source ever moves.
+    && python3 -m pip install --no-cache-dir "yt-dlp==2026.8.19" \
+    && curl -fsSL -o /usr/local/bin/ani-cli \
+         "https://raw.githubusercontent.com/pystardust/ani-cli/92e9d796d23aef3ae94b52852f9c992e2bce4fe3/ani-cli" \
+    && chmod +x /usr/local/bin/ani-cli \
     && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable

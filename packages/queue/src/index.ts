@@ -13,6 +13,8 @@ export {
   type TrickplayJobData,
   type MetadataJobData,
   type DownloadJobData,
+  type AnicliDownloadJobData,
+  anicliJobId,
 } from "./queues.js";
 export { Queue, Worker, QueueEvents } from "bullmq";
 export type { Job } from "bullmq";

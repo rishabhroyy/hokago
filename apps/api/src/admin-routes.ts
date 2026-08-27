@@ -22,6 +22,7 @@ const queues: Record<QueueName, Queue> = {
   "metadata-anilist": new Queue(QUEUE_NAMES.METADATA_ANILIST, { connection }),
   "metadata-mal": new Queue(QUEUE_NAMES.METADATA_MAL, { connection }),
   download: new Queue(QUEUE_NAMES.DOWNLOAD, { connection }),
+  anicli: new Queue(QUEUE_NAMES.ANICLI, { connection }),
 };
 
 const JOB_STATES = ["waiting", "active", "completed", "failed", "delayed"] as const;

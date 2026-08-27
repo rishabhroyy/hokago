@@ -135,7 +135,10 @@ export function parseSeasonDirName(name: string): number | null {
   // whitespace or the end of the name, so "s1e5" (an episode-style name)
   // never matches.
   const m = /^(?:season|series|staffel|s)\s*0*(\d{1,3})(?=\s|$)/i.exec(cleaned);
-  return m ? Number(m[1]) : null;
+  if (m) return Number(m[1]);
+  // Bare numeric folders ("1", "02") — common for anime arranged as Show/1/, Show/2/
+  if (/^0*(\d{1,3})$/.test(cleaned)) return Number(RegExp.$1);
+  return null;
 }
 
 /**

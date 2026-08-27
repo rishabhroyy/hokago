@@ -140,7 +140,9 @@ services:
       # library. Movies/TV can stay read-only.
       - ${MEDIA_MOVIES_PATH}:/media/movies:ro
       - ${MEDIA_TV_PATH}:/media/tv:ro
-      - ${MEDIA_ANIME_PATH}:/media/anime:ro
+      # ANIME is :rw — the ani-cli "Acquire from Internet" feature stages +
+      # imports files into the library (Movies/TV stay read-only).
+      - ${MEDIA_ANIME_PATH}:/media/anime:rw
 
   hokago-worker:
     image: ghcr.io/rishabhroyy/hokago:${HOKAGO_VERSION:-latest}
@@ -176,4 +178,4 @@ services:
       - ${MEDIA_MOVIES_PATH}:/media/movies:ro
       - ${MEDIA_TV_PATH}:/media/tv:ro
       # ANIME must be :rw for ani-cli acquisition (mirror of the API service).
-      - ${MEDIA_ANIME_PATH}:/media/anime:ro
+      - ${MEDIA_ANIME_PATH}:/media/anime:rw

@@ -162,17 +162,28 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
         }
       }
 
-      const job = await db.anicliDownload.create({
-        data: {
-          accountId: req.accountId!,
-          libraryId: body.libraryId,
-          query: body.query.trim(),
-          title: body.title ?? null,
-          episodeRange: body.episodeRange ?? null,
-          dub: body.dub ?? false,
-          status: "QUEUED",
-        },
-      });
+      let job;
+      try {
+        job = await db.anicliDownload.create({
+          data: {
+            accountId: req.accountId!,
+            libraryId: body.libraryId,
+            query: body.query.trim(),
+            title: body.title ?? null,
+            episodeRange: body.episodeRange ?? null,
+            dub: body.dub ?? false,
+            status: "QUEUED",
+          },
+        });
+      } catch (err) {
+        // Partial unique index (active downloads per library+query) — the
+        // check-then-create window closed a concurrent duplicate. Map the
+        // Prisma unique violation (P2002) to a clean 409, not a 500.
+        if ((err as { code?: string }).code === "P2002") {
+          return reply.code(409).send({ error: "a download for this title is already in progress" });
+        }
+        throw err;
+      }
       await anicliQueue
         .add(QUEUE_NAMES.ANICLI, { jobId: job.id }, { jobId: anicliJobId(job.id) })
         .catch(async (e) => {

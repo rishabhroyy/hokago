@@ -232,6 +232,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable
 COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+# vendor ani-cli latest (pystardust v5) + yt-dlp for anicli downloads — latest ver always
+RUN curl -fsSL https://raw.githubusercontent.com/pystardust/ani-cli/master/ani-cli -o /usr/local/bin/ani-cli && chmod +x /usr/local/bin/ani-cli || true; \
+    curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp || true
 
 WORKDIR /repo
 COPY --from=node-builder /repo /repo

@@ -20,6 +20,7 @@ import {
   type TrickplayJobData,
   type MetadataJobData,
   type DownloadJobData,
+  type AnicliDownloadJobData,
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
@@ -808,6 +809,67 @@ const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, process
   concurrency: downloadConcurrency,
 });
 
+// Ani-cli internet acquisition — NEVER retries (attempts:1), bounded timeout/disk/bandwidth/cpu/gpu
+const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, { connection, defaultJobOptions:{ attempts:1, removeOnComplete:true, removeOnFail:true }});
+async function processAnicli(job: Job<AnicliDownloadJobData>){
+  const rec = await db.anicliDownload.findUnique({ where:{ id: job.data.jobId }, include:{ library:true }});
+  if(!rec || rec.status==="CANCELLED") return;
+  const MIN_FREE = 2*1024*1024*1024;
+  const TIMEOUT_MS = 90*60*1000;
+  const MAX_BYTES = 60*1024*1024*1024; // 60GB HARD cap per session as requested
+  const BW_LIMIT = "5M";
+  try{
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});
+    const staging = path.join(configDir(), "staging/anicli", rec.id);
+    await mkdir(staging,{ recursive:true });
+    const dest = staging;
+    // fail-closed disk check on staging AND final mount (different mounts)
+    for(const d of [dest, rec.library.rootPath]){
+      try{ const s = await import("node:fs/promises").then(m=>m.statfs(d)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 2 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
+    }
+    const { spawn } = await import("node:child_process");
+    const cmd = existsSync("/usr/local/bin/ani-cli") ? "ani-cli" : "yt-dlp";
+    const args = cmd==="ani-cli" ? ["--download", rec.query, "--output", dest, "--limit-rate", BW_LIMIT] : ["--no-playlist","--limit-rate",BW_LIMIT,"--no-part","--no-continue","-o", path.join(dest,"%(title)s.%(ext)s"), rec.query];
+    await new Promise<void>((resolve, reject)=>{
+      // nice -n 19 + ionice -c3 => lowest CPU/IO priority — never starves system
+      const child = spawn("nice", ["-n","19","ionice","-c3",cmd,...args], { timeout: TIMEOUT_MS, killSignal:"SIGKILL", env:{ ...process.env, CUDA_VISIBLE_DEVICES:"", NVIDIA_VISIBLE_DEVICES:"" } });
+      trackPid(child.pid!);
+      const timer = setTimeout(()=>{ try{ child.kill("SIGKILL"); }catch{}; reject(new Error("timeout — killed after 90m")); }, TIMEOUT_MS);
+      child.on("error", (e)=>{ clearTimeout(timer); reject(e); });
+      child.on("exit", (code)=>{ clearTimeout(timer); untrackPid(child.pid!); if(code===0) resolve(); else reject(new Error(`${cmd} exited ${code}`)); });
+      const poll = setInterval(async()=>{ try{
+        let tot=0; const m=await import("node:fs/promises");
+        const walk=async(d:string)=>{ const es=await m.readdir(d,{withFileTypes:true}); for(const e of es){ const p=path.join(d,e.name); if(e.isDirectory()) await walk(p); else { const s=await m.stat(p); tot+=s.size; }}};
+        await walk(dest);
+        // per-episode progress: count files + bytes
+        const fileCount = (await m.readdir(dest).catch(()=>[])).length;
+        await db.anicliDownload.update({ where:{ id: rec.id }, data:{ progress:{ bytes: tot, files: fileCount }, bytesWritten: BigInt(tot) }}).catch(()=>{});
+        if(tot>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error(`60GB HARD cap exceeded — killed`)); }
+        const s2=await m.statfs(dest); if(Number(s2.bfree)*Number(s2.bsize) < 512*1024*1024){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("disk critically low (<512 MiB) — killed")); }
+      }catch{} }, 3000);
+      child.on("exit", ()=> clearInterval(poll));
+    });
+    // scanner-aware layout: Show folder + Season subfolder if season detected (so anitomy/scene parsers group correctly)
+    const seasonMatch = /s(?:eason)?\s*(\d+)/i.exec(rec.query);
+    const seasonNum = seasonMatch ? Number(seasonMatch[1]) : null;
+    const showName = rec.query.replace(/\s*s(?:eason)?\s*\d+.*$/i,"").replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli";
+    const finalDest = seasonNum ? path.join(rec.library.rootPath, showName, `Season ${seasonNum}`) : path.join(rec.library.rootPath, showName);
+    await mkdir(path.dirname(finalDest),{ recursive:true });
+    // merge staging into final (don't overwrite existing season folder)
+    await mkdir(finalDest,{ recursive:true });
+    const { cp, rm, readdir } = await import("node:fs/promises");
+    for(const e of await readdir(staging)) await cp(path.join(staging,e), path.join(finalDest,e), { recursive:true });
+    await rm(staging,{ recursive:true, force:true }).catch(()=>{});
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"IMPORTING"}});
+    await enqueueScan(rec.libraryId, "light");
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DONE"}});
+  }catch(err){
+    await import("node:fs/promises").then(m=> m.rm(path.join(configDir(), "staging/anicli", rec.id),{ recursive:true, force:true }).catch(()=>{})).catch(()=>{});
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"FAILED", error: String(err).slice(0,1000)}}).catch(()=>{});
+  }
+}
+const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, processAnicli, { connection, concurrency:1, limiter:{ max:1, duration: 60_000 } });
+
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.
 const metadataWorkers: Record<string, Worker<MetadataJobData>> = {
@@ -954,6 +1016,11 @@ async function reconcile(): Promise<void> {
       durationMs: row.mediaFile.durationMs,
     });
   }
+
+  // Anicli orphan: QUEUED rows with no BullMQ job (crash/upgrade) — re-enqueue
+  const orphanAnicli = await db.anicliDownload.findMany({ where:{ status:"QUEUED" }, select:{ id:true }});
+  for(const r of orphanAnicli) await anicliQueue.add(QUEUE_NAMES.ANICLI, { jobId: r.id }, { jobId: `anicli-${r.id}` }).catch(()=>{});
+  if(orphanAnicli.length) console.log(`reconciler: re-enqueued ${orphanAnicli.length} orphan anicli job(s)`);
 
   // A MOVIE/SERIES missing an ExternalId for every provider in its own
   // chain has never been successfully resolved (or its match was lost) —

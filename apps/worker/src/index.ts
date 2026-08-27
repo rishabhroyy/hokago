@@ -864,7 +864,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
     await enqueueScan(rec.libraryId, "light");
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DONE"}});
   }catch(err){
-    await import("node:fs/promises").then(m=> m.rm(staging,{ recursive:true, force:true }).catch(()=>{})).catch(()=>{});
+    await import("node:fs/promises").then(m=> m.rm(path.join(configDir(), "staging/anicli", rec.id),{ recursive:true, force:true }).catch(()=>{})).catch(()=>{});
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"FAILED", error: String(err).slice(0,1000)}}).catch(()=>{});
   }
 }

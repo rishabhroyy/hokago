@@ -2,9 +2,12 @@ import { hwEncoderFor, type HwaccelState } from "./hwaccel.js";
 
 // /. Fixed segment length so the upfront .m3u8 can enumerate every
 // segment before any of them exist on disk ("generate the full .m3u8
-// immediately"). 6s balances seek granularity against segment-boundary overhead;
-// not derived from anything, just a reasonable default.
-export const HLS_SEGMENT_SECONDS = 6;
+// immediately"). A TRANSCODE session's first segment (and every seek-restart's
+// first segment) can only appear once ffmpeg has encoded this many seconds of
+// source — it's the dominant term in "how long until playback starts". 4s
+// keeps that floor low while staying inside Apple's recommended VOD segment
+// range; not derived from anything else, just a reasonable default.
+export const HLS_SEGMENT_SECONDS = 4;
 
 /**
  * General enough that "airplay" is just another profile with subtitleMode:

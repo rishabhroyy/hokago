@@ -1,7 +1,8 @@
 import { execFileSync, execFile } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import type { Readable } from "node:stream";
+import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { Readable } from "node:stream";
 import path from "node:path";
 import { z } from "zod";
 
@@ -192,35 +193,6 @@ async function buildCandidateInput(
   };
 }
 
-/** How far into the media timeline the live remux has already written (ms). */
-function remuxCoveredMs(live: LiveSession): number {
-  const remux = live.remux;
-  const bitrate = live.mediaFile.bitrateKbps;
-  if (!remux || !bitrate) return 0;
-  let size = 0;
-  try {
-    size = statSync(remux.outFile).size;
-  } catch {
-    // not created yet
-  }
-  return remux.startMs + (size * 8) / bitrate;
-}
-
-/**
- * Rough wall-clock seconds until the remux child finishes writing the file,
- * from source bitrate vs. measured copy throughput (~60MB/s). Drives the
- * stream route's serve-after-complete wait — a movie gets a proportionally
- * longer wait, not a fixed timeout.
- */
-function estRemuxRemainingSec(live: LiveSession): number {
-  const remux = live.remux;
-  if (!remux) return 0;
-  const bitrateKbps = live.mediaFile.bitrateKbps ?? 8000;
-  const remainingMs = Math.max(0, live.mediaFile.durationMs - remux.startMs);
-  const bytes = (remainingMs / 1000) * bitrateKbps * 125;
-  return bytes / 60_000_000;
-}
-
 /** Segment index for a wall-clock position, clamped inside the media's range. */
 function segmentFor(positionMs: number, durationMs: number): number {
   const total = Math.max(1, Math.floor(durationMs / 1000 / HLS_SEGMENT_SECONDS));
@@ -313,6 +285,78 @@ async function writePlaylistAtomically(outDir: string, body: string): Promise<vo
     await rm(tmp, { force: true }).catch(() => {});
     throw err;
   });
+}
+
+const TAIL_POLL_MS = 100;
+const TAIL_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Follows a file ffmpeg is still writing — reads whatever's on disk, and once
+ * it catches up to the current end, polls briefly and keeps reading instead
+ * of ending the stream, like `tail -f`. Lets the REMUX route stream a
+ * growing fragmented-mp4 to the player as it's produced instead of blocking
+ * the whole request until the copy finishes: `+empty_moov+frag_keyframe` (see
+ * buildRemuxArgs) is what makes the file playable before it's complete —
+ * this is the piece that was missing to actually use that. `isAlive` reports
+ * whether the producing child is still expected to write more; once it
+ * returns false and there's nothing left on disk to read, the stream ends
+ * normally. Retries ENOENT (the route may start following before ffmpeg has
+ * even opened the output file) as long as the producer is still alive.
+ */
+class GrowingFileStream extends Readable {
+  private fd: FileHandle | null = null;
+  private position = 0;
+  private stopped = false;
+
+  constructor(
+    private readonly filePath: string,
+    private readonly isAlive: () => boolean,
+  ) {
+    super();
+  }
+
+  // Exactly one push() (data or null) per _read() call, always as the last
+  // thing it does before returning — push() can synchronously trigger
+  // another _read() call when the consumer wants more, and looping past a
+  // push inside the same invocation would race that re-entrant call against
+  // this one's own `position`/`fd` state. Waiting (no data yet, producer
+  // still alive) is safe to loop on since nothing has been pushed yet.
+  override async _read(): Promise<void> {
+    try {
+      while (!this.fd) {
+        if (this.stopped) return;
+        try {
+          this.fd = await open(this.filePath, "r");
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT" || !this.isAlive()) throw err;
+          await new Promise((r) => setTimeout(r, TAIL_POLL_MS));
+        }
+      }
+      for (;;) {
+        if (this.stopped) return;
+        const buf = Buffer.alloc(TAIL_CHUNK_BYTES);
+        const { bytesRead } = await this.fd.read(buf, 0, buf.length, this.position);
+        if (bytesRead > 0) {
+          this.position += bytesRead;
+          this.push(buf.subarray(0, bytesRead));
+          return;
+        }
+        if (!this.isAlive()) {
+          this.push(null);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, TAIL_POLL_MS));
+      }
+    } catch (err) {
+      this.destroy(err as Error);
+    }
+  }
+
+  override _destroy(err: Error | null, callback: (error?: Error | null) => void): void {
+    this.stopped = true;
+    if (this.fd) void this.fd.close().finally(() => callback(err));
+    else callback(err);
+  }
 }
 
 async function killSessionTranscode(sessionId: string): Promise<void> {
@@ -873,24 +917,15 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     },
   );
 
-  // REMUX: the live fragmented-MP4 file, still growing under ffmpeg. sendFile
-  // handles Range/206 for native <video> seeking; noCache keeps a restarted
-  // (truncated + rewritten) file from being served from a browser cache — the
-  // client also busts via `?r=` nonce on restarts, this is the backstop.
-  //
-  // Growing-file race: Chrome's first fetch is `Range: bytes=0-` — a 206
-  // against a half-written file is treated as authoritative, so it never
-  // re-fetches and the player stalls at the written frontier with the wrong
-  // duration. Instead, block until the remux child exits (the file is
-  // complete) — copy-speed makes this ~3s for an episode, tens of seconds to
-  // several minutes for a large movie remux — then serve a file whose
-  // content-range can never lie. The ceiling below used to be a flat 60s,
-  // which is well under the copy time of any movie past ~3.5GB (a low bar for
-  // remux-quality sources) — every such request fell through to the
-  // known-bad growing-file race below instead of waiting it out, which is
-  // exactly the "transcoded playback is unbearably slow" symptom for movies
-  // specifically. 30 minutes covers real-world file sizes at the assumed
-  // 60MB/s copy floor and still bounds a genuinely stuck child.
+  // REMUX: the live fragmented-MP4 file. Once it's complete, sendFile serves
+  // it with full Range/206 support for native <video> seeking; noCache keeps
+  // a restarted (truncated + rewritten) file from being served from a
+  // browser cache — the client also busts via `?r=` nonce on restarts, this
+  // is the backstop. While it's still being written, GrowingFileStream
+  // follows it instead — see the historical note there on why this used to
+  // block the whole request until the copy finished (multi-minute stalls on
+  // large movies) and why serving it as a plain chunked download sidesteps
+  // that without needing to know the final size up front.
   app.get<{ Params: { sessionId: string } }>(
     "/playback/:sessionId/stream.mp4",
     { preHandler: app.authenticate },
@@ -898,40 +933,49 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const live = liveSessions.get(req.params.sessionId);
       if (!live?.remux) return reply.code(404).send({ error: "no active remux session" });
 
-    const child = live.transcode.child;
-    const waitMs = Math.min(30 * 60_000, Math.max(5_000, estRemuxRemainingSec(live) * 1000 + 3_000));
-    const deadline = Date.now() + waitMs;
-    // A seek-restart kills the child (SIGKILL → signalCode, not exitCode) and
-    // rewrites the file — treat that as "wait's over", the client is
-    // nonce-reloading a fresh URL anyway.
-    while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    if (child.exitCode !== null && child.exitCode !== 0) {
-      return reply.code(500).send({ error: "remux failed" });
-    }
-
-    // The file is complete — inject the mehd duration into moov so the player
-    // knows the real length up-front instead of deriving it from downloaded
-    // fragments (a slow connection shows a fraction of the episode). One
-    // 20-byte in-place insert per remux (seek/audio-switch restarts rewrite
-    // the file, so patched resets to false there); a failed patch must never
-    // take the stream down. Patching a *live* file (wait deadline expired
-    // with the child still writing) would shift every byte after moov while
-    // ffmpeg writes — corruption. Serve it unpatched; the client plays with
-    // progressive duration until the next restart.
-    if (child.exitCode === 0 && !live.remux.patched) {
-      if (patchRemuxMehd(live.remux.outFile, live.mediaFile.durationMs, live.remux.startMs)) {
-        live.remux.patched = true;
+      const child = live.transcode.child;
+      if (child.exitCode !== null && child.exitCode !== 0) {
+        return reply.code(500).send({ error: "remux failed" });
       }
-    }
 
-    return reply.sendFile(path.basename(live.remux.outFile), path.dirname(live.remux.outFile), {
-      maxAge: 0,
-      acceptRanges: true,
-      cacheControl: true,
-    });
-  });
+      if (child.exitCode === 0) {
+        // Complete — inject the mehd duration into moov so the player knows
+        // the real length up-front instead of deriving it from downloaded
+        // fragments (a slow connection shows a fraction of the episode). One
+        // 20-byte in-place insert per remux (seek/audio-switch restarts
+        // rewrite the file, so patched resets to false there); a failed
+        // patch must never take the stream down. Only safe once the file is
+        // finished — patching a live file would shift every byte after moov
+        // while ffmpeg's own writes land past that point, corrupting it.
+        if (!live.remux.patched && patchRemuxMehd(live.remux.outFile, live.mediaFile.durationMs, live.remux.startMs)) {
+          live.remux.patched = true;
+        }
+        return reply.sendFile(path.basename(live.remux.outFile), path.dirname(live.remux.outFile), {
+          maxAge: 0,
+          acceptRanges: true,
+          cacheControl: true,
+        });
+      }
+
+      // Still writing — historically this blocked the whole request until
+      // the child exited: ~3s for an episode, tens of seconds to several
+      // minutes for a large movie remux, because Chrome's first fetch is
+      // `Range: bytes=0-` and a 206 against a half-written file reports that
+      // file's *current* size as the total — Chrome trusts it, never
+      // re-fetches, and the player stalls at the written frontier with the
+      // wrong duration. Sidestep the lie instead of waiting it out: serve a
+      // plain 200 with no Accept-Ranges/Content-Length at all (chunked), so
+      // there's no total to get wrong. The browser just buffers a classic
+      // progressive download — exactly what `+empty_moov+frag_keyframe`
+      // (buildRemuxArgs) is for — and native Range-based seeking resumes on
+      // the next request once the file lands in the completed branch above.
+      reply.header("Cache-Control", "no-cache");
+      reply.type("video/mp4");
+      return reply.send(
+        new GrowingFileStream(live.remux.outFile, () => child.exitCode === null && child.signalCode === null),
+      );
+    },
+  );
 
   app.get<{ Params: { sessionId: string; n: string } }>(
     "/playback/:sessionId/segment-:n.ts",
@@ -1050,58 +1094,24 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         };
       }
 
-      // REMUX: seeks within what the live file has already written are
-      // native browser seeks (range requests) — no restart, no stall.
-      // Forward seeks beyond the written frontier simply wait for the copy
-      // to reach the target: the remux copies at far above playback rate
-      // (~60MB/s), so the frontier crosses the target in seconds without a
-      // single restart — the mounted element keeps its patched mehd and its
-      // range machinery, and Chrome's follow-up byte-range request is served
-      // once the bytes physically exist. A restart would recopy the whole
-      // remainder and force a fresh mount that the stream route blocks on
-      // (serve-after-complete) — that freeze is what made far-forward REMUX
-      // clicks look dead. Restart only for seeks BELOW the file's start:
-      // the file only spans [startMs, end] — anything earlier physically
-      // doesn't exist in it, the browser clamps to its start, and a
-      // "restarted:false" there would silently dead-end the user's backward
-      // scrub (the client can't reach the target natively).
-      if (targetMs >= live.remux.startMs) {
-        // +15s margin past the size-derived estimate: the target's fragment
-        // (moof+mdat) must exist in full, not just its moof header, or the
-        // element's range request ends the fragment early (mid-mdat).
-        // Clamp the goal to the media end (-2s playback tail): a seek to the
-        // final seconds can never make a size-derived estimate reach
-        // durationMs+15s, and must not burn the full deadline waiting.
-        const goalMs = Math.min(targetMs + 15_000, live.mediaFile.durationMs - 2_000);
-        const deadline = Date.now() + 30_000;
-        let covered = remuxCoveredMs(live);
-        while (covered < goalMs && Date.now() < deadline) {
-          // Refresh per iteration: a quality/audio restart swaps the entry
-          // (and the file) mid-wait; wait on what's live, not the snapshot.
-          const child = (liveSessions.get(req.params.sessionId) ?? live).transcode.child;
-          // Child done (clean exit) = file final on disk — everything is
-          // seekable, margin irrelevant (the estimate's last fragments are
-          // fully written). A failed/signaled child leaves a truncated or
-          // empty file on disk — do NOT treat that as covered; bail out of
-          // the wait so the restart path below recovers the seek.
-          if (child.exitCode === 0) {
-            covered = goalMs;
-            break;
-          }
-          if ((child.exitCode ?? child.signalCode) !== null) break;
-          await new Promise((resolve) => setTimeout(resolve, 150));
-          covered = remuxCoveredMs(live);
-        }
-        if (covered >= goalMs) {
-          await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
-          return {
-            restarted: false,
-            segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
-            pid: live.transcode.pid,
-          };
-        }
-        // Frontier never made it (child died / disk stalled) — fall through
-        // to a real restart so the seek still lands.
+      // REMUX: once the file is completely written, any seek inside
+      // [startMs, end] is a native browser seek (range request) — no
+      // restart, no wait, the whole file plus its patched mehd is already
+      // on disk. While the file is still growing, the stream route now
+      // serves it as a plain chunked download with no Accept-Ranges (see
+      // GrowingFileStream) — there's no native range mechanism to fall back
+      // on mid-growth, so a seek then always restarts ffmpeg at the target,
+      // same as a seek below the file's start (which never existed in it to
+      // begin with). Most seeks land on the fast path anyway: remux copies
+      // far above playback rate (~60MB/s), so short/episode-length sources
+      // are usually already complete by the time anyone seeks.
+      if (targetMs >= live.remux.startMs && live.transcode.child.exitCode === 0) {
+        await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
+        return {
+          restarted: false,
+          segmentFrom: Math.floor(targetMs / 1000 / HLS_SEGMENT_SECONDS),
+          pid: live.transcode.pid,
+        };
       }
 
       const oldPid = live.transcode.pid;

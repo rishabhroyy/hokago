@@ -19,7 +19,7 @@ const MAX_EPISODES = 100;
 const QUERY_MAX_LEN = 200;
 
 async function hasFreeSpace(dir: string, needed = MIN_FREE_BYTES): Promise<boolean> {
-  try { const s = await statfs(dir); return Number(s.bfree) * Number(s.bsize) > needed; } catch { return true; }
+  try { const s = await statfs(dir); return Number(s.bfree) * Number(s.bsize) > needed; } catch { return false; }
 }
 
 export async function registerAnicliRoutes(app: ZodFastifyInstance){

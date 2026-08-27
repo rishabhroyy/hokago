@@ -823,12 +823,13 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
     const staging = path.join(configDir(), "staging/anicli", rec.id);
     await mkdir(staging,{ recursive:true });
     const dest = staging;
-    try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 2 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
+    // fail-closed disk check on staging AND final mount (different mounts)
+    for(const d of [dest, rec.library.rootPath]){
+      try{ const s = await import("node:fs/promises").then(m=>m.statfs(d)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 2 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
+    }
     const { spawn } = await import("node:child_process");
     const cmd = existsSync("/usr/local/bin/ani-cli") ? "ani-cli" : "yt-dlp";
-    // yt-dlp: --limit-rate protects bandwidth, --no-part keeps disk simple, --no-continue prevents resume loops
-    // ani-cli: pass through with low priority (nice) — CPU/GPU not stressed (download is network-bound, no transcode)
-    const args = cmd==="ani-cli" ? ["--download", rec.query, "--output", dest] : ["--no-playlist","--limit-rate",BW_LIMIT,"--no-part","--no-continue","-o", path.join(dest,"%(title)s.%(ext)s"), rec.query];
+    const args = cmd==="ani-cli" ? ["--download", rec.query, "--output", dest, "--limit-rate", BW_LIMIT] : ["--no-playlist","--limit-rate",BW_LIMIT,"--no-part","--no-continue","-o", path.join(dest,"%(title)s.%(ext)s"), rec.query];
     await new Promise<void>((resolve, reject)=>{
       // nice -n 19 + ionice -c3 => lowest CPU/IO priority — never starves system
       const child = spawn("nice", ["-n","19","ionice","-c3",cmd,...args], { timeout: TIMEOUT_MS, killSignal:"SIGKILL", env:{ ...process.env, CUDA_VISIBLE_DEVICES:"", NVIDIA_VISIBLE_DEVICES:"" } });
@@ -863,6 +864,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
     await enqueueScan(rec.libraryId, "light");
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DONE"}});
   }catch(err){
+    await import("node:fs/promises").then(m=> m.rm(staging,{ recursive:true, force:true }).catch(()=>{})).catch(()=>{});
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"FAILED", error: String(err).slice(0,1000)}}).catch(()=>{});
   }
 }

@@ -216,12 +216,18 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
       const row = await db.anicliDownload.findUnique({ where: { id } });
       if (!row || row.accountId !== req.accountId) return reply.code(404).send({ error: "not found" });
       await anicliQueue.remove(anicliJobId(id)).catch(() => {});
-      if (row.status === "QUEUED" || row.status === "SEARCHING") {
-        await db.anicliDownload.update({ where: { id }, data: { status: "CANCELLED" } }).catch(() => {});
+      // In-flight rows must be flipped to CANCELLED (not deleted) so the
+      // worker's mid-download cancel re-check observes it and kills the
+      // process tree. Deleting the row would leave the download running to
+      // completion and importing files anyway.
+      if (row.status === "QUEUED" || row.status === "SEARCHING" || row.status === "DOWNLOADING" || row.status === "IMPORTING") {
+        await db.anicliDownload
+          .update({ where: { id }, data: { status: "CANCELLED", error: null } })
+          .catch(() => {});
       } else {
         // A completed/failed download leaves no artifact to delete (files were
         // imported into the library and are owned by the scanner); just drop
-        // the row. In-flight DOWNLOADING rows are killed + cleaned by the worker.
+        // the row.
         await db.anicliDownload.delete({ where: { id } }).catch(() => {});
       }
       return { revoked: true };

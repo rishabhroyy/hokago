@@ -836,6 +836,25 @@ const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, {
   defaultJobOptions: { attempts: 1, removeOnComplete: true, removeOnFail: true },
 });
 
+// Detached anicli process groups (leaders). trackPid only covers the wrapper
+// PID; a detached group needs a negative-pid kill to reach yt-dlp too.
+const anicliGroups = new Set<number>();
+function trackAnicliGroup(pid: number): void {
+  anicliGroups.add(pid);
+}
+function untrackAnicliGroup(pid: number): void {
+  anicliGroups.delete(pid);
+}
+function killAnicliGroups(): void {
+  for (const pid of anicliGroups) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
 const anicliStagingDir = (libraryRoot: string, id: string) => path.join(libraryRoot, ".anicli-staging", id);
 
 /** Free bytes a normal process can write (respects reserved blocks). Fail-closed on error. */
@@ -948,6 +967,12 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(prefix[0]!, [...prefix.slice(1), cmd, ...args], {
+        // detached makes the child a process-group leader, so a kill with a
+        // negative pid reaches the WHOLE tree (nice → ionice → ani-cli →
+        // yt-dlp), not just the top wrapper. ani-cli spawns yt-dlp as its own
+        // child; killing only the wrapper would leave yt-dlp writing to
+        // staging forever — the exact disk-wear this guards against.
+        detached: true,
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
@@ -958,15 +983,21 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
         },
       });
       trackPid(child.pid!);
+      trackAnicliGroup(child.pid!);
       let killed = false;
+      let cancelled = false;
       let poll: ReturnType<typeof setInterval> | undefined;
       let last = 0;
 
       const doKill = () => {
         killed = true;
         try {
-          child.kill("SIGKILL");
-        } catch {}
+          process.kill(-child.pid!, "SIGKILL"); // negative pid = whole group
+        } catch {
+          try {
+            child.kill("SIGKILL");
+          } catch {}
+        }
       };
       const timer = setTimeout(() => {
         doKill();
@@ -980,18 +1011,34 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       child.on("error", (e) => {
         clearTimeout(timer);
         if (poll) clearInterval(poll);
+        untrackPid(child.pid!);
+        untrackAnicliGroup(child.pid!);
         reject(e);
       });
       child.on("exit", (code) => {
         clearTimeout(timer);
         if (poll) clearInterval(poll);
         untrackPid(child.pid!);
-        if (killed) return; // a guard (timeout/bytes/disk) already rejected
+        untrackAnicliGroup(child.pid!);
+        if (killed) return; // a guard (timeout/bytes/disk/cancel) already rejected
         if (code === 0) resolve();
         else reject(new Error(`${cmd} exited ${code}`));
       });
 
       poll = setInterval(async () => {
+        // Cancel re-check: a user may DELETE this download mid-flight. If so,
+        // kill the tree and bail — never let a cancelled download import.
+        if (!cancelled) {
+          const cur = await db.anicliDownload
+            .findUnique({ where: { id: rec.id }, select: { status: true } })
+            .catch(() => null);
+          if (cur?.status === "CANCELLED") {
+            cancelled = true;
+            doKill();
+            reject(new Error("cancelled"));
+            return;
+          }
+        }
         const size = await anicliWalkSize(staging);
         if (size.bytes !== last) {
           last = size.bytes;
@@ -1013,24 +1060,43 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       }, 10_000);
     });
 
-    // Import: same-filesystem move, never clobber existing files.
+    // Import: same-filesystem move, never clobber existing files. A failed
+    // rename must NOT silently drop the file — leave it in staging (cleanup
+    // below only removes files that actually moved) so nothing is lost.
     await db.anicliDownload.update({ where: { id: rec.id }, data: { status: "IMPORTING" } });
     const size = await anicliWalkSize(staging);
     await mkdir(finalDir, { recursive: true });
     const entries = await readdir(staging).catch(() => []);
+    const moved: string[] = [];
     for (const e of entries) {
       const src = path.join(staging, e);
       const dst = path.join(finalDir, e);
       if (existsSync(dst)) continue; // never overwrite an existing file
-      await rename(src, dst).catch(() => {});
+      try {
+        await rename(src, dst);
+        moved.push(src);
+      } catch {
+        // keep the file in staging — a later move/retry or manual recovery
+      }
     }
-    await cleanup();
+    // Remove only what actually moved; anything still in staging (failed
+    // rename) stays put rather than being deleted.
+    for (const src of moved) {
+      await rm(src, { force: true }).catch(() => {});
+    }
     await db.anicliDownload.update({
       where: { id: rec.id },
       data: { status: "DONE", progress: { bytes: size.bytes, files: size.files, percent: null }, bytesWritten: BigInt(size.bytes) },
     });
     await enqueueScan(rec.libraryId, "light").catch(() => {});
   } catch (err) {
+    // A cancelled download must stay CANCELLED (the user's intent), not be
+    // re-labeled FAILED; everything else is a genuine failure.
+    const cur = await db.anicliDownload.findUnique({ where: { id: rec.id }, select: { status: true } }).catch(() => null);
+    if (cur?.status === "CANCELLED") {
+      await cleanup();
+      return;
+    }
     await markFailed(err);
   }
 }
@@ -1371,6 +1437,7 @@ async function shutdown(signal: string): Promise<void> {
   ]);
 
   killTrackedChildren("SIGKILL");
+  killAnicliGroups();
 
   await Promise.all([
     scanQueue.close(),

@@ -236,13 +236,27 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
       args.push(...(usingHwEncoder ? hwEncodeInitArgs(input.hwaccel) : []), ...hwDecodeArgs(input.hwaccel));
     }
   }
+  // Fast input-side seek: placing -ss BEFORE -i jumps the demuxer straight to
+  // the nearest keyframe at or before (startSeconds - SEEK_FAST_BUFFER_SECONDS)
+  // with no decoding. Without this, a deep seek (e.g. minute 20 of a 24-minute
+  // episode) has only the accurate post--i seek below to rely on, which
+  // decodes and discards every frame from the start of the file up to the
+  // target — a restart-transcode seek's latency scales with the target
+  // timestamp itself, independent of encoder speed (hardware or not). The
+  // buffer covers typical GOP sizes so the accurate seek after -i still lands
+  // frame-exact; ffmpeg treats that second -ss as relative to wherever the
+  // fast seek landed, not absolute, so the two combine to the same target.
+  const SEEK_FAST_BUFFER_SECONDS = 30;
+  const fastSeekSeconds = Math.max(0, startSeconds - SEEK_FAST_BUFFER_SECONDS);
+  if (fastSeekSeconds > 0) args.push("-ss", String(fastSeekSeconds));
   args.push("-i", input.inputPath);
   // Accurate seek. A 100ms trim on a fresh start (seekMs absent → segment
   // grid ~0) drops the source pre-roll (leading keyframe lands ~1.4s in
   // while audio starts at 0) without the garbage frames reaching the player;
   // every seeked start lands on the exact target instead.
-  if (startSeconds <= 0.1) args.push("-ss", "0.1");
-  else args.push("-ss", String(startSeconds));
+  const accurateSeekSeconds = startSeconds - fastSeekSeconds;
+  if (accurateSeekSeconds <= 0.1) args.push("-ss", "0.1");
+  else args.push("-ss", String(accurateSeekSeconds));
 
   const videoFilters: string[] = [];
   if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);

@@ -34,9 +34,30 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance){
     // disk guard
     const free = await hasFreeSpace(lib.rootPath);
     if(!free) return reply.code(507).send({ error:"insufficient disk space — free up at least 2 GiB"});
-    // rate limit: max 3 active per account
-    const active = await db.anicliDownload.count({ where:{ accountId: req.accountId!, status:{ in:["QUEUED","SEARCHING","DOWNLOADING","IMPORTING"]}}});
-    if(active >= 3) return reply.code(429).send({ error:"too many active downloads (max 3)"});
+    // per-server global cap (5) + per-account (3) — prevents IP ban
+    const [active, global] = await Promise.all([
+      db.anicliDownload.count({ where:{ accountId: req.accountId!, status:{ in:["QUEUED","SEARCHING","DOWNLOADING","IMPORTING"]}}}),
+      db.anicliDownload.count({ where:{ status:{ in:["QUEUED","SEARCHING","DOWNLOADING","IMPORTING"]}}}),
+    ]);
+    if(active >= 3) return reply.code(429).send({ error:"too many active downloads (max 3 per account)"});
+    if(global >= 5) return reply.code(429).send({ error:"server busy — max 5 concurrent anicli downloads"});
+    // dedup: block if show already exists (any format, manual or downloader), but allow new seasons
+    const norm = (s:string)=> s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    const qNorm = norm(body.query);
+    const qSeason = /s(?:eason)?\s*(\d+)/i.exec(body.query)?.[1] ? Number(/s(?:eason)?\s*(\d+)/i.exec(body.query)![1]) : null;
+    // check Titles + MediaItem.title normalized
+    const existing = await db.mediaItem.findMany({ where:{ libraryId: body.libraryId }, select:{ title:true, seasonNumber:true, titles:{select:{value:true}}, files:{select:{id:true}} }});
+    for(const it of existing){
+      const names = [it.title, ...it.titles.map(t=>t.value)].map(norm);
+      if(names.includes(qNorm) && it.files.length>0){
+        // if query specifies higher season than existing max, allow
+        if(qSeason !== null){
+          const maxSeason = Math.max(0, ...existing.filter(e=> names.some(n=> [norm(e.title), ...e.titles.map(t=>norm(t.value))].includes(n))).map(e=> e.seasonNumber ?? 1));
+          if(qSeason > maxSeason) continue;
+        }
+        return reply.code(409).send({ error:"show already exists on server — new seasons allowed (e.g. 'Frieren S2')"});
+      }
+    }
     // episode range guard
     if(body.episodeRange && !/^\d+(-\d+)?$/.test(body.episodeRange)) return reply.code(422).send({ error:"episodeRange must be like 1-12 or 5"});
     if(body.episodeRange){
@@ -49,6 +70,16 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance){
       await db.anicliDownload.update({ where:{ id: job.id }, data:{ status:"FAILED", error: String(e)}});
     });
     return reply.code(201).send(job);
+  });
+
+  app.post("/anicli/search", { preHandler: app.authenticate }, async (req, reply)=>{
+    const acct = await db.account.findUnique({ where:{ id: req.accountId! }, select:{ isAdmin:true }});
+    if(!acct?.isAdmin) return reply.code(403).send({ error:"admin only"});
+    const { query } = z.object({ query: z.string().min(1).max(200) }).parse(req.body);
+    // per-server search rate limit: simple token bucket (global)
+    const recent = await db.anicliDownload.count({ where:{ createdAt:{ gte: new Date(Date.now()-60_000)}}});
+    if(recent >= 10) return reply.code(429).send({ error:"search rate limited — try again shortly"});
+    return { results: [] as string[], note:"search proxied via ani-cli in worker — UI will show picker when available" };
   });
 
   app.get("/anicli/downloads", { preHandler: app.authenticate }, async (req)=>{

@@ -814,9 +814,9 @@ const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, { conne
 async function processAnicli(job: Job<AnicliDownloadJobData>){
   const rec = await db.anicliDownload.findUnique({ where:{ id: job.data.jobId }, include:{ library:true }});
   if(!rec || rec.status==="CANCELLED") return;
-  const MIN_FREE = 2*1024*1024*1024; // keep 2 GiB free — protects drive without capping series size
-  const TIMEOUT_MS = 90*60*1000; // 90m per job — full cour can take a while at 5M rate limit
-  const MAX_BYTES = Number(process.env.HOKAGO_ANICLI_MAX_GB ?? 100) * 1024*1024*1024; // default 100 GiB, env override — disk safety via free-space gate, not hard series cap
+  const MIN_FREE = 2*1024*1024*1024;
+  const TIMEOUT_MS = 90*60*1000;
+  const MAX_BYTES = 60*1024*1024*1024; // 60GB HARD cap per session as requested
   const BW_LIMIT = process.env.HOKAGO_ANICLI_BW_LIMIT || "5M"; // bandwidth cap protects internet
   try{
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});

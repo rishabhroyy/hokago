@@ -20,6 +20,7 @@ import {
   type TrickplayJobData,
   type MetadataJobData,
   type DownloadJobData,
+  type AnicliDownloadJobData,
   type Job,
 } from "@hokago/queue";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
@@ -807,6 +808,46 @@ const downloadWorker = new Worker<DownloadJobData>(QUEUE_NAMES.DOWNLOAD, process
   connection,
   concurrency: downloadConcurrency,
 });
+
+// Ani-cli internet acquisition — NEVER retries (attempts:1), bounded timeout/disk checks
+const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, { connection, defaultJobOptions:{ attempts:1, removeOnComplete:true, removeOnFail:true }});
+async function processAnicli(job: Job<AnicliDownloadJobData>){
+  const rec = await db.anicliDownload.findUnique({ where:{ id: job.data.jobId }, include:{ library:true }});
+  if(!rec || rec.status==="CANCELLED") return;
+  const MIN_FREE = 2*1024*1024*1024;
+  const TIMEOUT_MS = 30*60*1000;
+  const MAX_BYTES = 20*1024*1024*1024; // 20 GiB cap per job
+  try{
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});
+    const dest = path.join(rec.library.rootPath, rec.query.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli");
+    await mkdir(dest,{ recursive:true });
+    // Disk guard before start
+    try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 2 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
+    const { spawn } = await import("node:child_process");
+    // Use ani-cli if available, else yt-dlp fallback — both capped with timeout and max bytes
+    const cmd = existsSync("/usr/local/bin/ani-cli") ? "ani-cli" : "yt-dlp";
+    const args = cmd==="ani-cli" ? ["--download", rec.query, "--output", dest] : ["--no-playlist", "-o", path.join(dest,"%(title)s.%(ext)s"), rec.query];
+    await new Promise<void>((resolve, reject)=>{
+      const child = spawn(cmd, args, { timeout: TIMEOUT_MS, killSignal:"SIGKILL" });
+      trackPid(child.pid!); let bytes=0;
+      const timer = setTimeout(()=>{ try{ child.kill("SIGKILL"); }catch{}; reject(new Error("timeout — ani-cli hung, killed after 30m")); }, TIMEOUT_MS);
+      child.on("error", (e)=>{ clearTimeout(timer); reject(e); });
+      child.on("exit", (code)=>{ clearTimeout(timer); untrackPid(child.pid!); if(code===0) resolve(); else reject(new Error(`${cmd} exited ${code}`)); });
+      // byte cap via polling dest size every 5s
+      const poll = setInterval(async()=>{ try{ const st = await import("node:fs/promises").then(async m=>{
+        let tot=0; const walk=async(d:string)=>{ const es=await m.readdir(d,{withFileTypes:true}); for(const e of es){ const p=path.join(d,e.name); if(e.isDirectory()) await walk(p); else { const s=await m.stat(p); tot+=s.size; }} };
+        await walk(dest); return tot;
+      }); if(st>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("size cap exceeded — killed to protect disk (20 GiB)")); } }catch{} }, 5000);
+      child.on("exit", ()=> clearInterval(poll));
+    });
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"IMPORTING"}});
+    await enqueueScan(rec.libraryId, "light");
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DONE"}});
+  }catch(err){
+    await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"FAILED", error: String(err).slice(0,1000)}}).catch(()=>{});
+  }
+}
+const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, processAnicli, { connection, concurrency:1 });
 
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.

@@ -820,8 +820,9 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
   const BW_LIMIT = process.env.HOKAGO_ANICLI_BW_LIMIT || "5M"; // bandwidth cap protects internet
   try{
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});
-    const dest = path.join(rec.library.rootPath, rec.query.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli");
-    await mkdir(dest,{ recursive:true });
+    const staging = path.join(configDir(), "staging/anicli", rec.id);
+    await mkdir(staging,{ recursive:true });
+    const dest = staging;
     try{ const s = await import("node:fs/promises").then(m=>m.statfs(dest)); if(Number(s.bfree)*Number(s.bsize) < MIN_FREE) throw new Error("disk full — need 5 GiB free"); }catch(e){ if(String(e).includes("disk full")) throw e; }
     const { spawn } = await import("node:child_process");
     const cmd = existsSync("/usr/local/bin/ani-cli") ? "ani-cli" : "yt-dlp";
@@ -843,6 +844,13 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
         const s2=await m.statfs(dest); if(Number(s2.bfree)*Number(s2.bsize) < 512*1024*1024){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("disk critically low (<512 MiB) — killed")); }
       }catch{} }, 3000);
       child.on("exit", ()=> clearInterval(poll));
+    });
+    // atomic move to library (scanner layout: Show folder)
+    const finalDest = path.join(rec.library.rootPath, rec.query.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli");
+    await mkdir(path.dirname(finalDest),{ recursive:true });
+    await rename(staging, finalDest).catch(async()=>{ // cross-device fallback
+      const { cp, rm } = await import("node:fs/promises");
+      await cp(staging, finalDest, { recursive:true }); await rm(staging,{ recursive:true, force:true });
     });
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"IMPORTING"}});
     await enqueueScan(rec.libraryId, "light");

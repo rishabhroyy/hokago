@@ -115,12 +115,14 @@ export function DownloadsView() {
 
   return (
     <div className="mx-auto min-h-screen max-w-[900px] px-6 pb-24 pt-28">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+       <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-title font-bold">Downloads</h1>
-        <button className="btn btn-ghost" onClick={() => navigate(paths.offline())}>
-          <Icon name="wifi-off" className="h-4 w-4" />
-          Offline library
-        </button>
+        <div className="flex gap-2">
+          <button className="btn btn-ghost" onClick={() => navigate(paths.anicli())}>Acquire (ani-cli)</button>
+          <button className="btn btn-ghost" onClick={() => navigate(paths.offline())}>
+            <Icon name="wifi-off" className="h-4 w-4" /> Offline library
+          </button>
+        </div>
       </div>
       {error && (
         <p className="mb-5 rounded-2xl bg-accent/10 px-4 py-2.5 text-small font-semibold text-accent">{error}</p>

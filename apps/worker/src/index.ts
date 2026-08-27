@@ -848,13 +848,17 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
       }catch{} }, 3000);
       child.on("exit", ()=> clearInterval(poll));
     });
-    // atomic move to library (scanner layout: Show folder)
-    const finalDest = path.join(rec.library.rootPath, rec.query.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli");
+    // scanner-aware layout: Show folder + Season subfolder if season detected (so anitomy/scene parsers group correctly)
+    const seasonMatch = /s(?:eason)?\s*(\d+)/i.exec(rec.query);
+    const seasonNum = seasonMatch ? Number(seasonMatch[1]) : null;
+    const showName = rec.query.replace(/\s*s(?:eason)?\s*\d+.*$/i,"").replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,80) || "anicli";
+    const finalDest = seasonNum ? path.join(rec.library.rootPath, showName, `Season ${seasonNum}`) : path.join(rec.library.rootPath, showName);
     await mkdir(path.dirname(finalDest),{ recursive:true });
-    await rename(staging, finalDest).catch(async()=>{ // cross-device fallback
-      const { cp, rm } = await import("node:fs/promises");
-      await cp(staging, finalDest, { recursive:true }); await rm(staging,{ recursive:true, force:true });
-    });
+    // merge staging into final (don't overwrite existing season folder)
+    await mkdir(finalDest,{ recursive:true });
+    const { cp, rm, readdir } = await import("node:fs/promises");
+    for(const e of await readdir(staging)) await cp(path.join(staging,e), path.join(finalDest,e), { recursive:true });
+    await rm(staging,{ recursive:true, force:true }).catch(()=>{});
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"IMPORTING"}});
     await enqueueScan(rec.libraryId, "light");
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DONE"}});

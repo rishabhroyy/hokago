@@ -814,9 +814,9 @@ const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, { conne
 async function processAnicli(job: Job<AnicliDownloadJobData>){
   const rec = await db.anicliDownload.findUnique({ where:{ id: job.data.jobId }, include:{ library:true }});
   if(!rec || rec.status==="CANCELLED") return;
-  const MIN_FREE = 5*1024*1024*1024; // 5 GiB — extra safe
-  const TIMEOUT_MS = 20*60*1000; // 20m max per title
-  const MAX_BYTES = 10*1024*1024*1024; // 10 GiB cap per job — protects hard drive
+  const MIN_FREE = 2*1024*1024*1024; // keep 2 GiB free — protects drive without capping series size
+  const TIMEOUT_MS = 90*60*1000; // 90m per job — full cour can take a while at 5M rate limit
+  const MAX_BYTES = Number(process.env.HOKAGO_ANICLI_MAX_GB ?? 100) * 1024*1024*1024; // default 100 GiB, env override — disk safety via free-space gate, not hard series cap
   const BW_LIMIT = process.env.HOKAGO_ANICLI_BW_LIMIT || "5M"; // bandwidth cap protects internet
   try{
     await db.anicliDownload.update({ where:{ id: rec.id }, data:{ status:"DOWNLOADING"}});
@@ -839,7 +839,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
         let tot=0; const m=await import("node:fs/promises");
         const walk=async(d:string)=>{ const es=await m.readdir(d,{withFileTypes:true}); for(const e of es){ const p=path.join(d,e.name); if(e.isDirectory()) await walk(p); else { const s=await m.stat(p); tot+=s.size; }}};
         await walk(dest);
-        if(tot>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("size cap 10 GiB exceeded — killed to protect disk")); }
+        if(tot>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error(`size cap ${Math.round(MAX_BYTES/1024/1024/1024)} GiB exceeded — set HOKAGO_ANICLI_MAX_GB higher if needed`)); }
         const s2=await m.statfs(dest); if(Number(s2.bfree)*Number(s2.bsize) < 512*1024*1024){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("disk critically low (<512 MiB) — killed")); }
       }catch{} }, 3000);
       child.on("exit", ()=> clearInterval(poll));

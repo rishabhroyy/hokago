@@ -840,7 +840,10 @@ async function processAnicli(job: Job<AnicliDownloadJobData>){
         let tot=0; const m=await import("node:fs/promises");
         const walk=async(d:string)=>{ const es=await m.readdir(d,{withFileTypes:true}); for(const e of es){ const p=path.join(d,e.name); if(e.isDirectory()) await walk(p); else { const s=await m.stat(p); tot+=s.size; }}};
         await walk(dest);
-        if(tot>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error(`size cap ${Math.round(MAX_BYTES/1024/1024/1024)} GiB exceeded — set HOKAGO_ANICLI_MAX_GB higher if needed`)); }
+        // per-episode progress: count files + bytes
+        const fileCount = (await m.readdir(dest).catch(()=>[])).length;
+        await db.anicliDownload.update({ where:{ id: rec.id }, data:{ progress:{ bytes: tot, files: fileCount }, bytesWritten: BigInt(tot) }}).catch(()=>{});
+        if(tot>MAX_BYTES){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error(`60GB HARD cap exceeded — killed`)); }
         const s2=await m.statfs(dest); if(Number(s2.bfree)*Number(s2.bsize) < 512*1024*1024){ clearInterval(poll); try{ child.kill("SIGKILL"); }catch{}; reject(new Error("disk critically low (<512 MiB) — killed")); }
       }catch{} }, 3000);
       child.on("exit", ()=> clearInterval(poll));
@@ -1007,6 +1010,11 @@ async function reconcile(): Promise<void> {
       durationMs: row.mediaFile.durationMs,
     });
   }
+
+  // Anicli orphan: QUEUED rows with no BullMQ job (crash/upgrade) — re-enqueue
+  const orphanAnicli = await db.anicliDownload.findMany({ where:{ status:"QUEUED" }, select:{ id:true }});
+  for(const r of orphanAnicli) await anicliQueue.add(QUEUE_NAMES.ANICLI, { jobId: r.id }, { jobId: `anicli-${r.id}` }).catch(()=>{});
+  if(orphanAnicli.length) console.log(`reconciler: re-enqueued ${orphanAnicli.length} orphan anicli job(s)`);
 
   // A MOVIE/SERIES missing an ExternalId for every provider in its own
   // chain has never been successfully resolved (or its match was lost) —

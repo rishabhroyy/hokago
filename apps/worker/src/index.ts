@@ -976,7 +976,15 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
     const args = aniCliBin
       ? (() => {
           const a: string[] = ["-d", "-S", "1", "-q", "best"];
-          if (rec.episodeRange) a.push("-r", rec.episodeRange);
+          // ani-cli has no "every episode" flag — omitting -r entirely leaves
+          // its own ep_no unset, which falls through to an interactive fzf
+          // episode picker. With no tty (stdin is "ignore" above) fzf can't
+          // open one and dies with "inappropriate ioctl for device" /
+          // "Invalid episode selection". "1--1" is ani-cli's own range
+          // sentinel (verified against the pinned commit's play() parsing):
+          // "-1" resolves to the last episode ani-cli finds for the title, so
+          // this is the actual "download the whole series" spelling.
+          a.push("-r", rec.episodeRange || "1--1");
           if (rec.dub) a.push("--dub");
           a.push(rec.query);
           return a;

@@ -374,8 +374,9 @@ async function ingestLeafItem(
   kind: "MOVIE" | "EPISODE",
   parentId: string | null,
   seasonNumber: number | null,
-  deferArtwork: boolean,
-  deferTrickplay: boolean,
+  artworkAvailable: boolean,
+  trickplayAvailable: boolean,
+  lightweight: boolean,
   profile: ContentProfile,
 ): Promise<LeafResult> {
   const { file, dir, probe, stored, preservedEmbeddedTag } = ctx;
@@ -656,7 +657,17 @@ async function ingestLeafItem(
  // Job infra : artwork resolution shells out to ffmpeg and is the
   // crash/CPU-heavy risk, so it's split into its own queue with its own
   // concurrency limit and poison-pill handling. Direct/offline invocation
-  // (scripts/scan.ts, no deferArtwork) keeps resolving it inline, unchanged.
+  // (scripts/scan.ts, no callbacks) keeps resolving it inline, unchanged.
+  // A light scan still defers for a brand-new file so a fresh import —
+  // anicli download or otherwise — comes in fully onboarded; it only skips
+  // re-deriving artwork/trickplay for a file already on record. Uses
+  // `existingFile`, not the raw `stored` param: a renamed/moved file that
+  // the twin-steal above matched by content hash already has artwork tied
+  // to its (shared) mediaItemId and isn't "new" just because this exact path
+  // is.
+  const isNewFile = existingFile === null;
+  const deferArtwork = artworkAvailable && (!lightweight || isNewFile);
+  const deferTrickplay = trickplayAvailable && (!lightweight || isNewFile);
   if (deferArtwork) {
     return {
       mediaItemId,
@@ -714,8 +725,13 @@ export async function ingestLibrary(
   const lightweight = !!opts.lightweight;
   const files = await walkVideoFiles(rootPath);
   const byDir = groupByDirectory(files);
-  const deferArtwork = !lightweight && opts.onArtworkNeeded !== undefined;
-  const deferTrickplay = !lightweight && opts.onTrickplayNeeded !== undefined;
+  // Availability, not the defer decision itself — a light scan still defers
+  // (queues) artwork/trickplay for a brand-new file so a fresh import comes
+  // in fully onboarded; it only skips re-deriving these for a file already
+  // on record. ingestLeafItem makes the per-file new-vs-existing call since
+  // it already resolves `stored` for the rescan gate.
+  const artworkAvailable = opts.onArtworkNeeded !== undefined;
+  const trickplayAvailable = opts.onTrickplayNeeded !== undefined;
 
   // One bulk fetch of every stored file in the library — the per-file lookup
   // ingest used to do (path first, inode fallback) and the rescan gate. The
@@ -924,8 +940,9 @@ export async function ingestLibrary(
             "MOVIE",
             series.id,
             null,
-            deferArtwork,
-            deferTrickplay,
+            artworkAvailable,
+            trickplayAvailable,
+            lightweight,
             profile,
           );
           if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
@@ -955,8 +972,9 @@ export async function ingestLibrary(
           "MOVIE",
           null,
           null,
-          deferArtwork,
-          deferTrickplay,
+          artworkAvailable,
+          trickplayAvailable,
+          lightweight,
           profile,
         );
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);
@@ -1056,9 +1074,9 @@ export async function ingestLibrary(
         // standalone movie. Only files in a *flat* (non-season) directory
         // with no anchoring show are ever root-level movies; a movie inside a
         // show folder is part of that show, full stop.
-        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", series.id, null, deferArtwork, deferTrickplay, profile);
+        result = await ingestLeafItem(db, libraryId, ctx, "MOVIE", series.id, null, artworkAvailable, trickplayAvailable, lightweight, profile);
       } else if (isMain) {
-        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", seasonId, seasonNumber, deferArtwork, deferTrickplay, profile);
+        result = await ingestLeafItem(db, libraryId, ctx, "EPISODE", seasonId, seasonNumber, artworkAvailable, trickplayAvailable, lightweight, profile);
       }
       if (result) {
         if (result.needsArtwork) await opts.onArtworkNeeded?.(result.needsArtwork);

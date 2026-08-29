@@ -150,6 +150,7 @@ export class AniListProvider implements MetadataProvider {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify({ query: ID_QUERY, variables: { id: Number(options.existingProviderId) } }),
+        signal: options?.signal,
       });
       // A gone/never-existing id is a deterministic miss (AniList answers 404
       // with data.Media null), not an infrastructure failure — no match, move on.
@@ -167,6 +168,7 @@ export class AniListProvider implements MetadataProvider {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ query: SEARCH_QUERY, variables: { search: query.title } }),
+      signal: options?.signal,
     });
     if (!res.ok) throw new Error(`AniList search failed: ${res.status} ${res.statusText}`);
 

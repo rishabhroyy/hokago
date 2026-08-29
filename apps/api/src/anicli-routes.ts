@@ -77,18 +77,18 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
       const query: MetadataQuery = { title: req.body.query, kind: "SERIES" };
       let candidates: { title: string; year: number | null; posterUrl: string | null }[] = [];
       try {
-        const { matches } = (await Promise.race([
-          anilist.search(query),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("search timed out")), SEARCH_TIMEOUT_MS)),
-        ])) as Awaited<ReturnType<AniListProvider["search"]>>;
+        // AbortSignal.timeout both bounds the call AND aborts the underlying
+        // fetch — a plain Promise.race would reject on timeout but leave the
+        // AniList request running, holding a connection until it hung/returned.
+        const { matches } = await anilist.search(query, { signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) });
         candidates = matches.map((m) => ({
           title: m.title,
           year: m.year ?? null,
           posterUrl: m.artwork?.find((a) => a.kind === "POSTER")?.url ?? m.artwork?.[0]?.url ?? null,
         }));
       } catch {
-        // provider down/blocked — return what we have (possibly empty); the
-        // worker still attempts the exact title via ani-cli on submit.
+        // provider down/blocked/timed out — return what we have (possibly
+        // empty); the worker still attempts the exact title via ani-cli on submit.
       }
       return { candidates };
     },

@@ -234,7 +234,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/node.tar.xz \
     # yt-dlp (pinned) + ani-cli (pinned commit) for the worker's internet
     # acquisition. A pinned build fails loudly if the source ever moves.
-    && python3 -m pip install --no-cache-dir "yt-dlp==2026.8.19" \
+    # --break-system-packages: Ubuntu noble's python3-pip refuses installs
+    # into the system interpreter (PEP 668). Safe here — this image has one
+    # Python consumer (ani-cli) and no other pip-managed packages to conflict.
+    && python3 -m pip install --no-cache-dir --break-system-packages "yt-dlp==2026.8.19" \
     && curl -fsSL -o /usr/local/bin/ani-cli \
          "https://raw.githubusercontent.com/pystardust/ani-cli/92e9d796d23aef3ae94b52852f9c992e2bce4fe3/ani-cli" \
     && chmod +x /usr/local/bin/ani-cli \

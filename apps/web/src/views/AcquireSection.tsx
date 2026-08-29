@@ -66,7 +66,7 @@ function Postertile({ candidate, onPick, picked }: { candidate: AnicliSearchCand
           </span>
         )}
       </div>
-      <div className="flex min-h-[44px] items-start gap-1.5 bg-card px-3 py-2.5">
+      <div className="flex min-h-[44px] flex-1 items-start gap-1.5 bg-card px-3 py-2.5">
         <span className="line-clamp-2 text-meta font-bold leading-tight text-ink">{candidate.title}</span>
         {picked && <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-wii-deep" />}
       </div>
@@ -160,11 +160,11 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   const canSearch = useMemo(() => query.trim().length > 0 && !searching, [query, searching]);
   const canSubmit = useMemo(() => lib && query.trim().length > 0, [lib, query]);
 
-  const chipCls = (active: boolean) =>
-    `rounded-full px-4 py-2 text-meta font-bold transition-all duration-150 ease-snap active:scale-95 ${
+  const audioSeg = (active: boolean) =>
+    `flex h-full items-center rounded-full px-4 text-meta font-bold transition-all duration-150 ease-snap active:scale-95 ${
       active
-        ? "wii-btn text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.45),0_3px_10px_-3px_rgba(46,155,196,0.6)]"
-        : "bg-paper text-ink-2 ring-1 ring-line hover:text-wii-deep hover:ring-wii/60"
+        ? "bg-card text-wii-deep shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_6px_-2px_rgba(120,80,60,0.25)] ring-1 ring-line"
+        : "text-ink-2 hover:text-wii-deep"
     }`;
 
   return (
@@ -175,26 +175,13 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
       </div>
 
       <div className="flex flex-wrap items-center gap-2.5">
-        <select
-          className="h-12 rounded-full border-[1.5px] border-line bg-paper px-4 font-mono text-kicker font-bold uppercase tracking-[0.1em] text-ink outline-none transition-shadow duration-200 ease-smooth focus:border-wii focus:shadow-[0_0_0_3.5px_rgba(79,184,224,0.28)]"
-          value={lib}
-          onChange={(e) => setLib(e.target.value)}
-        >
-          <option value="">anime library…</option>
-          {libs.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-            </option>
-          ))}
-        </select>
-
-        <div className="relative min-w-[220px] flex-1">
+        <div className="relative min-w-[240px] flex-1">
           <Icon name="search" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-3" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="title, e.g. Frieren S2"
+            placeholder="Search for an anime, e.g. Frieren S2"
             className="h-12 w-full rounded-full border-[1.5px] border-line bg-paper pl-11 pr-11 text-[14px] font-semibold text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:text-ink-3 focus:border-wii focus:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_0_0_3.5px_rgba(79,184,224,0.28)]"
           />
           {query && (
@@ -208,31 +195,60 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
             </button>
           )}
         </div>
-
         <button className="btn btn-primary" onClick={() => void search()} disabled={!canSearch}>
           <Icon name="search" className="h-4 w-4" />
           {searching ? "searching…" : "Search"}
         </button>
-        <button className="btn btn-ghost" onClick={() => void submit()} disabled={!canSubmit}>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-end gap-x-6 gap-y-3 rounded-[20px] bg-paper/50 px-4 py-3 ring-1 ring-line">
+        <label className="flex min-w-[180px] flex-1 flex-col gap-1.5">
+          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">save into library</span>
+          <select
+            className="h-11 w-full rounded-full border-[1.5px] border-line bg-card px-4 font-mono text-kicker font-bold uppercase tracking-[0.1em] text-ink outline-none transition-shadow duration-200 ease-smooth focus:border-wii focus:shadow-[0_0_0_3.5px_rgba(79,184,224,0.28)]"
+            value={lib}
+            onChange={(e) => setLib(e.target.value)}
+          >
+            <option value="">choose a library…</option>
+            {libs.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex flex-col gap-1.5">
+          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">audio</span>
+          <div className="flex h-11 items-center rounded-full bg-paper p-1 ring-1 ring-line">
+            <button type="button" className={audioSeg(!dub)} onClick={() => { s.select(); setDub(false); }}>
+              subtitled
+            </button>
+            <button type="button" className={audioSeg(dub)} onClick={() => { s.select(); setDub(true); }}>
+              dubbed
+            </button>
+          </div>
+        </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">episodes</span>
+          <input
+            className="h-11 w-[120px] rounded-full border-[1.5px] border-line bg-card px-4 font-mono text-kicker font-bold uppercase tracking-[0.08em] text-ink outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:tracking-[0.08em] placeholder:text-ink-3 focus:border-wii focus:shadow-[0_0_0_3.5px_rgba(79,184,224,0.28)]"
+            value={range}
+            onChange={(e) => setRange(e.target.value)}
+            placeholder="all"
+            title="e.g. 1-12 or 5 — leave blank for every episode"
+          />
+        </label>
+
+        <button className="btn btn-primary ml-auto" onClick={() => void submit()} disabled={!canSubmit}>
           <Icon name="cloudsun" className="h-4 w-4" />
           Download
         </button>
       </div>
 
-      <div className="mt-3.5 flex flex-wrap items-center gap-2.5 pl-1">
-        <input
-          className="h-11 w-[132px] rounded-full border-[1.5px] border-line bg-paper px-4 font-mono text-kicker font-bold uppercase tracking-[0.08em] text-ink outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:tracking-[0.08em] placeholder:text-ink-3 focus:border-wii focus:shadow-[0_0_0_3.5px_rgba(79,184,224,0.28)]"
-          value={range}
-          onChange={(e) => setRange(e.target.value)}
-          placeholder="episodes"
-          title="e.g. 1-12 or 5 (blank = all)"
-        />
-        <button className={chipCls(dub)} onClick={() => { s.select(); setDub(!dub); }}>
-          dub
-        </button>
-        <span className="ml-auto font-mono text-kicker font-medium uppercase tracking-[0.1em] text-ink-3">
-          no auto-retry · stages then imports · never overwrites
-        </span>
+      <div className="mt-3 pl-1 font-mono text-kicker font-medium uppercase tracking-[0.1em] text-ink-3">
+        no auto-retry · stages then imports · never overwrites
       </div>
 
       {results.length > 0 && (

@@ -453,6 +453,9 @@ model AnicliDownload {
   progress     Json?
   bytesWritten BigInt       @default(0)
   error        String?
+  /// Detached downloader process-group leader pid, so a hard worker crash can
+  /// be reconciled (kill the orphan) at next boot. Cleared on clean exit.
+  pid          Int?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 

@@ -855,6 +855,28 @@ function killAnicliGroups(): void {
   }
 }
 
+// Kill an anicli downloader process group after a worker crash, but only if the
+// recorded pid is STILL the downloader. A pid is a resource that can be reused
+// after a crash; blindly `process.kill(-pid)` on a later boot could kill an
+// unrelated process group. Verify the process cmdline references the downloader
+// before touching it. Linux /proc; non-Linux dev hosts skip the check (still
+// safe — the group kill only fires when the row says it was mid-download).
+async function killOrphanAnicli(pid: number): Promise<void> {
+  if (process.platform === "linux") {
+    try {
+      const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
+      if (!/ani-cli|yt-dlp|ffmpeg/i.test(cmdline)) return; // pid reused by something else
+    } catch {
+      return; // no such process — nothing to kill
+    }
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+}
+
 const anicliStagingDir = (libraryRoot: string, id: string) => path.join(libraryRoot, ".anicli-staging", id);
 
 /** Free bytes a normal process can write (respects reserved blocks). Fail-closed on error. */
@@ -984,6 +1006,9 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       });
       trackPid(child.pid!);
       trackAnicliGroup(child.pid!);
+      // Persist the process-group leader so a hard crash can be reconciled.
+      // (Fire-and-forget — the executor isn't async.)
+      db.anicliDownload.update({ where: { id: rec.id }, data: { pid: child.pid } }).catch(() => {});
       let killed = false;
       let cancelled = false;
       let poll: ReturnType<typeof setInterval> | undefined;
@@ -1013,6 +1038,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
         if (poll) clearInterval(poll);
         untrackPid(child.pid!);
         untrackAnicliGroup(child.pid!);
+        db.anicliDownload.update({ where: { id: rec.id }, data: { pid: null } }).catch(() => {});
         reject(e);
       });
       child.on("exit", (code) => {
@@ -1020,6 +1046,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
         if (poll) clearInterval(poll);
         untrackPid(child.pid!);
         untrackAnicliGroup(child.pid!);
+        db.anicliDownload.update({ where: { id: rec.id }, data: { pid: null } }).catch(() => {});
         if (killed) return; // a guard (timeout/bytes/disk/cancel) already rejected
         if (code === 0) resolve();
         else reject(new Error(`${cmd} exited ${code}`));
@@ -1267,7 +1294,7 @@ async function reconcile(): Promise<void> {
   // partial files never accumulate and wear the disk.
   const anicliJobs = await db.anicliDownload.findMany({
     where: { status: { in: ["QUEUED", "SEARCHING", "DOWNLOADING", "IMPORTING"] } },
-    select: { id: true, status: true, libraryId: true },
+    select: { id: true, status: true, libraryId: true, pid: true },
   });
   let anicliReenqueued = 0;
   let anicliFailed = 0;
@@ -1278,10 +1305,16 @@ async function reconcile(): Promise<void> {
       activeAnicli.add(a.id);
       anicliReenqueued += 1;
     } else {
+      // A crashed mid-flight download: kill any orphaned downloader process
+      // group (the worker that owned it died, so its in-process timeout is
+      // gone — without this, a detached yt-dlp with --fragment-retries
+      // infinite can keep writing to staging forever). killOrphanAnicli
+      // verifies the pid is still the downloader before the group kill.
+      if (a.pid != null) await killOrphanAnicli(a.pid);
       await db.anicliDownload
         .update({
           where: { id: a.id },
-          data: { status: "FAILED", error: "worker restarted mid-download — resubmit to retry" },
+          data: { status: "FAILED", error: "worker restarted mid-download — resubmit to retry", pid: null },
         })
         .catch(() => {});
       await enqueueScan(a.libraryId, "light").catch(() => {});

@@ -766,7 +766,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         positionMs: startMs,
       },
     });
-    await broadcastPresence();
+    void broadcastPresence();
 
     if (decision.method === "DIRECT_PLAY") {
       // No ffmpeg involved — the client seeks itself using resumePositionMs.

@@ -206,10 +206,15 @@ export function patchRemuxMehd(filePath: string, durationMs: number, startMs: nu
 const CLUSTER_ID = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 
 const PROBE_MAX_BUFFER = 16 * 1024 * 1024;
+// Both callers (probeHeaderEnd, probeKeyframeClusterStart) already catch and
+// fall back to null → legacy `-ss` remux on any probe failure, so a timeout
+// here is a free fail-fast: without it, a wedged ffprobe (slow/stalled disk
+// I/O) hangs every REMUX resume/seek/quality-switch request indefinitely.
+const PROBE_TIMEOUT_MS = 15_000;
 
 function runProbe(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("ffprobe", args, { maxBuffer: PROBE_MAX_BUFFER }, (err, stdout) =>
+    execFile("ffprobe", args, { maxBuffer: PROBE_MAX_BUFFER, timeout: PROBE_TIMEOUT_MS }, (err, stdout) =>
       err ? reject(err) : resolve(stdout),
     );
   });

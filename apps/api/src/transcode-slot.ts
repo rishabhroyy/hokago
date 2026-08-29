@@ -3,8 +3,11 @@
  *
  * One slot per active transcode session. Without a cap, N open player tabs =
  * N ffmpeg processes saturating the box — the machine-freeze bug report.
- * Default 2 (a home server is one viewer at a time, usually); tune via
- * HOKAGO_MAX_TRANSCODES. DIRECT_PLAY sessions take no slot (no ffmpeg).
+ * Default 4; tune via HOKAGO_MAX_TRANSCODES. DIRECT_PLAY sessions take no
+ * slot (no ffmpeg). Purely an API-process cap — it does not coordinate with
+ * apps/worker's own NVENC encodes (offline downloads), so a concurrent
+ * download can still contend with live playback for the GPU's own encode
+ * session limit.
  */
 
 const MAX_TRANSCODES = Math.max(1, Number(process.env.HOKAGO_MAX_TRANSCODES ?? 4));

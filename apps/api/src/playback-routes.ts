@@ -93,6 +93,10 @@ function qualityOutDir(sessionId: string, maxWidth: number, maxHeight: number): 
 // text, burned in via libass's `subtitles` filter.
 const BITMAP_SUBTITLE_FORMATS = new Set(["PGS", "VOBSUB", "DVBSUB"]);
 
+// Bounds the keyframe probe below so a wedged ffprobe (e.g. slow/stalled disk
+// I/O) can't hang /playback/start forever — falls back to the raw position.
+const KEYFRAME_PROBE_TIMEOUT_MS = 15_000;
+
 // ffmpeg's `0:a:N` addresses the Nth AUDIO-type stream, not the absolute
 // container stream index MediaStream.streamIndex stores — same conversion
 // subtitleBurnIn already does for `si=N` above.
@@ -255,7 +259,7 @@ async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<n
           `%${positionMs / 1000}`,
           path,
         ],
-        { maxBuffer: 16 * 1024 * 1024 },
+        { maxBuffer: 16 * 1024 * 1024, timeout: KEYFRAME_PROBE_TIMEOUT_MS },
         (err, stdout) => (err ? reject(err) : resolve(stdout)),
       );
     });

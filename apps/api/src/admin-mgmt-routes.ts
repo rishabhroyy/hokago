@@ -242,11 +242,9 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
     async (req, reply) => {
       const lib = await db.library.findUnique({ where: { id: req.params.id } });
       if (!lib) return reply.code(404).send({ error: "library not found" });
-      const mode = (req.query as { mode?: string })?.mode === "heavy" || (req.body as { mode?: string })?.mode === "heavy" ? "heavy" : "heavy";
       // Manual trigger is heavy by default (fixes + full I/O); callers can pass mode=light for lightweight periodic parity.
       const requested = (req.query as { mode?: string })?.mode ?? (req.body as { mode?: string })?.mode;
       await enqueueScan(lib.id, requested === "light" ? "light" : "heavy");
-      void mode;
       return { enqueued: true };
     },
   );

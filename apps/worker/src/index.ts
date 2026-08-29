@@ -1141,7 +1141,13 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       where: { id: rec.id },
       data: { status: "DONE", progress: { bytes: size.bytes, files: size.files, percent: null }, bytesWritten: BigInt(size.bytes) },
     });
-    await enqueueScan(rec.libraryId, "light").catch(() => {});
+    // Heavy, not light: these files are brand new and have never been
+    // probed. A light scan skips ffprobe/artwork/trickplay entirely (see
+    // ingestLibrary's `lightweight` flag) and marks unprobed files
+    // probeFailed — which a *later* light scan then treats as permanently
+    // poisoned and never retries. Every anicli download was landing
+    // unplayable until an admin happened to trigger a manual heavy rescan.
+    await enqueueScan(rec.libraryId, "heavy").catch(() => {});
   } catch (err) {
     // A cancelled download must stay CANCELLED (the user's intent), not be
     // re-labeled FAILED; everything else is a genuine failure.

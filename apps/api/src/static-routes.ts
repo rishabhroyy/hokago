@@ -1,5 +1,6 @@
 import { createReadStream, existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 
 import { PrismaClient } from "@hokago/db";
@@ -8,6 +9,14 @@ import { resolveConfigFilePath, configDir } from "./config.js";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 
 const db = new PrismaClient();
+const execFileAsync = promisify(execFile);
+// Bare sidecar-less tracks demux the whole file's subtitle stream — that's
+// seconds, not the minutes a full transcode takes. 30s is generous headroom;
+// past it something's actually wrong (huge/corrupt file) and blocking the
+// one requesting client is far better than the old execFileSync, which
+// blocked the entire Fastify process — every other request, health check,
+// and SIGTERM — until ffmpeg returned or hung forever.
+const SUBTITLE_EXTRACT_TIMEOUT_MS = 30_000;
 
 const CONTAINER_MIME: Record<string, string> = {
   mkv: "video/x-matroska",
@@ -294,19 +303,16 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
       if (track.streamIndex === null) return reply.code(404).send({ error: "no stream index for embedded track" });
       const mediaFile = await db.mediaFile.findUniqueOrThrow({ where: { id: req.params.id } });
       const relIndex = await subtitleRelativeIndex(req.params.id, track.streamIndex);
-      const bytes = execFileSync("ffmpeg", [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        mediaFile.path,
-        "-map",
-        `0:s:${relIndex}`,
-        "-f",
-        muxer,
-        "pipe:1",
-      ]);
-      return reply.send(bytes);
+      try {
+        const { stdout } = await execFileAsync(
+          "ffmpeg",
+          ["-hide_banner", "-loglevel", "error", "-i", mediaFile.path, "-map", `0:s:${relIndex}`, "-f", muxer, "pipe:1"],
+          { encoding: "buffer", maxBuffer: 64 * 1024 * 1024, timeout: SUBTITLE_EXTRACT_TIMEOUT_MS },
+        );
+        return reply.send(stdout);
+      } catch {
+        return reply.code(500).send({ error: "subtitle extraction failed" });
+      }
     },
   );
 }

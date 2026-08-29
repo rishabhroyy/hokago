@@ -1037,8 +1037,15 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       }, anicliTimeoutMs);
 
       // Drain stdout/stderr so a chatty downloader never blocks on a full pipe.
+      // Keep a bounded tail of stderr — on a non-zero exit it's the only clue
+      // an admin gets (previously discarded entirely, so every failure just
+      // read "ani-cli exited 1" with no way to tell why).
+      let stderrTail = "";
+      const STDERR_TAIL_MAX = 4096;
       child.stdout?.on("data", () => {});
-      child.stderr?.on("data", () => {});
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString("utf-8")).slice(-STDERR_TAIL_MAX);
+      });
 
       child.on("error", (e) => {
         clearTimeout(timer);
@@ -1060,7 +1067,7 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
         db.anicliDownload.update({ where: { id: rec.id }, data: { pid: null } }).catch(() => {});
         if (killed) return; // a guard (timeout/bytes/disk/cancel) already rejected
         if (code === 0) resolve();
-        else reject(new Error(`${cmd} exited ${code}`));
+        else reject(new Error(`${cmd} exited ${code}${stderrTail.trim() ? `: ${stderrTail.trim()}` : ""}`));
       });
 
       poll = setInterval(async () => {

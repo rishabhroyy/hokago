@@ -1004,11 +1004,17 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
           NVIDIA_VISIBLE_DEVICES: "",
         },
       });
-      trackPid(child.pid!);
-      trackAnicliGroup(child.pid!);
-      // Persist the process-group leader so a hard crash can be reconciled.
-      // (Fire-and-forget — the executor isn't async.)
-      db.anicliDownload.update({ where: { id: rec.id }, data: { pid: child.pid } }).catch(() => {});
+      // Guard: on a spawn error child.pid is undefined. Only track/persist when
+      // a real pid exists; undefined would pollute the group set and hit the
+      // DB with a no-op.
+      const pid = child.pid ?? null;
+      if (pid !== null) {
+        trackPid(pid);
+        trackAnicliGroup(pid);
+        // Persist the process-group leader so a hard crash can be reconciled.
+        // (Fire-and-forget — the executor isn't async.)
+        db.anicliDownload.update({ where: { id: rec.id }, data: { pid } }).catch(() => {});
+      }
       let killed = false;
       let cancelled = false;
       let poll: ReturnType<typeof setInterval> | undefined;
@@ -1016,8 +1022,9 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
 
       const doKill = () => {
         killed = true;
+        if (pid === null) return; // nothing was spawned
         try {
-          process.kill(-child.pid!, "SIGKILL"); // negative pid = whole group
+          process.kill(-pid, "SIGKILL"); // negative pid = whole group
         } catch {
           try {
             child.kill("SIGKILL");
@@ -1036,16 +1043,20 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       child.on("error", (e) => {
         clearTimeout(timer);
         if (poll) clearInterval(poll);
-        untrackPid(child.pid!);
-        untrackAnicliGroup(child.pid!);
+        if (pid !== null) {
+          untrackPid(pid);
+          untrackAnicliGroup(pid);
+        }
         db.anicliDownload.update({ where: { id: rec.id }, data: { pid: null } }).catch(() => {});
         reject(e);
       });
       child.on("exit", (code) => {
         clearTimeout(timer);
         if (poll) clearInterval(poll);
-        untrackPid(child.pid!);
-        untrackAnicliGroup(child.pid!);
+        if (pid !== null) {
+          untrackPid(pid);
+          untrackAnicliGroup(pid);
+        }
         db.anicliDownload.update({ where: { id: rec.id }, data: { pid: null } }).catch(() => {});
         if (killed) return; // a guard (timeout/bytes/disk/cancel) already rejected
         if (code === 0) resolve();

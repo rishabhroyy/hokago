@@ -241,6 +241,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL -o /usr/local/bin/ani-cli \
          "https://raw.githubusercontent.com/pystardust/ani-cli/92e9d796d23aef3ae94b52852f9c992e2bce4fe3/ani-cli" \
     && chmod +x /usr/local/bin/ani-cli \
+    # curl-impersonate (mimics real browser TLS/JA3 fingerprints): the pinned
+    # ani-cli commit above already probes PATH for curl_chrome116/curl_ff117
+    # ahead of plain curl (its own fix for sites that Cloudflare-block a bare
+    # curl handshake) — it just needs the binary to exist. Prebuilt release,
+    # no BoringSSL build step.
+    && curl -fsSL -o /tmp/curl-impersonate.tar.gz \
+         "https://github.com/lwthiker/curl-impersonate/releases/download/v0.6.1/curl-impersonate-v0.6.1.$(case ${TARGETARCH} in amd64) echo x86_64-linux-gnu;; *) echo aarch64-linux-gnu;; esac).tar.gz" \
+    && tar -xzf /tmp/curl-impersonate.tar.gz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/curl_* /usr/local/bin/curl-impersonate-* \
+    && rm /tmp/curl-impersonate.tar.gz \
     && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable

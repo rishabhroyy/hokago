@@ -79,6 +79,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   const [libs, setLibs] = useState<{ id: string; name: string }[]>([]);
   const [lib, setLib] = useState("");
   const [query, setQuery] = useState("");
+  const [season, setSeason] = useState("");
   const [range, setRange] = useState("");
   const [dub, setDub] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
@@ -137,7 +138,11 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   };
 
   const submit = async () => {
-    const body: Record<string, unknown> = { libraryId: lib, query: query.trim() };
+    // Season is a separate box so it survives picking a search result (which
+    // resets the query to the raw AniList title) — appended onto the query
+    // ani-cli/parseAnicliQuery already understands, e.g. "Frieren S2".
+    const finalQuery = season.trim() ? `${query.trim()} Season ${season.trim()}` : query.trim();
+    const body: Record<string, unknown> = { libraryId: lib, query: finalQuery };
     if (picked) body.title = picked;
     if (range.trim()) body.episodeRange = range.trim();
     if (dub) body.dub = true;
@@ -148,6 +153,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
       toast(`queued ${data.query}`);
       setResults([]);
       setPicked(null);
+      setSeason("");
       void loadRows();
     }
   };
@@ -181,7 +187,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search for an anime, e.g. Frieren S2"
+            placeholder="Search for an anime"
             className="h-12 w-full rounded-full border-[1.5px] border-line bg-paper pl-11 pr-11 text-[14px] font-semibold text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:text-ink-3 focus:border-wii focus:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_0_0_3.5px_rgba(79,184,224,0.28)]"
           />
           {query && (
@@ -229,6 +235,17 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
             </button>
           </div>
         </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">season</span>
+          <input
+            className="h-11 w-[100px] rounded-full border-[1.5px] border-line bg-card px-4 font-mono text-kicker font-bold uppercase tracking-[0.08em] text-ink outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:tracking-[0.08em] placeholder:text-ink-3 focus:border-wii focus:shadow-[0_0_0_3.5px_rgba(79,184,224,0.28)]"
+            value={season}
+            onChange={(e) => setSeason(e.target.value)}
+            placeholder="1"
+            title="Set this when a sequel/cour has its own AniList title (e.g. K-On!!) so it files as a season of the existing show instead of a new one"
+          />
+        </label>
 
         <label className="flex flex-col gap-1.5">
           <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">episodes</span>

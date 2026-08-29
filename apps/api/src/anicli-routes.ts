@@ -153,11 +153,18 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
         return reply.code(409).send({ error: "show already exists on the server — new seasons allowed (e.g. \"Frieren S2\")" });
       }
 
-      // Episode range guard.
+      // Episode range guard — must be a single episode ("5") or an ascending
+      // "A-B" of positive integers, ≤ MAX_EPISODES total. Anything else
+      // (garbage, non-integers, multi-hyphen "1-12-3", descending) is rejected
+      // before it reaches ani-cli's -r flag.
       if (body.episodeRange) {
-        const parts = body.episodeRange.split("-").map(Number);
-        const count = parts.length === 2 ? parts[1]! - parts[0]! + 1 : 1;
-        if (parts[0]! < 1 || (parts.length === 2 && parts[1]! < parts[0]!) || count > MAX_EPISODES) {
+        const raw = body.episodeRange.trim();
+        if (!/^\d+(-\d+)?$/.test(raw)) {
+          return reply.code(422).send({ error: `episodeRange must be like "5" or "1-12"` });
+        }
+        const [a, b] = raw.split("-").map(Number);
+        const count = b === undefined ? 1 : b! - a! + 1;
+        if (a! < 1 || (b !== undefined && b! < a!) || count > MAX_EPISODES) {
           return reply.code(422).send({ error: `episodeRange must be 1-based ascending and ≤ ${MAX_EPISODES} episodes` });
         }
       }

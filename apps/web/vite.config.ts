@@ -29,6 +29,7 @@ const API_PATHS = [
   "/watch-state",
   "/parties",
   "/downloads",
+  "/anicli",
   "/metadata",
   "/admin/queues",
   "/admin-api",

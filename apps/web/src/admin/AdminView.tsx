@@ -11,8 +11,9 @@ import { InvitesPage } from "./InvitesPage";
 import { SessionsPage } from "./SessionsPage";
 import { JobsPage } from "./JobsPage";
 import { SettingsPage } from "./SettingsPage";
+import { AcquireSection } from "../views/AcquireSection";
 
-type Page = "dashboard" | "libraries" | "users" | "invites" | "sessions" | "jobs" | "settings";
+type Page = "dashboard" | "libraries" | "users" | "invites" | "sessions" | "jobs" | "settings" | "acquire";
 
 const PAGES: Record<Page, { title: string; sub: string; icon: IconName }> = {
   dashboard: { title: "Dashboard", sub: "server overview", icon: "grid" },
@@ -22,6 +23,7 @@ const PAGES: Record<Page, { title: string; sub: string; icon: IconName }> = {
   sessions: { title: "Sessions", sub: "active login sessions", icon: "monitor" },
   jobs: { title: "Jobs", sub: "worker queues and retries", icon: "activity" },
   settings: { title: "Settings", sub: "server config and metadata providers", icon: "gear" },
+  acquire: { title: "Acquire", sub: "download anime from the internet", icon: "cloudsun" },
 };
 
 export function AdminView() {
@@ -161,6 +163,7 @@ export function AdminView() {
         {page === "sessions" && <SessionsPage toast={toast} />}
         {page === "jobs" && <JobsPage toast={toast} />}
         {page === "settings" && <SettingsPage toast={toast} />}
+        {page === "acquire" && <AcquireSection toast={toast} />}
       </main>
 
       <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex flex-col items-center gap-2">

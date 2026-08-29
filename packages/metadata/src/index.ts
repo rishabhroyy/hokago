@@ -101,6 +101,8 @@ export interface MetadataSearchOptions {
   lastModified?: string;
  /** This mediaItem's existing providerId from a prior match — lets a provider revalidate directly instead of re-searching by title (TVmaze's /updates/shows). */
   existingProviderId?: string;
+ /** AbortSignal to cancel the underlying fetch (e.g. a per-request timeout). Optional — most callers leave it unset. */
+  signal?: AbortSignal;
 }
 
 export interface MetadataSearchResult {

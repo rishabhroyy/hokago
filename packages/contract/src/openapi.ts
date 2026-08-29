@@ -61,6 +61,14 @@ import {
   ErrorResponse as DownloadErrorResponse,
 } from "./downloads.js";
 import {
+  AnicliSearchQuery,
+  AnicliSearchResponse,
+  AnicliDownloadBody,
+  AnicliDownloadInfo,
+  AnicliParams,
+  ErrorResponse as AnicliErrorResponse,
+} from "./anicli.js";
+import {
   MetadataSearchQuery,
   MetadataSearchResponse,
   MetadataMatchPinParams,
@@ -861,16 +869,71 @@ export function buildOpenApiDocument(): OpenAPIObject {
       404: { description: "Download not found", ...json(DownloadErrorResponse) },
     },
   });
-  registry.registerPath({
-    method: "get",
-    path: "/downloads/{id}/artifact",
-    summary: "Packaged artifact manifest: media + sidecar subtitles + fonts",
-    request: { params: DownloadParams },
-    responses: {
-      200: { description: "OK", ...json(DownloadArtifactManifest) },
-      404: { description: "Download or artifact not ready", ...json(DownloadErrorResponse) },
-    },
-  });
+   registry.registerPath({
+     method: "get",
+     path: "/downloads/{id}/artifact",
+     summary: "Packaged artifact manifest: media + sidecar subtitles + fonts",
+     request: { params: DownloadParams },
+     responses: {
+       200: { description: "OK", ...json(DownloadArtifactManifest) },
+       404: { description: "Download or artifact not ready", ...json(DownloadErrorResponse) },
+     },
+   });
+
+   // ── ani-cli internet acquisition ──────────────────────────────────────
+   registry.registerPath({
+     method: "post",
+     path: "/anicli/search",
+     summary: "Search anime titles to download (admin only)",
+     request: { body: json(AnicliSearchQuery) },
+     responses: {
+       200: { description: "Candidate titles", ...json(AnicliSearchResponse) },
+       403: { description: "Admin only", ...json(AnicliErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "post",
+     path: "/anicli/downloads",
+     summary: "Enqueue an ani-cli download into an ANIME library (admin only)",
+     request: { body: json(AnicliDownloadBody) },
+     responses: {
+       201: { description: "Created — job queued", ...json(AnicliDownloadInfo) },
+       403: { description: "Admin only", ...json(AnicliErrorResponse) },
+       404: { description: "Library not found", ...json(AnicliErrorResponse) },
+       409: { description: "Show already exists on the server (dedup)", ...json(AnicliErrorResponse) },
+       422: { description: "Not an ANIME library / bad episode range", ...json(AnicliErrorResponse) },
+       429: { description: "Too many active downloads", ...json(AnicliErrorResponse) },
+       507: { description: "Insufficient disk space", ...json(AnicliErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "get",
+     path: "/anicli/downloads",
+     summary: "List the account's ani-cli download jobs",
+     request: {},
+     responses: { 200: { description: "OK", ...json(z.array(AnicliDownloadInfo)) } },
+   });
+   registry.registerPath({
+     method: "get",
+     path: "/anicli/downloads/{id}",
+     summary: "ani-cli download job status",
+     request: { params: AnicliParams },
+     responses: {
+       200: { description: "OK", ...json(AnicliDownloadInfo) },
+       404: { description: "Job not found", ...json(AnicliErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "delete",
+     path: "/anicli/downloads/{id}",
+     summary: "Cancel an ani-cli download (removes queued job + cleans staging)",
+     request: { params: AnicliParams },
+     responses: {
+       200: { description: "OK", ...json(RevokedResponse) },
+       404: { description: "Job not found", ...json(AnicliErrorResponse) },
+     },
+   });
+
 
  // Binary routes — raw bytes, typed as strings in the generated client
   registry.registerPath({

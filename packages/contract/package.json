@@ -16,6 +16,7 @@
     "./downloads": "./dist/downloads.js",
     "./watch-party": "./dist/watch-party.js",
     "./metadata": "./dist/metadata.js",
+    "./anicli": "./dist/anicli.js",
     "./openapi": "./dist/openapi.js",
     "./client": "./dist/client.js"
   },

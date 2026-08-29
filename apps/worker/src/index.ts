@@ -180,10 +180,10 @@ const metadataQueues: Record<string, Queue<MetadataJobData>> = {
   }),
 };
 
-async function enqueueScan(libraryId: string, mode: "light" | "heavy" = "light"): Promise<void> {
+async function enqueueScan(libraryId: string, mode: "light" | "heavy" = "light", delayMs = 0): Promise<void> {
   const jobId = scanJobId(libraryId);
   await scanQueue.remove(jobId).catch(() => {});
-  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId, mode }, { jobId });
+  await scanQueue.add(QUEUE_NAMES.SCAN, { libraryId, mode }, { jobId, delay: delayMs });
 }
 
 // Backpressure : one add per file as the scan walks it, never a
@@ -827,6 +827,14 @@ const anicliMinFree = (() => {
   return Number.isFinite(v) && v > 0 ? v : 2 * 1024 * 1024 * 1024;
 })();
 const anicliFreeFloor = 512 * 1024 * 1024; // kill mid-download if free drops below this
+// Grace period between the import move and the follow-up scan — the rename
+// above lands the file, but slower/quirkier filesystems (network mounts,
+// ntfs3) can lag a beat before size/mtime reads back consistently. The scan
+// job is only delayed, not blocked: this doesn't hold the anicli job open.
+const anicliScanSettleMs = (() => {
+  const v = Number(process.env.HOKAGO_ANICLI_SCAN_SETTLE_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 10_000;
+})();
 const anicliTimeoutMs = (() => {
   const v = Number(process.env.HOKAGO_ANICLI_TIMEOUT_MS);
   return Number.isFinite(v) && v > 0 ? v : 90 * 60 * 1000;
@@ -1141,13 +1149,12 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
       where: { id: rec.id },
       data: { status: "DONE", progress: { bytes: size.bytes, files: size.files, percent: null }, bytesWritten: BigInt(size.bytes) },
     });
-    // Heavy, not light: these files are brand new and have never been
-    // probed. A light scan skips ffprobe/artwork/trickplay entirely (see
-    // ingestLibrary's `lightweight` flag) and marks unprobed files
-    // probeFailed — which a *later* light scan then treats as permanently
-    // poisoned and never retries. Every anicli download was landing
-    // unplayable until an admin happened to trigger a manual heavy rescan.
-    await enqueueScan(rec.libraryId, "heavy").catch(() => {});
+    // Light is enough: ingestLibrary's lightweight mode now always probes
+    // brand-new files (only repairs/retries of *existing* rows are gated
+    // behind a heavy scan), so this onboards the new episodes without
+    // re-touching the rest of the library. Delayed rather than immediate —
+    // see anicliScanSettleMs.
+    await enqueueScan(rec.libraryId, "light", anicliScanSettleMs).catch(() => {});
   } catch (err) {
     // A cancelled download must stay CANCELLED (the user's intent), not be
     // re-labeled FAILED; everything else is a genuine failure.

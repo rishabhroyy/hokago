@@ -700,7 +700,7 @@ export interface IngestOptions {
   onTrickplayNeeded?: (job: TrickplayNeeded) => Promise<void>;
   onMetadataNeeded?: (job: MetadataNeeded) => Promise<void>;
   contentProfile?: ContentProfile;
-  /** Lightweight scan: skip ffprobe, artwork, trickplay, and hash reads — only structural changes and metadata retries. */
+  /** Lightweight scan: probe brand-new files only — never re-probe, re-derive artwork/trickplay, or retry a previously-failed file. Existing content is untouched; only fresh arrivals get onboarded. A heavy scan lifts all of that for a full repair pass. */
   lightweight?: boolean;
 }
 
@@ -740,25 +740,27 @@ export async function ingestLibrary(
     storedByPath.get(f.path) ?? (f.inode !== 0n ? (storedByInode.get(f.inode.toString()) ?? null) : null);
 
   // Probe only files whose stored probe is missing or untrustworthy: no
-  // stored row (brand new), size/mtime changed (content changed), the stored
-  // probe failed or never stored streams (nothing complete to reuse), or an
-  // mp4/mov with zero stored subtitle tracks — files probed before the
-  // mov_text→TX3G mapping silently lost their subtitle streams, so re-probe
-  // just those containers and let the leaf's idempotent sync heal the rows.
-  // Everything else skips ffprobe — a rescan of a settled library still
-  // spawns zero probes.
-  const needsProbe = lightweight
-    ? []
-    : files.filter((f) => {
-        const row = storedFor(f);
-        if (!row) return true;
-        if (row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime()) return true;
-        if (row.probeFailed) return true;
-        if (row._count.streams === 0) return true;
-        if (MP4_MOV_CONTAINER === row.container && row._count.subtitleTracks === 0) return true;
-        return false;
-      });
-  const probeResults = lightweight ? [] : await mapLimit(needsProbe, PROBE_CONCURRENCY, (f) => probeFile(f.path));
+  // stored row (brand new — probed even on a light scan, so a fresh import
+  // isn't left unplayable until someone runs a heavy rescan), size/mtime
+  // changed (content changed), the stored probe failed or never stored
+  // streams (nothing complete to reuse), or an mp4/mov with zero stored
+  // subtitle tracks — files probed before the mov_text→TX3G mapping silently
+  // lost their subtitle streams, so re-probe just those containers and let
+  // the leaf's idempotent sync heal the rows. A light scan stops at "brand
+  // new" — none of the repair/retry cases below run, so a rescan of a
+  // settled library still spawns zero probes; only a heavy scan repairs
+  // existing rows.
+  const needsProbe = files.filter((f) => {
+    const row = storedFor(f);
+    if (!row) return true;
+    if (lightweight) return false;
+    if (row.sizeBytes !== f.sizeBytes || row.mtime.getTime() !== f.mtime.getTime()) return true;
+    if (row.probeFailed) return true;
+    if (row._count.streams === 0) return true;
+    if (MP4_MOV_CONTAINER === row.container && row._count.subtitleTracks === 0) return true;
+    return false;
+  });
+  const probeResults = await mapLimit(needsProbe, PROBE_CONCURRENCY, (f) => probeFile(f.path));
   const probeByPath = new Map(needsProbe.map((f, i) => [f.path, probeResults[i] as ProbeResult | null]));
   // Cluster/evidence reads the effective duration — fresh probe, else stored.
   const durationByPath = new Map<string, number | null>(

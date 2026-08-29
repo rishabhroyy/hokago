@@ -96,7 +96,7 @@ updates are `docker compose pull && docker compose up -d`. hokago snapshots your
 
 ## a little disclosure
 
-hokago is vibecoded — a lot of these commits were paired with an AI, late at night, one "wait, why is the loading bar stuck" at a time. every line still gets read, tested, and shipped by a human who actually watches anime on this thing daily. if a comment somewhere feels a little too enthusiastic about a bug fix, now you know why. ♡
+heavily vibecoded, lovingly reviewed. ♡
 
 ## contributing
 

@@ -96,7 +96,7 @@ updates are `docker compose pull && docker compose up -d`. hokago snapshots your
 
 ## a little disclosure
 
-vibecoded. ♡
+large language models were used throughout hokago's development. ♡
 
 ## contributing
 

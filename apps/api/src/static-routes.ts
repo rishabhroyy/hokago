@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { PrismaClient } from "@hokago/db";
 import { MediaFileParams, MediaFileFontsResponse, MediaFileTracksResponse, MediaFileTrickplayResponse, ErrorResponse } from "@hokago/contract/media-files";
+import { normalizeContainer } from "@hokago/ffmpeg/device-profile";
 import { resolveConfigFilePath, configDir } from "./config.js";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 
@@ -108,7 +109,11 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
     }
 
     reply.header("Cross-Origin-Resource-Policy", "cross-origin");
-    reply.type(CONTAINER_MIME[mediaFile.container ?? ""] ?? "application/octet-stream");
+    // mediaFile.container is ffprobe's raw format_name (e.g.
+    // "mov,mp4,m4a,3gp,3g2,mj2"), never a bare "mp4"/"mkv"/"webm" token — a
+    // lookup keyed on it directly always misses CONTAINER_MIME and silently
+    // falls back to octet-stream, which Firefox's <video> refuses to play.
+    reply.type(CONTAINER_MIME[normalizeContainer(mediaFile.container ?? "")] ?? "application/octet-stream");
     return reply.sendFile(path.basename(mediaFile.path), path.dirname(mediaFile.path), {
       contentType: false,
       cacheControl: false,

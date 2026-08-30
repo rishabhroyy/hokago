@@ -6,7 +6,7 @@ Self-hosted media server (movies/TV/anime). `CLAUDE.md` (auto-loaded) holds the 
 
 pnpm workspaces, Node >= 22, `packageManager: pnpm@11.13.1`. Run everything via `pnpm -r ...` or `pnpm --filter @hokago/<pkg>`.
 
-- `pnpm -r typecheck` — verification gate. There is **no test suite and no lint script**; typecheck + build is the only CI-able check. Don't invent a test runner.
+- `pnpm -r typecheck` — verification gate, alongside `pnpm -r build`. There is **no lint script and no general test suite** — don't invent a project-wide test runner. The one exception is subtle logic called out in CLAUDE.md's working agreement (parser, evidence scoring, `episode_offset`, playback decisions): `packages/ffmpeg` has a `test` script (`node --import tsx --test`, no framework) covering the playback decision engine, run in CI alongside typecheck/build.
 - `pnpm -r build`
 - `pnpm --filter @hokago/db generate` — Prisma client (required, output is gitignored)
 - `pnpm --filter @hokago/contract generate` — zod schemas → `generated/openapi.json` + `generated/schema.d.ts`

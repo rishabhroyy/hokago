@@ -33,3 +33,4 @@ jobs:
       - run: pnpm --filter @hokago/fonts build
       - run: pnpm -r build
       - run: pnpm -r typecheck
+      - run: pnpm --filter @hokago/ffmpeg test

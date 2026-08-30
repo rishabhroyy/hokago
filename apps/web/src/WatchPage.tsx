@@ -1531,7 +1531,14 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // reloads against the same session instead of starting from scratch.
   const handleMediaError = useCallback(
     (detail: MediaErrorDetail) => {
-      if (detail.code === 3 && tryAudioDecodeFallback()) return;
+      if (detail.code === 3) {
+        if (tryAudioDecodeFallback()) return;
+        // Fallback already fired once for this session and a restart is
+        // still in flight (a stray duplicate decode-error event, e.g. from
+        // the old element mid-teardown) — let it finish instead of racing
+        // it with a stale error card.
+        if (restartLatestRef.current !== null) return;
+      }
       restartLatestRef.current = null;
       pendingSeekRef.current = null;
       setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);

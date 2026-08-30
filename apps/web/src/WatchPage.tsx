@@ -425,10 +425,17 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const pendingSeekRef = useRef<{ targetSec: number; nonce: number } | null>(null);
   // Live mirror of `start` for the restart machinery below — it must never
   // depend on a state value the commit callback might close over stale.
+  // Synced during render, not via useEffect: a native media `error` event
+  // (e.g. the audio-decode fallback's own trigger) fires on vidstack's own
+  // listener, entirely uncoordinated with React's passive-effect flush, and
+  // a decoder-setup failure can land fast enough — no real network wait,
+  // just an immediate codec-init rejection — to beat a `useEffect` sync on
+  // a session's very first render, when `start` first goes non-null in the
+  // same commit that mounts the player. Assigning here guarantees the ref
+  // is current before any native listener attached to this render's DOM
+  // can possibly fire.
   const startRef = useRef(start);
-  useEffect(() => {
-    startRef.current = start;
-  }, [start]);
+  startRef.current = start;
   // Media-absolute time at the video timeline's zero point. The server speaks
   // media time end-to-end (playlist MEDIA-SEQUENCE, remux -ss target, stored
   // watch positions); the <video>/hls.js timeline restarts at the resume or

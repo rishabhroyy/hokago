@@ -646,7 +646,14 @@ async function restartTranscode(
     // keyframe; TRANSCODE accurate-seeks, so its origin is the raw target.
     const startMs = isRemux ? await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
     const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
-    const playbackSessionRow = await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } });
+    // Folded into one query: the audioDecodeBroken re-check below only needs
+    // to run on a REMUX restart, but the session row itself is needed either
+    // way, so pulling the flag along via `include` costs nothing extra on
+    // the TRANSCODE/non-decide paths that used to skip the separate lookup.
+    const playbackSessionRow = await db.playbackSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      include: { mediaFile: { select: { audioDecodeBroken: true } } },
+    });
     // live.audioCodec is cached from whenever this session's ffmpeg last
     // started — a concurrent session on the same file (watch-party) can flip
     // audioDecodeBroken after that. Re-check on every restart instead of
@@ -655,12 +662,7 @@ async function restartTranscode(
     const audioCodec = isRemux
       ? remuxAudioCodec({
           audioCodec: live.audioCodec,
-          audioKnownBroken: (
-            await db.mediaFile.findUnique({
-              where: { id: playbackSessionRow.mediaFileId },
-              select: { audioDecodeBroken: true },
-            })
-          )?.audioDecodeBroken ?? false,
+          audioKnownBroken: playbackSessionRow.mediaFile.audioDecodeBroken,
         })
       : live.audioCodec;
     // Resume via a piped stub (header + tail from the exact keyframe cluster):
@@ -1479,6 +1481,29 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           }
           const { transcode, jobId } = spawned;
 
+          // /stop has no liveSessions entry to kill while a DIRECT_PLAY
+          // session's first transcode is still spawning, but it does mark
+          // the session ended in the DB. Gate the commit on endedAt still
+          // being null (same guarded-updateMany pattern stopSession uses) so
+          // a stop that landed mid-spawn doesn't get resurrected here — the
+          // child, slot, and segment dir would otherwise leak until the idle
+          // reaper's next sweep.
+          const commit = await db.playbackSession.updateMany({
+            where: { id: session.id, endedAt: null },
+            data: { method: newMethod, positionMs: targetMs },
+          });
+          if (commit.count === 0) {
+            if (transcode.child.exitCode === null && transcode.child.signalCode === null) {
+              transcode.child.kill("SIGKILL");
+            }
+            await db.transcodeJob.update({
+              where: { id: jobId },
+              data: { state: "CANCELLED", endedAt: new Date() },
+            });
+            await rm(newOutDir, { recursive: true, force: true });
+            return reply.code(404).send({ error: "session already ended" });
+          }
+
           liveSessions.set(req.params.sessionId, {
             transcode,
             outDir: newOutDir,
@@ -1501,10 +1526,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
             hwaccel,
           });
 
-          await db.playbackSession.update({
-            where: { id: session.id },
-            data: { method: newMethod, positionMs: targetMs },
-          });
           return {
             restarted: true,
             method: newMethod,

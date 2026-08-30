@@ -867,6 +867,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     message?: string;
     restarted?: boolean;
     method?: PlaybackStart["method"];
+    // Set only for a response that must land even if superseded (the
+    // audio-decode fallback's DIRECT_PLAY -> REMUX commit) — a plain quality
+    // switch's `method` is set on every restarted response, unchanged or
+    // not, and must NOT get this treatment or a stale one clobbers a newer
+    // in-flight switch.
+    authoritative?: boolean;
     segmentFrom?: number | null;
     actualStartMs?: number | null;
     playlistUrl?: string | null;
@@ -906,7 +912,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     try {
       const outcome = await req.run();
       const superseded = restartLatestRef.current !== null;
-      if (superseded && outcome.method !== undefined) {
+      if (superseded && outcome.authoritative) {
         // A newer request queued mid-flight, but this response also carries
         // a server-committed method transition (e.g. the audio-decode
         // fallback's DIRECT_PLAY -> REMUX) — that's an authoritative fact,
@@ -1512,6 +1518,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         return {
           ok: true,
           restarted: true,
+          authoritative: true,
           method: data.method,
           segmentFrom: data.segmentFrom,
           actualStartMs: data.actualStartMs,

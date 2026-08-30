@@ -565,11 +565,14 @@ async function ingestLeafItem(
             bitrate: null,
             probedAt: null,
             probeFailed: true,
-            // Size/mtime changed (content changed) even though a light scan
-            // skipped probing it — the old flag described bytes that are
-            // provably gone now, so it can't stay stuck forever until a
-            // heavy rescan finally probes this file again.
-            audioDecodeBroken: false,
+            // Size/mtime changed (content changed) even though this probe
+            // failed (e.g. file locked mid-move) — the old flag described
+            // bytes that are provably gone now, so it can't stay stuck
+            // forever until a later scan finally probes this file again.
+            // Except a twin-matched move/copy: the hash match already proves
+            // the bytes are identical to the twin's, so the flag still
+            // applies regardless of whether this pass could probe them.
+            ...(twinMatched ? {} : { audioDecodeBroken: false }),
           };
 
   let mediaFileId: string;

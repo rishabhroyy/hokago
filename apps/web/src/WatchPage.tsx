@@ -1010,6 +1010,25 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           // scrubs double-seek harmlessly (the gesture already set the same
           // target); party commands and retries have no gesture feedback
           // and NEED this to arrive at the anchor.
+          //
+          // REMUX is the one exception: while the file was still growing,
+          // its stream.mp4 connection was served chunked with no
+          // Accept-Ranges (see GrowingFileStream on the server). Once Chrome
+          // decides that connection is unseekable it stays that way for its
+          // whole lifetime, even after the remux finishes and the file
+          // becomes a normal Range-capable static file — currentTime past
+          // the old buffered edge then silently no-ops, which is exactly the
+          // "can't scrub past the loaded bar" bug. Force a fresh connection
+          // the same way a real restart does, so the browser reopens the
+          // (now complete) file and can actually seek.
+          if (startRef.current?.method === "REMUX") {
+            bumpSrcNonce();
+            pendingSeekRef.current = {
+              targetSec: (targetMs - timelineOffsetRef.current) / 1000,
+              nonce: srcNonceRef.current,
+            };
+            return;
+          }
           const p = playerRef.current;
           if (p) {
             const offsetMs = timelineOffsetRef.current;

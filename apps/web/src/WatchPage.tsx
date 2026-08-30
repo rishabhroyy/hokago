@@ -725,6 +725,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           return;
         }
         setStart(data);
+        audioDecodeFallbackTriedRef.current = false;
         setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
         // Party members link their session so heartbeats flow into the
         // member list (positions + liveness) and the server knows the
@@ -1466,15 +1467,73 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     saveAudioPref({ streamIndex: null, id: detail.id, lang: detail.language || null, title: detail.label || null });
   }, []);
 
+  // MEDIA_ERR_DECODE (3) on a DIRECT_PLAY stream means the file itself is
+  // undecodable (e.g. malformed HE-AAC signaling from a bad source rip) —
+  // not a transient network hiccup, and direct play never transforms a byte,
+  // so retrying it fails identically forever. One escalation attempt per
+  // session: report it to the server (persists past DIRECT_PLAY for this
+  // file going forward) and let it spawn a REMUX with audio forced to
+  // re-encode, exactly like a quality-switch's DIRECT_PLAY->TRANSCODE
+  // fallback.
+  const audioDecodeFallbackTriedRef = useRef(false);
+  const tryAudioDecodeFallback = useCallback((): boolean => {
+    const session = startRef.current;
+    if (!session || session.method !== "DIRECT_PLAY" || audioDecodeFallbackTriedRef.current) return false;
+    audioDecodeFallbackTriedRef.current = true;
+    const sessionId = session.sessionId;
+    const positionMs = Math.round(
+      (playerRef.current && Number.isFinite(playerRef.current.currentTime) ? playerRef.current.currentTime : 0) * 1000 +
+        timelineOffsetRef.current,
+    );
+    commitRestart({
+      attempt: 0,
+      maxRetries: 1,
+      targetMs: positionMs,
+      run: async () => {
+        const { data, response } = await api.POST("/playback/{sessionId}/quality", {
+          params: { path: { sessionId } },
+          body: { positionMs, reportAudioDecodeError: true },
+        });
+        if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
+        if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
+        return {
+          ok: true,
+          restarted: true,
+          method: data.method,
+          segmentFrom: data.segmentFrom,
+          actualStartMs: data.actualStartMs,
+          playlistUrl: data.playlistUrl,
+          streamUrl: data.streamUrl,
+        };
+      },
+      apply: (outcome) => {
+        if (!outcome.restarted || !startRef.current) return;
+        setPlayerError(null);
+        const method = outcome.method ?? startRef.current.method;
+        setStart((prev) => (prev ? { ...prev, method, playlistUrl: outcome.playlistUrl ?? null, streamUrl: outcome.streamUrl ?? null } : prev));
+        setKeyNonce((n) => n + 1);
+        userPausedRef.current = false;
+        bumpSrcNonce();
+        applyRestart(method, outcome.segmentFrom ?? null, outcome.actualStartMs ?? null, positionMs);
+      },
+      onFail: (message) => setPlayerError(message),
+    });
+    return true;
+  }, [commitRestart, applyRestart, bumpSrcNonce]);
+
   // A stream died mid-playback (hls.js fatal, element error, dead session).
   // Park the restart queue — its targets describe a broken pipeline — and
   // surface a recovery card; the player stays mounted underneath so Try again
   // reloads against the same session instead of starting from scratch.
-  const handleMediaError = useCallback((detail: MediaErrorDetail) => {
-    restartLatestRef.current = null;
-    pendingSeekRef.current = null;
-    setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);
-  }, []);
+  const handleMediaError = useCallback(
+    (detail: MediaErrorDetail) => {
+      if (detail.code === 3 && tryAudioDecodeFallback()) return;
+      restartLatestRef.current = null;
+      pendingSeekRef.current = null;
+      setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);
+    },
+    [tryAudioDecodeFallback],
+  );
 
   const retryPlayback = useCallback(() => {
     setPlayerError(null);

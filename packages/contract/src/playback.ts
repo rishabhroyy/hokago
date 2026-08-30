@@ -87,6 +87,11 @@ export const QualitySwitchBody = z.object({
   maxWidth: z.number().optional(),
   maxHeight: z.number().optional(),
   maxVideoBitrateKbps: z.number().optional(),
+  /** The client's <video> element reported this DIRECT_PLAY stream itself as
+   *  undecodable (not a network error) — sticky server-side, forces every
+   *  future session for this file past DIRECT_PLAY into REMUX with audio
+   *  forced to re-encode. */
+  reportAudioDecodeError: z.boolean().optional(),
 });
 export type QualitySwitchBody = z.infer<typeof QualitySwitchBody>;
 

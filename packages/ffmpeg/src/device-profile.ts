@@ -122,4 +122,12 @@ export interface PlaybackCandidateInput {
   isHdr: boolean;
  /** Whether the active subtitle track needs burn-in — PGS/VOBSUB always do . */
   subtitleRequiresBurnIn: boolean;
+  /**
+   * A client already reported this audio track as undecodable (see
+   * MediaFile.audioDecodeBroken) — codec-name compatibility alone doesn't
+   * catch this (e.g. malformed HE-AAC signaling), so the decision engine
+   * treats the audio as incompatible regardless of `audioCodec` and every
+   * downstream REMUX build must re-encode it, never copy.
+   */
+  audioKnownBroken: boolean;
 }

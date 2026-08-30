@@ -188,6 +188,7 @@ async function buildCandidateInput(
       bitrateKbps: mediaFile.bitrate ? Math.round(mediaFile.bitrate / 1000) : null,
       isHdr: videoStream?.hdrMeta !== null && videoStream?.hdrMeta !== undefined,
       subtitleRequiresBurnIn: subtitleTrack?.requiresBurnIn ?? false,
+      audioKnownBroken: mediaFile.audioDecodeBroken,
     },
     path: mediaFile.path,
     durationMs: mediaFile.durationMs ?? 0,
@@ -195,6 +196,19 @@ async function buildCandidateInput(
     subtitleBurnIn,
     relativeAudioIndex: audioStream ? relativeAudioIndex(mediaFile.streams, audioStream.streamIndex) : 0,
   };
+}
+
+/**
+ * REMUX copies audio verbatim when the codec name is MP4-safe (buildRemuxArgs'
+ * own MP4_SAFE_AUDIO check) — a source a client already reported as
+ * undecodable (audioKnownBroken) must never take that path, since a copy
+ * reproduces the exact same broken bitstream. `null` is what makes
+ * buildRemuxArgs fall through to its re-encode branch regardless of codec
+ * name; storing it on the live session also keeps every later seek/audio
+ * restart re-encoding without re-checking the flag.
+ */
+function remuxAudioCodec(input: PlaybackCandidateInput): string | null {
+  return input.audioKnownBroken ? null : input.audioCodec;
 }
 
 /** Segment index for a wall-clock position, clamped inside the media's range. */
@@ -811,7 +825,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           startMs,
           durationMs: candidate.durationMs,
           audioStreamIndex: audioIndex,
-          audioCodec: candidate.input.audioCodec,
+          audioCodec: remuxAudioCodec(candidate.input),
           videoCodec: candidate.input.videoCodec,
           pipedInput: resumeInput !== null,
         })
@@ -887,7 +901,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       toneMap,
       subtitleBurnIn: candidate.subtitleBurnIn,
       audioStreamIndex: audioIndex,
-      audioCodec: candidate.input.audioCodec,
+      audioCodec: remuxAudioCodec(candidate.input),
       remux: isRemux ? { outFile, startMs, patched: false } : null,
       hwaccel,
     });
@@ -1245,6 +1259,19 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
       const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
+
+      // The client's <video> element reported the direct-play stream itself
+      // as undecodable (MediaError.MEDIA_ERR_DECODE) — not a network hiccup,
+      // a genuinely broken bitstream (e.g. malformed HE-AAC signaling from a
+      // bad source rip). Persist it before deciding below so this same
+      // request already re-decides past DIRECT_PLAY, and so does every
+      // future session for this file — a REMUX (video copy, audio forced to
+      // re-encode via remuxAudioCodec) actually fixes it; direct play never
+      // transforms a byte and would fail identically forever.
+      if (req.body.reportAudioDecodeError) {
+        await db.mediaFile.update({ where: { id: session.mediaFileId }, data: { audioDecodeBroken: true } });
+      }
+
       // The DB row keeps the session's *start* profile — the raw, un-normalized
       // profile (no 1080p ceiling) — so reset re-decides exactly like /start did.
       const startRawProfile = session.deviceProfile as unknown as DeviceProfile;
@@ -1354,7 +1381,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
                 startMs,
                 durationMs: candidate.durationMs,
                 audioStreamIndex: candidate.relativeAudioIndex,
-                audioCodec: candidate.input.audioCodec,
+                audioCodec: remuxAudioCodec(candidate.input),
                 videoCodec: candidate.input.videoCodec,
                 pipedInput: resumeInput !== null,
               })
@@ -1412,7 +1439,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           toneMap,
           subtitleBurnIn: candidate.subtitleBurnIn,
           audioStreamIndex: candidate.relativeAudioIndex,
-          audioCodec: candidate.input.audioCodec,
+          audioCodec: remuxAudioCodec(candidate.input),
           remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
           hwaccel,
         });

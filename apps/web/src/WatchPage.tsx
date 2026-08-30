@@ -905,7 +905,16 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     let requeueDelay: number | null = null;
     try {
       const outcome = await req.run();
-      if (restartLatestRef.current !== null) {
+      const superseded = restartLatestRef.current !== null;
+      if (superseded && outcome.method !== undefined) {
+        // A newer request queued mid-flight, but this response also carries
+        // a server-committed method transition (e.g. the audio-decode
+        // fallback's DIRECT_PLAY -> REMUX) — that's an authoritative fact,
+        // not a stale position, and dropping it leaves the client assuming
+        // the old method forever while the server (and the queued request
+        // about to run) have already moved on.
+        req.apply(outcome);
+      } else if (superseded) {
         // A newer request was committed mid-flight — this response describes
         // an intermediate server state that the newer request already
         // superseded. Never apply it (a transient wrong rebase); pump the
@@ -1536,8 +1545,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         // Fallback already fired once for this session and a restart is
         // still in flight (a stray duplicate decode-error event, e.g. from
         // the old element mid-teardown) — let it finish instead of racing
-        // it with a stale error card.
-        if (restartLatestRef.current !== null) return;
+        // it with a stale error card. pumpRestart clears restartLatestRef
+        // the moment it dequeues a request (before running it), so a queued
+        // request in flight shows up as restartBusyRef, not this ref.
+        if (restartBusyRef.current || restartLatestRef.current !== null) return;
       }
       restartLatestRef.current = null;
       pendingSeekRef.current = null;

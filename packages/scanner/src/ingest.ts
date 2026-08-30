@@ -490,6 +490,12 @@ async function ingestLeafItem(
   // of importing the file as a brand-new item; the husk item just created has
   // enqueued nothing yet and is removed. A twin whose file is still on disk is
   // a legitimate duplicate — copies stay separate items.
+  // Content-identical to the twin by definition (hash match) — feeds the
+  // audioDecodeBroken carry-over below: `unchanged` is always false here
+  // (it was computed against the pre-steal, still-null `existingFile`), but
+  // a moved/copied file's bytes are provably the same as the twin's, so a
+  // sticky broken-audio flag describing those bytes must survive the move.
+  let twinMatched = false;
   if (!existingFile) {
     const twin = await db.mediaFile.findFirst({
       where: { hash, mediaItem: { libraryId }, path: { not: file.path } },
@@ -503,6 +509,7 @@ async function ingestLeafItem(
       mediaItemId = twin.mediaItemId;
       oldParentId = twin.mediaItem.parentId;
       if (huskItemId) await db.mediaItem.delete({ where: { id: huskItemId } });
+      twinMatched = true;
     }
   }
 
@@ -530,8 +537,9 @@ async function ingestLeafItem(
           // A prior audioDecodeBroken flag describes the OLD bytes at this
           // path — only clear it when the content itself changed (re-download,
           // re-rip), not when the gate just re-probed an unchanged file to
-          // heal a missing/failed probe.
-          ...(unchanged ? {} : { audioDecodeBroken: false }),
+          // heal a missing/failed probe, and not for a twin-matched move/copy
+          // (identical bytes proven by hash, so the old flag still applies).
+          ...(unchanged || twinMatched ? {} : { audioDecodeBroken: false }),
         }
       : unchanged
         ? {
@@ -557,6 +565,11 @@ async function ingestLeafItem(
             bitrate: null,
             probedAt: null,
             probeFailed: true,
+            // Size/mtime changed (content changed) even though a light scan
+            // skipped probing it — the old flag described bytes that are
+            // provably gone now, so it can't stay stuck forever until a
+            // heavy rescan finally probes this file again.
+            audioDecodeBroken: false,
           };
 
   let mediaFileId: string;

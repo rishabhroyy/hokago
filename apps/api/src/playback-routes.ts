@@ -127,6 +127,12 @@ function normalizeDeviceProfile(p: DeviceProfile): DeviceProfile {
 
 const db = new PrismaClient();
 const liveSessions = new Map<string, LiveSession>();
+// Guards the /quality route's DIRECT_PLAY→first-transcode spawn: two
+// near-simultaneous requests for the same session both read `!live` as true
+// before either has written liveSessions, and would otherwise both spawn an
+// ffmpeg + acquire a slot — only one wins the liveSessions.set() below,
+// orphaning the other's process and slot forever.
+const pendingQualitySpawns = new Set<string>();
 
 async function buildCandidateInput(
   mediaFileId: string,
@@ -207,7 +213,7 @@ async function buildCandidateInput(
  * name; storing it on the live session also keeps every later seek/audio
  * restart re-encoding without re-checking the flag.
  */
-function remuxAudioCodec(input: PlaybackCandidateInput): string | null {
+function remuxAudioCodec(input: Pick<PlaybackCandidateInput, "audioCodec" | "audioKnownBroken">): string | null {
   return input.audioKnownBroken ? null : input.audioCodec;
 }
 
@@ -640,6 +646,23 @@ async function restartTranscode(
     // keyframe; TRANSCODE accurate-seeks, so its origin is the raw target.
     const startMs = isRemux ? await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
     const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+    const playbackSessionRow = await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } });
+    // live.audioCodec is cached from whenever this session's ffmpeg last
+    // started — a concurrent session on the same file (watch-party) can flip
+    // audioDecodeBroken after that. Re-check on every restart instead of
+    // trusting the cache, or a seek/quality/hw-fallback respawn can copy the
+    // now-known-broken bitstream straight through.
+    const audioCodec = isRemux
+      ? remuxAudioCodec({
+          audioCodec: live.audioCodec,
+          audioKnownBroken: (
+            await db.mediaFile.findUnique({
+              where: { id: playbackSessionRow.mediaFileId },
+              select: { audioDecodeBroken: true },
+            })
+          )?.audioDecodeBroken ?? false,
+        })
+      : live.audioCodec;
     // Resume via a piped stub (header + tail from the exact keyframe cluster):
     // the container seek table lies (Cue → different keyframe than the bitstream
     // probe), so -ss on mkv would start at a different media time than startMs
@@ -658,7 +681,7 @@ async function restartTranscode(
           startMs,
           durationMs: live.mediaFile.durationMs,
           audioStreamIndex: live.audioStreamIndex,
-          audioCodec: live.audioCodec,
+          audioCodec,
           videoCodec: live.mediaFile.videoCodec,
           pipedInput: resumeInput !== null,
         })
@@ -686,7 +709,7 @@ async function restartTranscode(
     const job = await db.transcodeJob.create({
       data: {
         sessionId,
-        mediaFileId: (await db.playbackSession.findUniqueOrThrow({ where: { id: sessionId } })).mediaFileId,
+        mediaFileId: playbackSessionRow.mediaFileId,
         method: isRemux ? "REMUX" : "TRANSCODE",
         deviceProfile: profile as object,
         state: "RUNNING",
@@ -1185,14 +1208,19 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         where: { id: playbackSession.mediaFileId },
         include: { streams: true },
       });
+      // The requested track index may no longer exist (a re-scan replaced the
+      // stream rows, or a stale client menu references a track that's gone) —
+      // ffmpeg's `-map 0:a:N` on an out-of-range N fails to spawn instead of
+      // falling back, so reject up front rather than let that happen.
+      const requestedStream = mediaFile.streams.find(
+        (s) => s.type === "AUDIO" && s.streamIndex === req.body.audioStreamIndex,
+      );
+      if (!requestedStream) return reply.code(404).send({ error: "audio track not found" });
       const audioIndex = relativeAudioIndex(mediaFile.streams, req.body.audioStreamIndex);
-      // remuxAudioCodec-equivalent guard: a file already flagged broken must
-      // never take buildRemuxArgs' copy-if-MP4-safe path on the new track
-      // either, or it reproduces the same undecodable bitstream.
-      const audioCodec = mediaFile.audioDecodeBroken
-        ? null
-        : mediaFile.streams.find((s) => s.type === "AUDIO" && s.streamIndex === req.body.audioStreamIndex)?.codec ??
-          null;
+      const audioCodec = remuxAudioCodec({
+        audioCodec: requestedStream.codec,
+        audioKnownBroken: mediaFile.audioDecodeBroken,
+      });
 
       const targetMs = Math.min(req.body.positionMs, Math.max(0, live.mediaFile.durationMs - 1000));
       const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);
@@ -1276,9 +1304,14 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // client misreporting from a REMUX/TRANSCODE session (already
       // re-encoding audio) would otherwise flip the sticky flag on bytes
       // that were never the problem.
-      if (req.body.reportAudioDecodeError && session.method === "DIRECT_PLAY") {
-        await db.mediaFile.update({ where: { id: session.mediaFileId }, data: { audioDecodeBroken: true } });
-      }
+      const updatedMediaFile =
+        req.body.reportAudioDecodeError && session.method === "DIRECT_PLAY"
+          ? await db.mediaFile.update({
+              where: { id: session.mediaFileId },
+              data: { audioDecodeBroken: true },
+              include: { streams: true },
+            })
+          : null;
 
       // The DB row keeps the session's *start* profile — the raw, un-normalized
       // profile (no 1080p ceiling) — so reset re-decides exactly like /start did.
@@ -1317,10 +1350,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         }
       }
 
-      const mediaFile = await db.mediaFile.findUniqueOrThrow({
-        where: { id: session.mediaFileId },
-        include: { streams: true },
-      });
+      const mediaFile =
+        updatedMediaFile ??
+        (await db.mediaFile.findUniqueOrThrow({
+          where: { id: session.mediaFileId },
+          include: { streams: true },
+        }));
       const audioStreams = mediaFile.streams.filter((s) => s.type === "AUDIO");
       const absoluteAudio = live ? audioStreams[live.audioStreamIndex]?.streamIndex : undefined;
       const candidate = await buildCandidateInput(session.mediaFileId, undefined, absoluteAudio);
@@ -1359,112 +1394,129 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // first ffmpeg (mirror of /start's spawn block; the shared helper keeps
       // the job recording identical).
       if (!live) {
-        const hwaccel = await getHwaccel();
-        if (!(await acquireTranscodeSlot())) {
+        if (pendingQualitySpawns.has(req.params.sessionId)) {
           return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
         }
-        const targetSegment = segmentFor(targetMs, candidate.durationMs);
-        const newOutDir = qualityOutDir(
-          req.params.sessionId,
-          newProfile.maxWidth ?? 1920,
-          newProfile.maxHeight ?? 1080,
-        );
-        await mkdir(newOutDir, { recursive: true });
+        pendingQualitySpawns.add(req.params.sessionId);
+        try {
+          const hwaccel = await getHwaccel();
+          if (!(await acquireTranscodeSlot())) {
+            return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
+          }
+          const targetSegment = segmentFor(targetMs, candidate.durationMs);
+          const newOutDir = qualityOutDir(
+            req.params.sessionId,
+            newProfile.maxWidth ?? 1920,
+            newProfile.maxHeight ?? 1080,
+          );
+          await mkdir(newOutDir, { recursive: true });
 
-        // REMUX fast-seeks and must start at the probed keyframe; TRANSCODE
-        // accurate-seeks, so its origin is the raw target position.
-        const startMs = newMethod === "REMUX" ? await keyframeAtOrBeforeMs(candidate.path, targetMs) : targetMs;
-        const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
-        const toneMap = needsToneMap(candidate.input.isHdr, newProfile.supportsHdr);
-        // REMUX resume via a piped stub — the mkv Cue table can point at a
-        // different keyframe than the bitstream probe, which would drift subs
-        // against the reported startMs. Falls back to -ss when probing fails.
-        const resumeInput =
-          newMethod === "REMUX" ? await buildResumeInput(candidate.path, startMs) : null;
-        const args =
-          newMethod === "REMUX"
-            ? buildRemuxArgs({
-                inputPath: candidate.path,
-                outputPath: path.join(newOutDir, "stream.mp4"),
-                startMs,
-                durationMs: candidate.durationMs,
-                audioStreamIndex: candidate.relativeAudioIndex,
-                audioCodec: remuxAudioCodec(candidate.input),
-                videoCodec: candidate.input.videoCodec,
-                pipedInput: resumeInput !== null,
-              })
-            : buildFfmpegArgs({
-                inputPath: candidate.path,
-                outputDir: newOutDir,
-                startSegment: segmentFrom,
-                segmentSeconds: HLS_SEGMENT_SECONDS,
-                // -ss targets the stream origin exactly — the reported
-                // startMs.
-                seekMs: startMs,
-                hwaccel,
-                videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs, hwaccel),
-                audioCodec: pickAudioEncoder(newProfile.supportedAudioCodecs),
-                audioStreamIndex: candidate.relativeAudioIndex,
-                maxWidth: newProfile.maxWidth,
-                maxHeight: newProfile.maxHeight,
-                maxVideoBitrateKbps: newProfile.maxVideoBitrateKbps,
-                toneMap,
-                subtitleBurnIn: candidate.subtitleBurnIn,
-              });
+          // REMUX fast-seeks and must start at the probed keyframe; TRANSCODE
+          // accurate-seeks, so its origin is the raw target position.
+          const startMs = newMethod === "REMUX" ? await keyframeAtOrBeforeMs(candidate.path, targetMs) : targetMs;
+          const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+          const toneMap = needsToneMap(candidate.input.isHdr, newProfile.supportsHdr);
+          // REMUX resume via a piped stub — the mkv Cue table can point at a
+          // different keyframe than the bitstream probe, which would drift subs
+          // against the reported startMs. Falls back to -ss when probing fails.
+          const resumeInput =
+            newMethod === "REMUX" ? await buildResumeInput(candidate.path, startMs) : null;
+          const args =
+            newMethod === "REMUX"
+              ? buildRemuxArgs({
+                  inputPath: candidate.path,
+                  outputPath: path.join(newOutDir, "stream.mp4"),
+                  startMs,
+                  durationMs: candidate.durationMs,
+                  audioStreamIndex: candidate.relativeAudioIndex,
+                  audioCodec: remuxAudioCodec(candidate.input),
+                  videoCodec: candidate.input.videoCodec,
+                  pipedInput: resumeInput !== null,
+                })
+              : buildFfmpegArgs({
+                  inputPath: candidate.path,
+                  outputDir: newOutDir,
+                  startSegment: segmentFrom,
+                  segmentSeconds: HLS_SEGMENT_SECONDS,
+                  // -ss targets the stream origin exactly — the reported
+                  // startMs.
+                  seekMs: startMs,
+                  hwaccel,
+                  videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs, hwaccel),
+                  audioCodec: pickAudioEncoder(newProfile.supportedAudioCodecs),
+                  audioStreamIndex: candidate.relativeAudioIndex,
+                  maxWidth: newProfile.maxWidth,
+                  maxHeight: newProfile.maxHeight,
+                  maxVideoBitrateKbps: newProfile.maxVideoBitrateKbps,
+                  toneMap,
+                  subtitleBurnIn: candidate.subtitleBurnIn,
+                });
 
-        if (newMethod === "TRANSCODE") {
-          const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
-          await writePlaylistAtomically(newOutDir, playlist);
+          if (newMethod === "TRANSCODE") {
+            const playlist = buildM3u8(candidate.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
+            await writePlaylistAtomically(newOutDir, playlist);
+          }
+
+          // The slot is released by the child's exit callback — any failure
+          // before a child exists (mirrors /start) would otherwise leak it.
+          let spawned: Awaited<ReturnType<typeof spawnTranscodeJob>>;
+          try {
+            spawned = await spawnTranscodeJob(
+              req.params.sessionId,
+              session.mediaFileId,
+              newMethod,
+              newProfile,
+              args,
+              segmentFrom,
+              newOutDir,
+              candidate.durationMs,
+              resumeInput?.input,
+              hwaccel,
+            );
+          } catch (e) {
+            releaseTranscodeSlot();
+            throw e;
+          }
+          const { transcode, jobId } = spawned;
+
+          liveSessions.set(req.params.sessionId, {
+            transcode,
+            outDir: newOutDir,
+            mediaFile: {
+              path: candidate.path,
+              durationMs: candidate.durationMs,
+              bitrateKbps: candidate.bitrateKbps,
+              videoCodec: candidate.input.videoCodec,
+            },
+            method: newMethod,
+            deviceProfile: newProfile,
+            currentSegmentFrom: segmentFrom,
+            playlistStartSegment: segmentFrom,
+            currentTranscodeJobId: jobId,
+            toneMap,
+            subtitleBurnIn: candidate.subtitleBurnIn,
+            audioStreamIndex: candidate.relativeAudioIndex,
+            audioCodec: remuxAudioCodec(candidate.input),
+            remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
+            hwaccel,
+          });
+
+          await db.playbackSession.update({
+            where: { id: session.id },
+            data: { method: newMethod, positionMs: targetMs },
+          });
+          return {
+            restarted: true,
+            method: newMethod,
+            segmentFrom,
+            pid: transcode.pid,
+            actualStartMs: startMs,
+            playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
+            streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
+          };
+        } finally {
+          pendingQualitySpawns.delete(req.params.sessionId);
         }
-
-        const { transcode, jobId } = await spawnTranscodeJob(
-          req.params.sessionId,
-          session.mediaFileId,
-          newMethod,
-          newProfile,
-          args,
-          segmentFrom,
-          newOutDir,
-          candidate.durationMs,
-          resumeInput?.input,
-          hwaccel,
-        );
-
-        liveSessions.set(req.params.sessionId, {
-          transcode,
-          outDir: newOutDir,
-          mediaFile: {
-            path: candidate.path,
-            durationMs: candidate.durationMs,
-            bitrateKbps: candidate.bitrateKbps,
-            videoCodec: candidate.input.videoCodec,
-          },
-          method: newMethod,
-          deviceProfile: newProfile,
-          currentSegmentFrom: segmentFrom,
-          playlistStartSegment: segmentFrom,
-          currentTranscodeJobId: jobId,
-          toneMap,
-          subtitleBurnIn: candidate.subtitleBurnIn,
-          audioStreamIndex: candidate.relativeAudioIndex,
-          audioCodec: remuxAudioCodec(candidate.input),
-          remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
-          hwaccel,
-        });
-
-        await db.playbackSession.update({
-          where: { id: session.id },
-          data: { method: newMethod, positionMs: targetMs },
-        });
-        return {
-          restarted: true,
-          method: newMethod,
-          segmentFrom,
-          pid: transcode.pid,
-          actualStartMs: startMs,
-          playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
-          streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
-        };
       }
 
       const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);

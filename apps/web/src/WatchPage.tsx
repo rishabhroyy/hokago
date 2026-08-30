@@ -1526,6 +1526,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             authoritative: true,
             method: data.method,
             segmentFrom: data.segmentFrom,
+            actualStartMs: data.actualStartMs,
             playlistUrl: data.playlistUrl,
             streamUrl: data.streamUrl,
           };

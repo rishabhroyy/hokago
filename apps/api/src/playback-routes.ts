@@ -651,17 +651,23 @@ async function restartTranscode(
     const isRemux = (overrides?.method ?? live.method) === "REMUX";
     // The stream origin must equal the client's reported offset exactly, or
     // sub/clock sync drifts. REMUX fast-seeks and can only start at the probed
-    // keyframe; TRANSCODE accurate-seeks, so its origin is the raw target.
-    const startMs = isRemux ? await keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : targetMs;
-    const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+    // keyframe (up to KEYFRAME_PROBE_TIMEOUT_MS on a slow disk); TRANSCODE
+    // accurate-seeks, so its origin is the raw target. Run alongside the
+    // session lookup below — neither depends on the other's result, and the
+    // lookup is needed regardless of isRemux, so serializing them just adds
+    // the probe's latency onto every restart for no reason.
     // Folded into one query: the audioDecodeBroken re-check below only needs
     // to run on a REMUX restart, but the session row itself is needed either
     // way, so pulling the flag along via `include` costs nothing extra on
     // the TRANSCODE/non-decide paths that used to skip the separate lookup.
-    const playbackSessionRow = await db.playbackSession.findUniqueOrThrow({
-      where: { id: sessionId },
-      include: { mediaFile: { select: { audioDecodeBroken: true } } },
-    });
+    const [startMs, playbackSessionRow] = await Promise.all([
+      isRemux ? keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : Promise.resolve(targetMs),
+      db.playbackSession.findUniqueOrThrow({
+        where: { id: sessionId },
+        include: { mediaFile: { select: { audioDecodeBroken: true } } },
+      }),
+    ]);
+    const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
     // A concurrent session on the same file (watch-party) can flip
     // audioDecodeBroken after this session last spawned — re-check on every
     // restart instead of trusting the cached resolved audioCodec, or a
@@ -1373,6 +1379,14 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
             method: live.method as PlaybackMethod,
             segmentFrom: live.currentSegmentFrom,
             pid: live.transcode.pid,
+            // REMUX's timeline origin is the running stream's own start, not
+            // omittable like TRANSCODE's (whose HLS segments are
+            // self-anchored) — a caller synthesizing a client-side restart
+            // from this "nothing changed" response (e.g. a decode-error
+            // report racing a concurrent request that already recovered the
+            // session) needs the real anchor, or it falls back to its own
+            // locally-guessed position and desyncs the timeline.
+            actualStartMs: live.method === "REMUX" ? live.remux?.startMs : undefined,
             playlistUrl: live.method === "REMUX" ? null : `/playback/${req.params.sessionId}/playlist.m3u8`,
             streamUrl: live.method === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
           };

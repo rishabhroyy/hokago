@@ -51,6 +51,13 @@ const EMPTY_VTT = "data:text/vtt," + encodeURIComponent("WEBVTT\n\n");
 // and the API's idle reaper uses it to tell "paused in a tab" from "dead".
 const HEARTBEAT_MS = 10_000;
 
+// How long a fresh DIRECT_PLAY attempt gets before canplay must have fired.
+// Some browsers abandon a resource (codec-init rejection, etc.) without ever
+// dispatching a native `error` event — see tryAudioDecodeFallback's watchdog
+// effect. Generous enough to not misfire on a slow first byte for a large
+// file over a weak connection.
+const DIRECT_PLAY_STALL_MS = 8_000;
+
 // Mirrors HLS_SEGMENT_SECONDS in packages/ffmpeg (Node-only, not importable
 // here): transcode playlists are numbered in segment units, so the playlist's
 // first segment index (segmentFrom) is derived from this.
@@ -436,6 +443,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // can possibly fire.
   const startRef = useRef(start);
   startRef.current = start;
+  // Pending direct-play stall watchdog (see the effect near
+  // tryAudioDecodeFallback below) — cleared the moment canplay actually
+  // fires, from whichever attempt is current.
+  const stallTimeoutRef = useRef<number | null>(null);
   // Media-absolute time at the video timeline's zero point. The server speaks
   // media time end-to-end (playlist MEDIA-SEQUENCE, remux -ss target, stored
   // watch positions); the <video>/hls.js timeline restarts at the resume or
@@ -1261,6 +1272,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   );
 
   const handleCanPlay = useCallback(() => {
+    if (stallTimeoutRef.current !== null) {
+      window.clearTimeout(stallTimeoutRef.current);
+      stallTimeoutRef.current = null;
+    }
     const player = playerRef.current;
     if (!player) return;
     const pending = pendingSeekRef.current;
@@ -1575,6 +1590,34 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     });
     return true;
   }, [commitRestart, applyRestart, bumpSrcNonce]);
+
+  // Some browsers abandon a DIRECT_PLAY resource without ever dispatching a
+  // native `error` event — no MediaError, nothing for handleMediaError to
+  // catch (vidstack's own listener bails the same way: no `.error`, no
+  // notify). Observed directly against this file: a malformed direct-play
+  // response left the element parked on NETWORK_NO_SOURCE with `error` still
+  // null and no `error` event ever reaching a capturing listener. A stalled
+  // load is the only externally-visible symptom in that case, so watch for
+  // one and drive the same escalation handleMediaError would have.
+  //
+  // Keyed on sessionId + keyNonce, not method: only DIRECT_PLAY needs this
+  // (REMUX/TRANSCODE stalls are the server's ffmpeg process to detect), but
+  // the effect must still re-arm on every fresh attempt at this session,
+  // including retryPlayback's DIRECT_PLAY remount (which bumps keyNonce
+  // without changing sessionId).
+  useEffect(() => {
+    if (start?.method !== "DIRECT_PLAY") return;
+    stallTimeoutRef.current = window.setTimeout(() => {
+      stallTimeoutRef.current = null;
+      tryAudioDecodeFallback();
+    }, DIRECT_PLAY_STALL_MS);
+    return () => {
+      if (stallTimeoutRef.current !== null) {
+        window.clearTimeout(stallTimeoutRef.current);
+        stallTimeoutRef.current = null;
+      }
+    };
+  }, [start?.sessionId, start?.method, keyNonce, tryAudioDecodeFallback]);
 
   // A stream died mid-playback (hls.js fatal, element error, dead session).
   // Park the restart queue — its targets describe a broken pipeline — and

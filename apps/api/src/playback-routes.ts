@@ -63,6 +63,14 @@ interface LiveSession {
   audioStreamIndex: number;
   /** Codec of the selected audio stream — drives REMUX copy-vs-encode. */
   audioCodec: string | null;
+  /**
+   * Raw codec name of the selected audio stream, untouched by
+   * audioDecodeBroken — audioCodec above is nulled by remuxAudioCodec() once
+   * the stream is flagged broken, so restartTranscode's every-restart
+   * recheck must resolve from this instead: resolving from the already-
+   * nulled audioCodec would keep it null forever even after the flag clears.
+   */
+  sourceAudioCodec: string | null;
   /** REMUX only: the live fragmented-MP4 output + where its timeline starts. */
   remux: { outFile: string; startMs: number; patched: boolean } | null;
   /**
@@ -654,17 +662,20 @@ async function restartTranscode(
       where: { id: sessionId },
       include: { mediaFile: { select: { audioDecodeBroken: true } } },
     });
-    // live.audioCodec is cached from whenever this session's ffmpeg last
-    // started — a concurrent session on the same file (watch-party) can flip
-    // audioDecodeBroken after that. Re-check on every restart instead of
-    // trusting the cache, or a seek/quality/hw-fallback respawn can copy the
-    // now-known-broken bitstream straight through.
+    // A concurrent session on the same file (watch-party) can flip
+    // audioDecodeBroken after this session last spawned — re-check on every
+    // restart instead of trusting the cached resolved audioCodec, or a
+    // seek/quality/hw-fallback respawn can copy the now-known-broken
+    // bitstream straight through. Must resolve from sourceAudioCodec (the
+    // raw codec name), not live.audioCodec — the latter is already the
+    // *resolved* value and gets nulled once broken, so re-resolving from it
+    // would keep it null forever even after the flag clears.
     const audioCodec = isRemux
       ? remuxAudioCodec({
-          audioCodec: live.audioCodec,
+          audioCodec: live.sourceAudioCodec,
           audioKnownBroken: playbackSessionRow.mediaFile.audioDecodeBroken,
         })
-      : live.audioCodec;
+      : live.sourceAudioCodec;
     // Resume via a piped stub (header + tail from the exact keyframe cluster):
     // the container seek table lies (Cue → different keyframe than the bitstream
     // probe), so -ss on mkv would start at a different media time than startMs
@@ -927,6 +938,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       subtitleBurnIn: candidate.subtitleBurnIn,
       audioStreamIndex: audioIndex,
       audioCodec: remuxAudioCodec(candidate.input),
+      sourceAudioCodec: candidate.input.audioCodec,
       remux: isRemux ? { outFile, startMs, patched: false } : null,
       hwaccel,
     });
@@ -1238,7 +1250,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
 
       const restarted = await restartTranscode(
         req.params.sessionId,
-        { ...live, outDir: newOutDir, audioStreamIndex: audioIndex, audioCodec },
+        { ...live, outDir: newOutDir, audioStreamIndex: audioIndex, audioCodec, sourceAudioCodec: requestedStream.codec },
         targetMs,
       );
       if ("cancelled" in restarted) {
@@ -1261,6 +1273,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         currentTranscodeJobId: jobId,
         audioStreamIndex: audioIndex,
         audioCodec,
+        sourceAudioCodec: requestedStream.codec,
         remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
       });
 
@@ -1292,6 +1305,20 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     },
     async (req, reply) => {
       const live = liveSessions.get(req.params.sessionId);
+      // Reserve the first-transcode spawn slot right here, synchronously,
+      // before any await. Everything below (session lookup, mediaFile
+      // update, buildCandidateInput) is async, so two /quality calls close
+      // together both see `live` undefined and both reach the has()/add()
+      // check further down before either has set it — reserving late let
+      // both slip past and spawn ffmpeg twice. Released on every exit path
+      // below (404, DIRECT_PLAY, and the spawn block's own finally).
+      const reservingSpawn = !live;
+      if (reservingSpawn) {
+        if (pendingQualitySpawns.has(req.params.sessionId)) {
+          return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
+        }
+        pendingQualitySpawns.add(req.params.sessionId);
+      }
       const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
 
       // The client's <video> element reported the direct-play stream itself
@@ -1361,7 +1388,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const audioStreams = mediaFile.streams.filter((s) => s.type === "AUDIO");
       const absoluteAudio = live ? audioStreams[live.audioStreamIndex]?.streamIndex : undefined;
       const candidate = await buildCandidateInput(session.mediaFileId, undefined, absoluteAudio);
-      if (!candidate) return reply.code(404).send({ error: "media file not found" });
+      if (!candidate) {
+        if (reservingSpawn) pendingQualitySpawns.delete(req.params.sessionId);
+        return reply.code(404).send({ error: "media file not found" });
+      }
 
       const targetMs = Math.min(req.body.positionMs, Math.max(0, candidate.durationMs - 1000));
       // Decide on the raw merged profile (never the normalized one): a reset
@@ -1379,6 +1409,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           where: { id: session.id },
           data: { method: "DIRECT_PLAY", positionMs: targetMs },
         });
+        if (reservingSpawn) pendingQualitySpawns.delete(req.params.sessionId);
         return {
           restarted: true,
           method: "DIRECT_PLAY" as const,
@@ -1396,10 +1427,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // first ffmpeg (mirror of /start's spawn block; the shared helper keeps
       // the job recording identical).
       if (!live) {
-        if (pendingQualitySpawns.has(req.params.sessionId)) {
-          return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
-        }
-        pendingQualitySpawns.add(req.params.sessionId);
+        // Already reserved above, right after reading `live`.
         try {
           const hwaccel = await getHwaccel();
           if (!(await acquireTranscodeSlot())) {
@@ -1522,6 +1550,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
             subtitleBurnIn: candidate.subtitleBurnIn,
             audioStreamIndex: candidate.relativeAudioIndex,
             audioCodec: remuxAudioCodec(candidate.input),
+            sourceAudioCodec: candidate.input.audioCodec,
             remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
             hwaccel,
           });

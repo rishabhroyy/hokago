@@ -1514,6 +1514,22 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         // anymore; discard rather than clobber whatever's playing now.
         if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
         if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
+        // restarted:false with a non-DIRECT_PLAY method means a concurrent
+        // request already moved this session off DIRECT_PLAY (e.g. its own
+        // in-flight decode-fallback, or an unrelated quality change) before
+        // this report's session read landed — the file is already fixed,
+        // not unrecoverable.
+        if (!data?.restarted && data?.method && data.method !== "DIRECT_PLAY") {
+          return {
+            ok: true,
+            restarted: true,
+            authoritative: true,
+            method: data.method,
+            segmentFrom: data.segmentFrom,
+            playlistUrl: data.playlistUrl,
+            streamUrl: data.streamUrl,
+          };
+        }
         if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
         return {
           ok: true,
@@ -1576,6 +1592,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     if (method === "DIRECT_PLAY") {
       // The src is the file itself and unchanged — a nonce or src reload is a
       // no-op, so remount the player; the pending seek resumes the position.
+      // retryPlayback reuses the session (no /playback/start), which is the
+      // only other place this ref resets — without resetting it here too, a
+      // failed one-shot fallback attempt permanently blocks every future
+      // decode-error escalation for this session, even on a deliberate
+      // user-initiated retry.
+      audioDecodeFallbackTriedRef.current = false;
       pendingSeekRef.current = { targetSec: targetMs / 1000, nonce: srcNonceRef.current };
       setKeyNonce((n) => n + 1);
       return;

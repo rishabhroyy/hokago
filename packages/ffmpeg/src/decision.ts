@@ -32,7 +32,9 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
   // remux-fixable, everything else here is not.
   const containerOk = profile.supportedContainers.includes(input.container);
   const videoCodecOk = input.videoCodec !== null && profile.supportedVideoCodecs.includes(input.videoCodec);
-  const audioCodecOk = input.audioCodec === null || profile.supportedAudioCodecs.includes(input.audioCodec);
+  const audioCodecOk =
+    !input.audioKnownBroken &&
+    (input.audioCodec === null || profile.supportedAudioCodecs.includes(input.audioCodec));
   const widthOk = profile.maxWidth === undefined || input.width === null || input.width <= profile.maxWidth;
   const heightOk = profile.maxHeight === undefined || input.height === null || input.height <= profile.maxHeight;
   const bitrateOk =
@@ -45,7 +47,13 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
   const burnRequired = input.subtitleRequiresBurnIn || profile.subtitleMode === "burn";
 
   if (!videoCodecOk) reasons.push(`video codec ${input.videoCodec ?? "unknown"} unsupported by profile`);
-  if (!audioCodecOk) reasons.push(`audio codec ${input.audioCodec ?? "unknown"} unsupported by profile`);
+  if (!audioCodecOk) {
+    reasons.push(
+      input.audioKnownBroken
+        ? `audio codec ${input.audioCodec ?? "unknown"} previously reported undecodable — forcing re-encode`
+        : `audio codec ${input.audioCodec ?? "unknown"} unsupported by profile`,
+    );
+  }
   if (!widthOk || !heightOk) reasons.push(`resolution ${input.width}x${input.height} exceeds profile max`);
   if (!bitrateOk) reasons.push(`bitrate ${input.bitrateKbps}kbps exceeds profile max`);
   if (!hdrOk) reasons.push("HDR source not supported by profile — needs tone map");

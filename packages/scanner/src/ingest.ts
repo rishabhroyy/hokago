@@ -490,6 +490,12 @@ async function ingestLeafItem(
   // of importing the file as a brand-new item; the husk item just created has
   // enqueued nothing yet and is removed. A twin whose file is still on disk is
   // a legitimate duplicate — copies stay separate items.
+  // Content-identical to the twin by definition (hash match) — feeds the
+  // audioDecodeBroken carry-over below: `unchanged` is always false here
+  // (it was computed against the pre-steal, still-null `existingFile`), but
+  // a moved/copied file's bytes are provably the same as the twin's, so a
+  // sticky broken-audio flag describing those bytes must survive the move.
+  let twinMatched = false;
   if (!existingFile) {
     const twin = await db.mediaFile.findFirst({
       where: { hash, mediaItem: { libraryId }, path: { not: file.path } },
@@ -503,6 +509,7 @@ async function ingestLeafItem(
       mediaItemId = twin.mediaItemId;
       oldParentId = twin.mediaItem.parentId;
       if (huskItemId) await db.mediaItem.delete({ where: { id: huskItemId } });
+      twinMatched = true;
     }
   }
 
@@ -527,6 +534,15 @@ async function ingestLeafItem(
           bitrate: probe.bitrate,
           probedAt: new Date(),
           probeFailed: false,
+          // A prior audioDecodeBroken flag describes the OLD bytes at this
+          // path — only clear it when the content itself changed (re-download,
+          // re-rip). Gated on the hash, not `unchanged` (size+mtime): a
+          // same-path mtime touch with byte-identical content (rsync without
+          // -a/--checksum, backup tools rewriting mtime) still recomputes a
+          // matching hash and must not spuriously clear the flag. Also not
+          // for a twin-matched move/copy (identical bytes proven by hash, so
+          // the old flag still applies).
+          ...(hash === existing?.hash || twinMatched ? {} : { audioDecodeBroken: false }),
         }
       : unchanged
         ? {
@@ -552,6 +568,14 @@ async function ingestLeafItem(
             bitrate: null,
             probedAt: null,
             probeFailed: true,
+            // Size/mtime changed but the recomputed hash still matches (or a
+            // twin-matched move/copy) — the bytes are provably the same, so
+            // the flag still applies regardless of whether this pass could
+            // probe them. Only a genuine content change (hash mismatch)
+            // clears it; the old flag described bytes that are provably
+            // gone then, so it can't stay stuck forever until a later scan
+            // finally probes this file again.
+            ...(hash === existing?.hash || twinMatched ? {} : { audioDecodeBroken: false }),
           };
 
   let mediaFileId: string;

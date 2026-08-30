@@ -725,6 +725,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           return;
         }
         setStart(data);
+        audioDecodeFallbackTriedRef.current = false;
         setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
         // Party members link their session so heartbeats flow into the
         // member list (positions + liveness) and the server knows the
@@ -866,6 +867,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     message?: string;
     restarted?: boolean;
     method?: PlaybackStart["method"];
+    // Set only for a response that must land even if superseded (the
+    // audio-decode fallback's DIRECT_PLAY -> REMUX commit) — a plain quality
+    // switch's `method` is set on every restarted response, unchanged or
+    // not, and must NOT get this treatment or a stale one clobbers a newer
+    // in-flight switch.
+    authoritative?: boolean;
     segmentFrom?: number | null;
     actualStartMs?: number | null;
     playlistUrl?: string | null;
@@ -904,7 +911,16 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     let requeueDelay: number | null = null;
     try {
       const outcome = await req.run();
-      if (restartLatestRef.current !== null) {
+      const superseded = restartLatestRef.current !== null;
+      if (superseded && outcome.authoritative) {
+        // A newer request queued mid-flight, but this response also carries
+        // a server-committed method transition (e.g. the audio-decode
+        // fallback's DIRECT_PLAY -> REMUX) — that's an authoritative fact,
+        // not a stale position, and dropping it leaves the client assuming
+        // the old method forever while the server (and the queued request
+        // about to run) have already moved on.
+        req.apply(outcome);
+      } else if (superseded) {
         // A newer request was committed mid-flight — this response describes
         // an intermediate server state that the newer request already
         // superseded. Never apply it (a transient wrong rebase); pump the
@@ -1466,15 +1482,104 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     saveAudioPref({ streamIndex: null, id: detail.id, lang: detail.language || null, title: detail.label || null });
   }, []);
 
+  // MEDIA_ERR_DECODE (3) on a DIRECT_PLAY stream means the file itself is
+  // undecodable (e.g. malformed HE-AAC signaling from a bad source rip) —
+  // not a transient network hiccup, and direct play never transforms a byte,
+  // so retrying it fails identically forever. One escalation attempt per
+  // session: report it to the server (persists past DIRECT_PLAY for this
+  // file going forward) and let it spawn a REMUX with audio forced to
+  // re-encode, exactly like a quality-switch's DIRECT_PLAY->TRANSCODE
+  // fallback.
+  const audioDecodeFallbackTriedRef = useRef(false);
+  const tryAudioDecodeFallback = useCallback((): boolean => {
+    const session = startRef.current;
+    if (!session || session.method !== "DIRECT_PLAY" || audioDecodeFallbackTriedRef.current) return false;
+    audioDecodeFallbackTriedRef.current = true;
+    const sessionId = session.sessionId;
+    const positionMs = Math.round(
+      (playerRef.current && Number.isFinite(playerRef.current.currentTime) ? playerRef.current.currentTime : 0) * 1000 +
+        timelineOffsetRef.current,
+    );
+    commitRestart({
+      attempt: 0,
+      maxRetries: 1,
+      targetMs: positionMs,
+      run: async () => {
+        const { data, response } = await api.POST("/playback/{sessionId}/quality", {
+          params: { path: { sessionId } },
+          body: { positionMs, reportAudioDecodeError: true },
+        });
+        // Session moved on (user navigated to a different title) while this
+        // was in flight — its outcome describes a session nobody's watching
+        // anymore; discard rather than clobber whatever's playing now.
+        if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
+        if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
+        // restarted:false with a non-DIRECT_PLAY method means a concurrent
+        // request already moved this session off DIRECT_PLAY (e.g. its own
+        // in-flight decode-fallback, or an unrelated quality change) before
+        // this report's session read landed — the file is already fixed,
+        // not unrecoverable.
+        if (!data?.restarted && data?.method && data.method !== "DIRECT_PLAY") {
+          return {
+            ok: true,
+            restarted: true,
+            authoritative: true,
+            method: data.method,
+            segmentFrom: data.segmentFrom,
+            actualStartMs: data.actualStartMs,
+            playlistUrl: data.playlistUrl,
+            streamUrl: data.streamUrl,
+          };
+        }
+        if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
+        return {
+          ok: true,
+          restarted: true,
+          authoritative: true,
+          method: data.method,
+          segmentFrom: data.segmentFrom,
+          actualStartMs: data.actualStartMs,
+          playlistUrl: data.playlistUrl,
+          streamUrl: data.streamUrl,
+        };
+      },
+      apply: (outcome) => {
+        if (!outcome.restarted || !startRef.current) return;
+        setPlayerError(null);
+        const method = outcome.method ?? startRef.current.method;
+        setStart((prev) => (prev ? { ...prev, method, playlistUrl: outcome.playlistUrl ?? null, streamUrl: outcome.streamUrl ?? null } : prev));
+        setKeyNonce((n) => n + 1);
+        userPausedRef.current = false;
+        bumpSrcNonce();
+        applyRestart(method, outcome.segmentFrom ?? null, outcome.actualStartMs ?? null, positionMs);
+      },
+      onFail: (message) => setPlayerError(message),
+    });
+    return true;
+  }, [commitRestart, applyRestart, bumpSrcNonce]);
+
   // A stream died mid-playback (hls.js fatal, element error, dead session).
   // Park the restart queue — its targets describe a broken pipeline — and
   // surface a recovery card; the player stays mounted underneath so Try again
   // reloads against the same session instead of starting from scratch.
-  const handleMediaError = useCallback((detail: MediaErrorDetail) => {
-    restartLatestRef.current = null;
-    pendingSeekRef.current = null;
-    setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);
-  }, []);
+  const handleMediaError = useCallback(
+    (detail: MediaErrorDetail) => {
+      if (detail.code === 3) {
+        if (tryAudioDecodeFallback()) return;
+        // Fallback already fired once for this session and a restart is
+        // still in flight (a stray duplicate decode-error event, e.g. from
+        // the old element mid-teardown) — let it finish instead of racing
+        // it with a stale error card. pumpRestart clears restartLatestRef
+        // the moment it dequeues a request (before running it), so a queued
+        // request in flight shows up as restartBusyRef, not this ref.
+        if (restartBusyRef.current || restartLatestRef.current !== null) return;
+      }
+      restartLatestRef.current = null;
+      pendingSeekRef.current = null;
+      setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);
+    },
+    [tryAudioDecodeFallback],
+  );
 
   const retryPlayback = useCallback(() => {
     setPlayerError(null);
@@ -1488,6 +1593,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     if (method === "DIRECT_PLAY") {
       // The src is the file itself and unchanged — a nonce or src reload is a
       // no-op, so remount the player; the pending seek resumes the position.
+      // retryPlayback reuses the session (no /playback/start), which is the
+      // only other place this ref resets — without resetting it here too, a
+      // failed one-shot fallback attempt permanently blocks every future
+      // decode-error escalation for this session, even on a deliberate
+      // user-initiated retry.
+      audioDecodeFallbackTriedRef.current = false;
       pendingSeekRef.current = { targetSec: targetMs / 1000, nonce: srcNonceRef.current };
       setKeyNonce((n) => n + 1);
       return;

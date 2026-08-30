@@ -603,6 +603,12 @@ model MediaFile {
   bitrate      Int?
   probedAt     DateTime?
   probeFailed  Boolean   @default(false)
+  /// Client reported the direct-play stream as undecodable (e.g. malformed
+  /// HE-AAC signaling a bad source rip left behind) — codec name alone can't
+  /// catch this, ffprobe doesn't flag it as a hard failure. Sticky so every
+  /// future session skips straight to REMUX with audio forced to re-encode
+  /// instead of repeating the same broken direct play.
+  audioDecodeBroken Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

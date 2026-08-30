@@ -1316,8 +1316,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // update, buildCandidateInput) is async, so two /quality calls close
       // together both see `live` undefined and both reach the has()/add()
       // check further down before either has set it — reserving late let
-      // both slip past and spawn ffmpeg twice. Released on every exit path
-      // below (404, DIRECT_PLAY, and the spawn block's own finally).
+      // both slip past and spawn ffmpeg twice. Guaranteed release via the
+      // outer try/finally below, not scattered per-exit deletes — a throw
+      // from any of the awaits between here and the spawn block (session
+      // lookup, mediaFile update, buildCandidateInput) used to leak the
+      // reservation forever, permanently 503ing every future /quality call
+      // for this session.
       const reservingSpawn = !live;
       if (reservingSpawn) {
         if (pendingQualitySpawns.has(req.params.sessionId)) {
@@ -1325,6 +1329,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         }
         pendingQualitySpawns.add(req.params.sessionId);
       }
+      try {
       const session = await db.playbackSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
 
       // The client's <video> element reported the direct-play stream itself
@@ -1403,7 +1408,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const absoluteAudio = live ? audioStreams[live.audioStreamIndex]?.streamIndex : undefined;
       const candidate = await buildCandidateInput(session.mediaFileId, undefined, absoluteAudio);
       if (!candidate) {
-        if (reservingSpawn) pendingQualitySpawns.delete(req.params.sessionId);
         return reply.code(404).send({ error: "media file not found" });
       }
 
@@ -1423,7 +1427,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           where: { id: session.id },
           data: { method: "DIRECT_PLAY", positionMs: targetMs },
         });
-        if (reservingSpawn) pendingQualitySpawns.delete(req.params.sessionId);
         return {
           restarted: true,
           method: "DIRECT_PLAY" as const,
@@ -1441,8 +1444,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // first ffmpeg (mirror of /start's spawn block; the shared helper keeps
       // the job recording identical).
       if (!live) {
-        // Already reserved above, right after reading `live`.
-        try {
+        // Already reserved above, right after reading `live`; released by
+        // the outer try/finally.
+        {
           const hwaccel = await getHwaccel();
           if (!(await acquireTranscodeSlot())) {
             return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
@@ -1578,8 +1582,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
             playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
             streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
           };
-        } finally {
-          pendingQualitySpawns.delete(req.params.sessionId);
         }
       }
 
@@ -1637,6 +1639,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         playlistUrl: newMethod === "TRANSCODE" ? `/playback/${req.params.sessionId}/playlist.m3u8` : null,
         streamUrl: newMethod === "REMUX" ? `/playback/${req.params.sessionId}/stream.mp4` : null,
       };
+      } finally {
+        if (reservingSpawn) pendingQualitySpawns.delete(req.params.sessionId);
+      }
     },
   );
 }

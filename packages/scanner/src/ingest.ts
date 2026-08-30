@@ -536,10 +536,13 @@ async function ingestLeafItem(
           probeFailed: false,
           // A prior audioDecodeBroken flag describes the OLD bytes at this
           // path — only clear it when the content itself changed (re-download,
-          // re-rip), not when the gate just re-probed an unchanged file to
-          // heal a missing/failed probe, and not for a twin-matched move/copy
-          // (identical bytes proven by hash, so the old flag still applies).
-          ...(unchanged || twinMatched ? {} : { audioDecodeBroken: false }),
+          // re-rip). Gated on the hash, not `unchanged` (size+mtime): a
+          // same-path mtime touch with byte-identical content (rsync without
+          // -a/--checksum, backup tools rewriting mtime) still recomputes a
+          // matching hash and must not spuriously clear the flag. Also not
+          // for a twin-matched move/copy (identical bytes proven by hash, so
+          // the old flag still applies).
+          ...(hash === existing?.hash || twinMatched ? {} : { audioDecodeBroken: false }),
         }
       : unchanged
         ? {
@@ -565,14 +568,14 @@ async function ingestLeafItem(
             bitrate: null,
             probedAt: null,
             probeFailed: true,
-            // Size/mtime changed (content changed) even though this probe
-            // failed (e.g. file locked mid-move) — the old flag described
-            // bytes that are provably gone now, so it can't stay stuck
-            // forever until a later scan finally probes this file again.
-            // Except a twin-matched move/copy: the hash match already proves
-            // the bytes are identical to the twin's, so the flag still
-            // applies regardless of whether this pass could probe them.
-            ...(twinMatched ? {} : { audioDecodeBroken: false }),
+            // Size/mtime changed but the recomputed hash still matches (or a
+            // twin-matched move/copy) — the bytes are provably the same, so
+            // the flag still applies regardless of whether this pass could
+            // probe them. Only a genuine content change (hash mismatch)
+            // clears it; the old flag described bytes that are provably
+            // gone then, so it can't stay stuck forever until a later scan
+            // finally probes this file again.
+            ...(hash === existing?.hash || twinMatched ? {} : { audioDecodeBroken: false }),
           };
 
   let mediaFileId: string;

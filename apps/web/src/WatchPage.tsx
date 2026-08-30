@@ -1490,6 +1490,17 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // file going forward) and let it spawn a REMUX with audio forced to
   // re-encode, exactly like a quality-switch's DIRECT_PLAY->TRANSCODE
   // fallback.
+  //
+  // Firefox never actually reports 3 for this: a codec-setup failure this
+  // early (e.g. AppleATDecoder rejecting a malformed AAC AudioSpecificConfig)
+  // happens before its resource-selection algorithm reaches HAVE_METADATA,
+  // so it lands on MEDIA_ERR_SRC_NOT_SUPPORTED (4) instead, with "could not
+  // be decoded" only in the message text — this fallback silently never ran
+  // in Firefox without also checking 4. Safe to treat 4 the same as 3 here:
+  // the server only chose DIRECT_PLAY because the container/codecs already
+  // matched the device profile, so the browser disagreeing (via either code)
+  // on a DIRECT_PLAY session means the bytes are broken, not that the format
+  // is genuinely unsupported.
   const audioDecodeFallbackTriedRef = useRef(false);
   const tryAudioDecodeFallback = useCallback((): boolean => {
     const session = startRef.current;
@@ -1564,7 +1575,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // reloads against the same session instead of starting from scratch.
   const handleMediaError = useCallback(
     (detail: MediaErrorDetail) => {
-      if (detail.code === 3) {
+      if (detail.code === 3 || detail.code === 4) {
         if (tryAudioDecodeFallback()) return;
         // Fallback already fired once for this session and a restart is
         // still in flight (a stray duplicate decode-error event, e.g. from

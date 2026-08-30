@@ -527,6 +527,11 @@ async function ingestLeafItem(
           bitrate: probe.bitrate,
           probedAt: new Date(),
           probeFailed: false,
+          // A prior audioDecodeBroken flag describes the OLD bytes at this
+          // path — only clear it when the content itself changed (re-download,
+          // re-rip), not when the gate just re-probed an unchanged file to
+          // heal a missing/failed probe.
+          ...(unchanged ? {} : { audioDecodeBroken: false }),
         }
       : unchanged
         ? {

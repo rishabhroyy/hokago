@@ -1186,9 +1186,13 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         include: { streams: true },
       });
       const audioIndex = relativeAudioIndex(mediaFile.streams, req.body.audioStreamIndex);
-      const audioCodec = mediaFile.streams.find(
-        (s) => s.type === "AUDIO" && s.streamIndex === req.body.audioStreamIndex,
-      )?.codec ?? null;
+      // remuxAudioCodec-equivalent guard: a file already flagged broken must
+      // never take buildRemuxArgs' copy-if-MP4-safe path on the new track
+      // either, or it reproduces the same undecodable bitstream.
+      const audioCodec = mediaFile.audioDecodeBroken
+        ? null
+        : mediaFile.streams.find((s) => s.type === "AUDIO" && s.streamIndex === req.body.audioStreamIndex)?.codec ??
+          null;
 
       const targetMs = Math.min(req.body.positionMs, Math.max(0, live.mediaFile.durationMs - 1000));
       const targetSegment = segmentFor(targetMs, live.mediaFile.durationMs);
@@ -1268,7 +1272,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // future session for this file — a REMUX (video copy, audio forced to
       // re-encode via remuxAudioCodec) actually fixes it; direct play never
       // transforms a byte and would fail identically forever.
-      if (req.body.reportAudioDecodeError) {
+      // Only trust this from a session that's actually on DIRECT_PLAY — a
+      // client misreporting from a REMUX/TRANSCODE session (already
+      // re-encoding audio) would otherwise flip the sticky flag on bytes
+      // that were never the problem.
+      if (req.body.reportAudioDecodeError && session.method === "DIRECT_PLAY") {
         await db.mediaFile.update({ where: { id: session.mediaFileId }, data: { audioDecodeBroken: true } });
       }
 

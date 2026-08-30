@@ -1494,6 +1494,10 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
           params: { path: { sessionId } },
           body: { positionMs, reportAudioDecodeError: true },
         });
+        // Session moved on (user navigated to a different title) while this
+        // was in flight — its outcome describes a session nobody's watching
+        // anymore; discard rather than clobber whatever's playing now.
+        if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
         if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
         if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
         return {

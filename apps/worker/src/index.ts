@@ -958,8 +958,11 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
   const cleanup = () => rm(staging, { recursive: true, force: true }).catch(() => {});
   const markFailed = async (err: unknown) => {
     await cleanup();
+    // Tail, not head: the message is "<cmd> exited <code>: <stderr tail>" —
+    // the actual failure reason is at the end, after any startup noise
+    // (tput warnings, etc). Slicing from the front cut it off mid-sentence.
     await db.anicliDownload
-      .update({ where: { id: rec.id }, data: { status: "FAILED", error: String(err).slice(0, 1000) } })
+      .update({ where: { id: rec.id }, data: { status: "FAILED", error: String(err).slice(-1000) } })
       .catch(() => {});
   };
 
@@ -1014,6 +1017,11 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
+          // ani-cli calls `tput cuu1`/`tput el`/`tput sc` unconditionally
+          // before playback, even in -d download mode — with no tty and no
+          // TERM, that's 3 "No value for $TERM" lines on every single run,
+          // eating into the bounded stderr tail we surface on failure.
+          TERM: process.env.TERM || "dumb",
           ANI_CLI_DOWNLOAD_DIR: staging,
           ANI_CLI_QUALITY: "best",
           CUDA_VISIBLE_DEVICES: "",

@@ -96,6 +96,10 @@ export const MediaItemDetail = MediaCard.extend({
   movies: z.array(EpisodeCard),
   /** Primary file's audio streams — empty for SERIES/SEASON (no file of their own). */
   audioTracks: z.array(AudioTrackInfo),
+  /** Video bitrate in kbps — primary file for MOVIE/EPISODE, mean across episode files for SERIES. Null when unprobed. Display number only — see bitrateQuality for the verdict. */
+  bitrateKbps: z.number().int().nullable(),
+  /** Codec-aware quality verdict: primary file's tier for MOVIE/EPISODE, mode across episode tiers for SERIES. Null when unprobed. */
+  bitrateQuality: z.enum(["poor", "ok", "good"]).nullable(),
   /** Watch summary for the requesting profile — null when no profileId was passed. */
   watch: MediaItemWatch.nullable().default(null),
   /** Identity rows — what this item is currently matched to, for the "fix match" UI. */

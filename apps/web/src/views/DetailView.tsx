@@ -25,6 +25,16 @@ function trackLabel(track: { streamIndex: number; lang: string | null }): string
   return track.lang ? track.lang.toUpperCase() : `Track ${track.streamIndex}`;
 }
 
+// Tone follows the server's codec-aware bitrateQuality verdict, not raw
+// kbps — a proper HEVC/BD encode and a bloated h264 web-rip can carry the
+// same number but very different quality (see classifyBitrateQuality in
+// apps/api/src/browse-routes.ts for the calibration).
+const BITRATE_TONE_CLASS: Record<NonNullable<MediaItemDetail["bitrateQuality"]>, string> = {
+  poor: "bg-red-500/10 text-red-600 ring-red-500/25 dark:text-red-400",
+  ok: "bg-amber-500/10 text-amber-700 ring-amber-500/25 dark:text-amber-400",
+  good: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:text-emerald-400",
+};
+
 /** Overviews arrive as provider HTML (<i>, <b>, <a>, <br>…) — sanitized and rendered for real. */
 function Overview({ text }: { text: string }) {
   return (
@@ -420,6 +430,14 @@ export function DetailView({ itemId }: { itemId: string }) {
                 )}
                 {item.kind === "SERIES" && hasEpisodes && (
                   <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">{item.episodes.length} episodes</span>
+                )}
+                {item.bitrateKbps != null && item.bitrateQuality != null && (
+                  <span
+                    className={`rounded-full px-3 py-1 font-mono ring-1 ${BITRATE_TONE_CLASS[item.bitrateQuality]}`}
+                    title={item.kind === "SERIES" ? "Average video bitrate across episodes" : "Video bitrate"}
+                  >
+                    {(item.bitrateKbps / 1000).toFixed(1)} Mbps
+                  </span>
                 )}
                 {item.kind === "SERIES" && hasEpisodes && watchedCount > 0 && (
                   <span className="rounded-full bg-wii-deep/[.08] px-3 py-1 font-semibold text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2">

@@ -29,13 +29,58 @@ const cardSelect = {
   _count: { select: { children: true } },
 } as const;
 
+const fileWithVideoCodecSelect = {
+  select: {
+    id: true,
+    bitrate: true,
+    streams: { where: { type: "VIDEO" as const }, select: { codec: true }, take: 1 },
+  },
+  take: 1,
+} as const;
+
 const episodeSelect = {
   ...cardSelect,
+  files: fileWithVideoCodecSelect,
   seasonNumber: true,
   episodeNumber: true,
   runtimeMs: true,
   extra: true,
 } as const;
+
+type BitrateQuality = "poor" | "ok" | "good";
+
+// Calibrated against this library's own files (2026-09-03 audit in
+// hokago-dev): AnimePahe/ani-cli h264 1080p rips measured 600-1100 kbps
+// ("poor"); real WEB-DL scene h264 releases run 3,000-6,000+ kbps ("good" —
+// e.g. the KonoSuba movie measured 8,122 kbps). HEVC is far more efficient
+// at equal quality: a proper BD/scene x265 release (K-On [AniDL]) measured
+// 1,233 kbps overall and is genuinely "good", not "poor" — a codec-blind
+// flat kbps cutoff mislabels it, hence the branch below instead of one scale.
+function classifyBitrateQuality(codec: string | null, kbps: number): BitrateQuality {
+  const efficient = codec === "hevc" || codec === "av1";
+  const okFloor = efficient ? 600 : 1500;
+  const goodFloor = efficient ? 1200 : 3000;
+  if (kbps < okFloor) return "poor";
+  if (kbps < goodFloor) return "ok";
+  return "good";
+}
+
+function fileBitrateQuality(file: { bitrate: number | null; streams: { codec: string | null }[] } | undefined): BitrateQuality | null {
+  if (!file?.bitrate) return null;
+  return classifyBitrateQuality(file.streams[0]?.codec ?? null, Math.round(file.bitrate / 1000));
+}
+
+// Series have no file of their own — summarize per-episode tiers by mode,
+// ties resolved toward the better tier, rather than averaging raw kbps
+// across (possibly mixed-codec) episodes, which classifyBitrateQuality's
+// codec branch above would make meaningless.
+function modeBitrateQuality(qualities: BitrateQuality[]): BitrateQuality | null {
+  if (qualities.length === 0) return null;
+  const counts = { poor: 0, ok: 0, good: 0 };
+  for (const q of qualities) counts[q]++;
+  if (counts.good >= counts.ok && counts.good >= counts.poor) return "good";
+  return counts.ok >= counts.poor ? "ok" : "poor";
+}
 
 function toCard<
   T extends {
@@ -115,7 +160,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       where: { id: req.params.id },
       include: {
         artwork: { select: { id: true, kind: true, priority: true } },
-        files: { select: { id: true }, take: 1 },
+        files: fileWithVideoCodecSelect,
         externalIds: { select: { provider: true, providerId: true } },
         _count: { select: { children: true } },
         children: { select: cardSelect, orderBy: { sortTitle: "asc" } },
@@ -163,6 +208,23 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
           orderBy: { streamIndex: "asc" },
         })
       : [];
+    // SERIES has no file of its own: bitrateKbps is the mean of its
+    // episodes' file bitrates (display number only — mixed codecs make a
+    // raw average meaningless for a quality verdict, so bitrateQuality is
+    // derived separately, per-episode, below).
+    const episodeBitrates = episodes.map((ep) => ep.files[0]?.bitrate).filter((b): b is number => b != null);
+    const bitrateKbps =
+      item.kind === "SERIES"
+        ? episodeBitrates.length > 0
+          ? Math.round(episodeBitrates.reduce((sum, b) => sum + b, 0) / episodeBitrates.length / 1000)
+          : null
+        : item.files[0]?.bitrate != null
+          ? Math.round(item.files[0].bitrate / 1000)
+          : null;
+    const bitrateQuality =
+      item.kind === "SERIES"
+        ? modeBitrateQuality(episodes.map((ep) => fileBitrateQuality(ep.files[0])).filter((q): q is BitrateQuality => q != null))
+        : fileBitrateQuality(item.files[0]);
 
     // Watch data is per-profile — only load it when the caller passes a
     // profile they own. Everything defaults to "not watched / position 0".
@@ -219,6 +281,8 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
         };
       }),
       audioTracks,
+      bitrateKbps,
+      bitrateQuality,
       watch,
       externalIds: externalIds.map((e) => ({ provider: e.provider, providerId: e.providerId })),
       // A derived franchise is noise on a series detail page when it only

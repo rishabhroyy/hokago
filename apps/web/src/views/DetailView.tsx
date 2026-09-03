@@ -25,6 +25,20 @@ function trackLabel(track: { streamIndex: number; lang: string | null }): string
   return track.lang ? track.lang.toUpperCase() : `Track ${track.streamIndex}`;
 }
 
+// ponytail: flat kbps cutoffs, no resolution awareness (a 5 Mbps 480p rip
+// and a 5 Mbps 1080p rip both read "yellow"). Revisit if that misleads.
+function bitrateTone(kbps: number): "red" | "yellow" | "green" {
+  if (kbps < 2000) return "red";
+  if (kbps < 6000) return "yellow";
+  return "green";
+}
+
+const BITRATE_TONE_CLASS: Record<ReturnType<typeof bitrateTone>, string> = {
+  red: "bg-red-500/10 text-red-600 ring-red-500/25 dark:text-red-400",
+  yellow: "bg-amber-500/10 text-amber-700 ring-amber-500/25 dark:text-amber-400",
+  green: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:text-emerald-400",
+};
+
 /** Overviews arrive as provider HTML (<i>, <b>, <a>, <br>…) — sanitized and rendered for real. */
 function Overview({ text }: { text: string }) {
   return (
@@ -420,6 +434,14 @@ export function DetailView({ itemId }: { itemId: string }) {
                 )}
                 {item.kind === "SERIES" && hasEpisodes && (
                   <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">{item.episodes.length} episodes</span>
+                )}
+                {item.bitrateKbps != null && (
+                  <span
+                    className={`rounded-full px-3 py-1 font-mono ring-1 ${BITRATE_TONE_CLASS[bitrateTone(item.bitrateKbps)]}`}
+                    title={item.kind === "SERIES" ? "Average video bitrate across episodes" : "Video bitrate"}
+                  >
+                    {(item.bitrateKbps / 1000).toFixed(1)} Mbps
+                  </span>
                 )}
                 {item.kind === "SERIES" && hasEpisodes && watchedCount > 0 && (
                   <span className="rounded-full bg-wii-deep/[.08] px-3 py-1 font-semibold text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2">

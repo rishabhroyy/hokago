@@ -31,6 +31,7 @@ const cardSelect = {
 
 const episodeSelect = {
   ...cardSelect,
+  files: { select: { id: true, bitrate: true }, take: 1 },
   seasonNumber: true,
   episodeNumber: true,
   runtimeMs: true,
@@ -115,7 +116,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
       where: { id: req.params.id },
       include: {
         artwork: { select: { id: true, kind: true, priority: true } },
-        files: { select: { id: true }, take: 1 },
+        files: { select: { id: true, bitrate: true }, take: 1 },
         externalIds: { select: { provider: true, providerId: true } },
         _count: { select: { children: true } },
         children: { select: cardSelect, orderBy: { sortTitle: "asc" } },
@@ -163,6 +164,17 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
           orderBy: { streamIndex: "asc" },
         })
       : [];
+    // SERIES has no file of its own — show the mean of its episodes' file
+    // bitrates as the one quality signal in the header pill row.
+    const episodeBitrates = episodes.map((ep) => ep.files[0]?.bitrate).filter((b): b is number => b != null);
+    const bitrateKbps =
+      item.kind === "SERIES"
+        ? episodeBitrates.length > 0
+          ? Math.round(episodeBitrates.reduce((sum, b) => sum + b, 0) / episodeBitrates.length / 1000)
+          : null
+        : item.files[0]?.bitrate != null
+          ? Math.round(item.files[0].bitrate / 1000)
+          : null;
 
     // Watch data is per-profile — only load it when the caller passes a
     // profile they own. Everything defaults to "not watched / position 0".
@@ -219,6 +231,7 @@ export async function registerBrowseRoutes(app: ZodFastifyInstance): Promise<voi
         };
       }),
       audioTracks,
+      bitrateKbps,
       watch,
       externalIds: externalIds.map((e) => ({ provider: e.provider, providerId: e.providerId })),
       // A derived franchise is noise on a series detail page when it only

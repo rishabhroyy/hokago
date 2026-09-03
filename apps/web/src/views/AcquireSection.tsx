@@ -306,7 +306,11 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
                       <span>{fmtBytes(r.bytesWritten)}</span>
                       {r.progress && r.progress.files > 0 && <span>{r.progress.files} file{r.progress.files > 1 ? "s" : ""}</span>}
                     </div>
-                    {r.status === "FAILED" && r.error && <div className="mt-1 truncate text-kicker text-accent">{r.error}</div>}
+                    {r.status === "FAILED" && r.error && (
+                      <div className="mt-1 truncate text-kicker text-accent" title={r.error}>
+                        {r.error}
+                      </div>
+                    )}
                     {active && (
                       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line">
                         <div className="h-full w-1/3 animate-[aniclipulse_1.6s_ease-in-out_infinite] rounded-full bg-wii" />

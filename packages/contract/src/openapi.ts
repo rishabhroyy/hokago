@@ -61,13 +61,18 @@ import {
   ErrorResponse as DownloadErrorResponse,
 } from "./downloads.js";
 import {
-  AnicliSearchQuery,
-  AnicliSearchResponse,
-  AnicliDownloadBody,
-  AnicliDownloadInfo,
-  AnicliParams,
-  ErrorResponse as AnicliErrorResponse,
-} from "./anicli.js";
+  AcquireSearchQuery,
+  AcquireSearchResponse,
+  AcquireDownloadBody,
+  AcquireDownloadInfo,
+  AcquireDownloadParams,
+  AcquireProviderId,
+  AcquireProviderDownloadParams,
+  AcquireProviderRegisterBody,
+  AcquireProviderInfo,
+  AcquireOkResponse,
+  ErrorResponse as AcquireErrorResponse,
+} from "./acquire.js";
 import {
   MetadataSearchQuery,
   MetadataSearchResponse,
@@ -880,57 +885,125 @@ export function buildOpenApiDocument(): OpenAPIObject {
      },
    });
 
-   // ── ani-cli internet acquisition ──────────────────────────────────────
+   // ── Acquisition: built-in ani-cli source ────────────────────────────────
    registry.registerPath({
      method: "post",
-     path: "/anicli/search",
+     path: "/acquire/anicli/search",
      summary: "Search anime titles to download (admin only)",
-     request: { body: json(AnicliSearchQuery) },
+     request: { body: json(AcquireSearchQuery) },
      responses: {
-       200: { description: "Candidate titles", ...json(AnicliSearchResponse) },
-       403: { description: "Admin only", ...json(AnicliErrorResponse) },
+       200: { description: "Candidate titles", ...json(AcquireSearchResponse) },
+       403: { description: "Admin only", ...json(AcquireErrorResponse) },
      },
    });
    registry.registerPath({
      method: "post",
-     path: "/anicli/downloads",
+     path: "/acquire/anicli/downloads",
      summary: "Enqueue an ani-cli download into an ANIME library (admin only)",
-     request: { body: json(AnicliDownloadBody) },
+     request: { body: json(AcquireDownloadBody) },
      responses: {
-       201: { description: "Created — job queued", ...json(AnicliDownloadInfo) },
-       403: { description: "Admin only", ...json(AnicliErrorResponse) },
-       404: { description: "Library not found", ...json(AnicliErrorResponse) },
-       409: { description: "Show already exists on the server (dedup)", ...json(AnicliErrorResponse) },
-       422: { description: "Not an ANIME library / bad episode range", ...json(AnicliErrorResponse) },
-       429: { description: "Too many active downloads", ...json(AnicliErrorResponse) },
-       507: { description: "Insufficient disk space", ...json(AnicliErrorResponse) },
+       201: { description: "Created — job queued", ...json(AcquireDownloadInfo) },
+       403: { description: "Admin only", ...json(AcquireErrorResponse) },
+       404: { description: "Library not found", ...json(AcquireErrorResponse) },
+       409: { description: "Show already exists on the server (dedup)", ...json(AcquireErrorResponse) },
+       422: { description: "Not an ANIME library / bad episode range", ...json(AcquireErrorResponse) },
+       429: { description: "Too many active downloads", ...json(AcquireErrorResponse) },
+       507: { description: "Insufficient disk space", ...json(AcquireErrorResponse) },
      },
    });
    registry.registerPath({
      method: "get",
-     path: "/anicli/downloads",
+     path: "/acquire/anicli/downloads",
      summary: "List the account's ani-cli download jobs",
      request: {},
-     responses: { 200: { description: "OK", ...json(z.array(AnicliDownloadInfo)) } },
+     responses: { 200: { description: "OK", ...json(z.array(AcquireDownloadInfo)) } },
    });
    registry.registerPath({
      method: "get",
-     path: "/anicli/downloads/{id}",
+     path: "/acquire/anicli/downloads/{id}",
      summary: "ani-cli download job status",
-     request: { params: AnicliParams },
+     request: { params: AcquireDownloadParams },
      responses: {
-       200: { description: "OK", ...json(AnicliDownloadInfo) },
-       404: { description: "Job not found", ...json(AnicliErrorResponse) },
+       200: { description: "OK", ...json(AcquireDownloadInfo) },
+       404: { description: "Job not found", ...json(AcquireErrorResponse) },
      },
    });
    registry.registerPath({
      method: "delete",
-     path: "/anicli/downloads/{id}",
+     path: "/acquire/anicli/downloads/{id}",
      summary: "Cancel an ani-cli download (removes queued job + cleans staging)",
-     request: { params: AnicliParams },
+     request: { params: AcquireDownloadParams },
      responses: {
        200: { description: "OK", ...json(RevokedResponse) },
-       404: { description: "Job not found", ...json(AnicliErrorResponse) },
+       404: { description: "Job not found", ...json(AcquireErrorResponse) },
+     },
+   });
+
+   // ── Acquisition: pluggable external providers ───────────────────────────
+   // Any external service can register itself as an additional search/
+   // download source alongside the built-in one above, for the lifetime of
+   // its own process — see acquire-provider-registry.ts.
+   registry.registerPath({
+     method: "get",
+     path: "/acquire/providers",
+     summary: "List currently-registered, live external acquisition providers (admin only)",
+     responses: { 200: { description: "OK", ...json(z.array(AcquireProviderInfo)) } },
+   });
+   registry.registerPath({
+     method: "post",
+     path: "/acquire/providers/{providerId}",
+     summary: "Register (or replace) an external acquisition provider (admin only)",
+     request: { params: AcquireProviderId, body: json(AcquireProviderRegisterBody) },
+     responses: {
+       200: { description: "OK", ...json(AcquireOkResponse) },
+       409: { description: "Reserved provider id", ...json(AcquireErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "delete",
+     path: "/acquire/providers/{providerId}",
+     summary: "Deregister an external acquisition provider (admin only)",
+     request: { params: AcquireProviderId },
+     responses: { 200: { description: "OK", ...json(AcquireOkResponse) } },
+   });
+   registry.registerPath({
+     method: "post",
+     path: "/acquire/{providerId}/search",
+     summary: "Search via a registered external provider (admin only) — forwarded verbatim",
+     request: { params: AcquireProviderId, body: json(AcquireSearchQuery) },
+     responses: {
+       200: { description: "Candidate titles", ...json(AcquireSearchResponse) },
+       404: { description: "Provider not registered/reachable", ...json(AcquireErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "post",
+     path: "/acquire/{providerId}/downloads",
+     summary: "Enqueue a download via a registered external provider (admin only) — forwarded verbatim",
+     request: { params: AcquireProviderId, body: json(AcquireDownloadBody.partial()) },
+     responses: {
+       201: { description: "Created — job queued", ...json(AcquireDownloadInfo) },
+       404: { description: "Provider not registered/reachable", ...json(AcquireErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "get",
+     path: "/acquire/{providerId}/downloads",
+     summary: "List downloads via a registered external provider (admin only)",
+     request: { params: AcquireProviderId },
+     responses: {
+       200: { description: "OK", ...json(z.array(AcquireDownloadInfo)) },
+       404: { description: "Provider not registered/reachable", ...json(AcquireErrorResponse) },
+     },
+   });
+   registry.registerPath({
+     method: "delete",
+     path: "/acquire/{providerId}/downloads/{id}",
+     summary: "Cancel a download via a registered external provider (admin only)",
+     request: { params: AcquireProviderDownloadParams },
+     responses: {
+       200: { description: "OK", ...json(RevokedResponse) },
+       404: { description: "Provider not registered/reachable", ...json(AcquireErrorResponse) },
      },
    });
 

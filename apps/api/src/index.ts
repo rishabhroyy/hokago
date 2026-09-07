@@ -29,7 +29,7 @@ import { registerWatchPartyRoutes, reapStalePartyMembers } from "./watch-party-r
 import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
 import { registerDownloadRoutes, closeDownloadQueue } from "./download-routes.js";
-import { registerAnicliRoutes, closeAnicliQueue } from "./anicli-routes.js";
+import { registerAcquireRoutes, closeAnicliQueue } from "./acquire-routes.js";
 import { registerMetadataRoutes } from "./metadata-routes.js";
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
@@ -136,7 +136,7 @@ await registerWatchStateRoutes(app);
 await registerWatchPartyRoutes(app);
 await registerMetadataRoutes(app);
 await registerDownloadRoutes(app);
-await registerAnicliRoutes(app);
+await registerAcquireRoutes(app);
 await registerStaticRoutes(app);
 // Last: the SPA catch-all — everything the API doesn't own is the web app.
 await registerWebRoutes(app);

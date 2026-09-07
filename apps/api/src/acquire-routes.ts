@@ -5,14 +5,21 @@ import type { MetadataQuery } from "@hokago/metadata";
 import { statfs } from "node:fs/promises";
 import { z } from "zod";
 import {
-  AnicliSearchQuery,
-  AnicliSearchResponse,
-  AnicliDownloadBody,
-  AnicliDownloadInfo,
-  AnicliParams,
+  AcquireSearchQuery,
+  AcquireSearchResponse,
+  AcquireDownloadBody,
+  AcquireDownloadInfo,
+  AcquireDownloadParams,
+  AcquireProviderId,
+  AcquireProviderDownloadParams,
+  AcquireProviderRegisterBody,
+  AcquireProviderInfo,
+  AcquireOkResponse,
+  AcquireProxyBody,
   ErrorResponse,
-} from "@hokago/contract/anicli";
+} from "@hokago/contract/acquire";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
+import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider } from "./acquire-provider-registry.js";
 
 const db = new PrismaClient();
 
@@ -43,6 +50,9 @@ const anilist = new AniListProvider();
 const ACTIVE: ("QUEUED" | "SEARCHING" | "DOWNLOADING" | "IMPORTING")[] = ["QUEUED", "SEARCHING", "DOWNLOADING", "IMPORTING"];
 const ACTIVE_CAP_ACCOUNT = 3;
 const ACTIVE_CAP_GLOBAL = 5;
+// Reserved — the built-in source lives at /acquire/anicli/*, so nothing may
+// register itself under this id and shadow it.
+const RESERVED_PROVIDER_ID = "anicli";
 
 async function requireAdmin(req: { accountId?: string }): Promise<boolean> {
   const acct = await db.account.findUnique({ where: { id: req.accountId! }, select: { isAdmin: true } });
@@ -61,16 +71,16 @@ async function hasFreeSpace(dir: string): Promise<boolean> {
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<void> {
+export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<void> {
   // ── Search ───────────────────────────────────────────────────────────
   // Real title search via AniList (keyless GraphQL, reliable) — NOT ani-cli's
   // Cloudflare-fragile AniDB scrape. The worker later resolves the exact title
   // through ani-cli. Admin-only.
   app.post(
-    "/anicli/search",
+    "/acquire/anicli/search",
     {
       preHandler: app.authenticate,
-      schema: { body: AnicliSearchQuery, response: { 200: AnicliSearchResponse, 403: ErrorResponse } },
+      schema: { body: AcquireSearchQuery, response: { 200: AcquireSearchResponse, 403: ErrorResponse } },
     },
     async (req, reply) => {
       if (!(await requireAdmin(req))) return reply.code(403).send({ error: "admin only" });
@@ -96,10 +106,10 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
 
   // ── Enqueue download ──────────────────────────────────────────────────
   app.post(
-    "/anicli/downloads",
+    "/acquire/anicli/downloads",
     {
       preHandler: app.authenticate,
-      schema: { body: AnicliDownloadBody, response: { 201: AnicliDownloadInfo, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse, 429: ErrorResponse, 507: ErrorResponse } },
+      schema: { body: AcquireDownloadBody, response: { 201: AcquireDownloadInfo, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse, 429: ErrorResponse, 507: ErrorResponse } },
     },
     async (req, reply) => {
       if (!(await requireAdmin(req))) return reply.code(403).send({ error: "admin only" });
@@ -202,8 +212,8 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
 
   // ── List ──────────────────────────────────────────────────────────────
   app.get(
-    "/anicli/downloads",
-    { preHandler: app.authenticate, schema: { response: { 200: z.array(AnicliDownloadInfo) } } },
+    "/acquire/anicli/downloads",
+    { preHandler: app.authenticate, schema: { response: { 200: z.array(AcquireDownloadInfo) } } },
     async (req) => {
       const rows = await db.anicliDownload.findMany({
         where: { accountId: req.accountId },
@@ -216,8 +226,8 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
 
   // ── Get one ───────────────────────────────────────────────────────────
   app.get(
-    "/anicli/downloads/:id",
-    { preHandler: app.authenticate, schema: { params: AnicliParams, response: { 200: AnicliDownloadInfo, 404: ErrorResponse } } },
+    "/acquire/anicli/downloads/:id",
+    { preHandler: app.authenticate, schema: { params: AcquireDownloadParams, response: { 200: AcquireDownloadInfo, 404: ErrorResponse } } },
     async (req, reply) => {
       const row = await db.anicliDownload.findUnique({ where: { id: req.params.id } });
       if (!row || row.accountId !== req.accountId) return reply.code(404).send({ error: "not found" });
@@ -227,8 +237,8 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
 
   // ── Cancel / delete ───────────────────────────────────────────────────
   app.delete(
-    "/anicli/downloads/:id",
-    { preHandler: app.authenticate, schema: { params: AnicliParams, response: { 200: z.object({ revoked: z.boolean() }), 404: ErrorResponse } } },
+    "/acquire/anicli/downloads/:id",
+    { preHandler: app.authenticate, schema: { params: AcquireDownloadParams, response: { 200: z.object({ revoked: z.boolean() }), 404: ErrorResponse } } },
     async (req, reply) => {
       const { id } = req.params;
       const row = await db.anicliDownload.findUnique({ where: { id } });
@@ -251,9 +261,87 @@ export async function registerAnicliRoutes(app: ZodFastifyInstance): Promise<voi
       return { revoked: true };
     },
   );
+
+  // ── Pluggable providers ──────────────────────────────────────────────
+  // Registration is in-memory only (see acquire-provider-registry.ts) — any
+  // external service can offer itself as an additional search/download
+  // source alongside the built-in one above, for the lifetime of its own
+  // process. Nothing here knows or cares what a provider actually is.
+  const adminOnly = { preHandler: [app.authenticate, app.requireAdmin] };
+
+  app.post(
+    "/acquire/providers/:providerId",
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireProviderRegisterBody, response: { 200: AcquireOkResponse, 409: ErrorResponse } } },
+    async (req, reply) => {
+      if (req.params.providerId === RESERVED_PROVIDER_ID) {
+        return reply.code(409).send({ error: `"${RESERVED_PROVIDER_ID}" is a reserved provider id` });
+      }
+      registerProvider(req.params.providerId, req.body);
+      return { ok: true };
+    },
+  );
+
+  app.delete(
+    "/acquire/providers/:providerId",
+    { ...adminOnly, schema: { params: AcquireProviderId, response: { 200: AcquireOkResponse } } },
+    async (req) => {
+      const ok = deregisterProvider(req.params.providerId);
+      return { ok };
+    },
+  );
+
+  app.get(
+    "/acquire/providers",
+    { ...adminOnly, schema: { response: { 200: z.array(AcquireProviderInfo) } } },
+    async () => listHealthyProviders(),
+  );
+
+  // Generic proxy for any registered (non-built-in) provider — forwards
+  // verbatim and relays the status/body back. Fastify prefers the static
+  // /acquire/anicli/* routes above over this parametric one, so the
+  // built-in source is never shadowed.
+  app.post(
+    "/acquire/:providerId/search",
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireProxyBody } },
+    async (req, reply) => {
+      const result = await proxyToProvider(req.params.providerId, "/search", { method: "POST", body: req.body });
+      if (!result) return reply.code(404).send({ error: "provider not found" });
+      return reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.post(
+    "/acquire/:providerId/downloads",
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireProxyBody } },
+    async (req, reply) => {
+      const result = await proxyToProvider(req.params.providerId, "/downloads", { method: "POST", body: req.body });
+      if (!result) return reply.code(404).send({ error: "provider not found" });
+      return reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.get(
+    "/acquire/:providerId/downloads",
+    { ...adminOnly, schema: { params: AcquireProviderId } },
+    async (req, reply) => {
+      const result = await proxyToProvider(req.params.providerId, "/downloads", { method: "GET" });
+      if (!result) return reply.code(404).send({ error: "provider not found" });
+      return reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.delete(
+    "/acquire/:providerId/downloads/:id",
+    { ...adminOnly, schema: { params: AcquireProviderDownloadParams } },
+    async (req, reply) => {
+      const result = await proxyToProvider(req.params.providerId, `/downloads/${req.params.id}`, { method: "DELETE" });
+      if (!result) return reply.code(404).send({ error: "provider not found" });
+      return reply.code(result.status).send(result.body);
+    },
+  );
 }
 
-type AnicliInfo = z.infer<typeof AnicliDownloadInfo>;
+type AnicliInfo = z.infer<typeof AcquireDownloadInfo>;
 type AnicliStatusValue = AnicliInfo["status"];
 
 function toInfo(r: {

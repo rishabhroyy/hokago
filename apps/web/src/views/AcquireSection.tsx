@@ -1,10 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AnicliDownloadInfo, AnicliSearchCandidate } from "@hokago/contract/anicli";
+import type { AcquireDownloadInfo, AcquireSearchCandidate } from "@hokago/contract/acquire";
 import { api } from "../api-client";
 import { adminApi } from "../admin-api";
 import { useWiiSound } from "../ui/useWiiSound";
 import { Icon } from "../ui/icons";
 import { HUE_CLASS, hueFor, iconFor } from "../ui/Tile";
+
+const BUILTIN_PROVIDER = { id: "anicli", label: "ani-cli" };
+
+// The built-in source has its own static routes; anything else is a
+// runtime-registered external provider proxied through /acquire/:id/*. Both
+// shapes exist in the generated client, so callers branch on the id once
+// here instead of scattering the branch across every call site.
+function searchProvider(providerId: string, query: string) {
+  if (providerId === BUILTIN_PROVIDER.id) return api.POST("/acquire/anicli/search", { body: { query } });
+  return api.POST("/acquire/{providerId}/search", { params: { path: { providerId } }, body: { query } });
+}
+
+function listDownloads(providerId: string) {
+  if (providerId === BUILTIN_PROVIDER.id) return api.GET("/acquire/anicli/downloads");
+  return api.GET("/acquire/{providerId}/downloads", { params: { path: { providerId } } });
+}
+
+function createDownload(providerId: string, body: Record<string, unknown>) {
+  if (providerId === BUILTIN_PROVIDER.id) return api.POST("/acquire/anicli/downloads", { body: body as never });
+  return api.POST("/acquire/{providerId}/downloads", { params: { path: { providerId } }, body: body as never });
+}
+
+function cancelDownload(providerId: string, id: string) {
+  if (providerId === BUILTIN_PROVIDER.id) return api.DELETE("/acquire/anicli/downloads/{id}", { params: { path: { id } } });
+  return api.DELETE("/acquire/{providerId}/downloads/{id}", { params: { path: { providerId, id } } });
+}
 
 function fmtBytes(n: number | null): string {
   if (n == null) return "—";
@@ -14,7 +40,7 @@ function fmtBytes(n: number | null): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-const STATUS_LABEL: Record<AnicliDownloadInfo["status"], string> = {
+const STATUS_LABEL: Record<AcquireDownloadInfo["status"], string> = {
   QUEUED: "queued",
   SEARCHING: "searching",
   DOWNLOADING: "downloading",
@@ -24,7 +50,7 @@ const STATUS_LABEL: Record<AnicliDownloadInfo["status"], string> = {
   CANCELLED: "cancelled",
 };
 
-const STATUS_TONE: Record<AnicliDownloadInfo["status"], string> = {
+const STATUS_TONE: Record<AcquireDownloadInfo["status"], string> = {
   QUEUED: "bg-wii/12 text-wii-deep",
   SEARCHING: "bg-wii/12 text-wii-deep",
   DOWNLOADING: "bg-wii/12 text-wii-deep",
@@ -34,9 +60,9 @@ const STATUS_TONE: Record<AnicliDownloadInfo["status"], string> = {
   CANCELLED: "bg-line text-ink-3",
 };
 
-const ACTIVE = new Set<AnicliDownloadInfo["status"]>(["QUEUED", "SEARCHING", "DOWNLOADING", "IMPORTING"]);
+const ACTIVE = new Set<AcquireDownloadInfo["status"]>(["QUEUED", "SEARCHING", "DOWNLOADING", "IMPORTING"]);
 
-function Postertile({ candidate, onPick, picked }: { candidate: AnicliSearchCandidate; onPick: () => void; picked: boolean }) {
+function Postertile({ candidate, onPick, picked }: { candidate: AcquireSearchCandidate; onPick: () => void; picked: boolean }) {
   const s = useWiiSound();
   const hue = hueFor(candidate.title + (candidate.year ?? ""));
   const icon = iconFor(candidate.title + (candidate.year ?? ""));
@@ -66,9 +92,17 @@ function Postertile({ candidate, onPick, picked }: { candidate: AnicliSearchCand
           </span>
         )}
       </div>
-      <div className="flex min-h-[44px] flex-1 items-start gap-1.5 bg-card px-3 py-2.5">
-        <span className="line-clamp-2 text-meta font-bold leading-tight text-ink">{candidate.title}</span>
-        {picked && <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-wii-deep" />}
+      <div className="flex min-h-[44px] flex-1 flex-col gap-1 bg-card px-3 py-2.5">
+        <div className="flex items-start gap-1.5">
+          <span className="line-clamp-2 text-meta font-bold leading-tight text-ink">{candidate.title}</span>
+          {picked && <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-wii-deep" />}
+        </div>
+        {(candidate.size != null || candidate.seeders != null) && (
+          <div className="flex items-center gap-2 font-mono text-kicker font-medium uppercase tracking-[0.08em] text-ink-3">
+            {candidate.size != null && <span>{candidate.size}</span>}
+            {candidate.seeders != null && <span>{candidate.seeders} seeders</span>}
+          </div>
+        )}
       </div>
     </button>
   );
@@ -76,6 +110,8 @@ function Postertile({ candidate, onPick, picked }: { candidate: AnicliSearchCand
 
 export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) => void }) {
   const s = useWiiSound();
+  const [providers, setProviders] = useState<{ id: string; label: string }[]>([BUILTIN_PROVIDER]);
+  const [activeProvider, setActiveProvider] = useState(BUILTIN_PROVIDER.id);
   const [libs, setLibs] = useState<{ id: string; name: string }[]>([]);
   const [lib, setLib] = useState("");
   const [query, setQuery] = useState("");
@@ -83,23 +119,43 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   const [range, setRange] = useState("");
   const [dub, setDub] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
-  const [results, setResults] = useState<AnicliSearchCandidate[]>([]);
+  const [results, setResults] = useState<AcquireSearchCandidate[]>([]);
   const [searching, setSearching] = useState(false);
-  const [rows, setRows] = useState<AnicliDownloadInfo[] | null>(null);
+  const [rows, setRows] = useState<AcquireDownloadInfo[] | null>(null);
 
   const loadLibs = useCallback(async () => {
     const libs = await adminApi.libraries();
     setLibs(libs.filter((l) => l.contentProfile === "ANIME").map((l) => ({ id: l.id, name: l.name })));
   }, []);
 
+  const loadProviders = useCallback(async () => {
+    const { data, error } = await api.GET("/acquire/providers");
+    if (error) return;
+    setProviders([BUILTIN_PROVIDER, ...(data ?? [])]);
+  }, []);
+
   const loadRows = useCallback(async () => {
-    const { data, error } = await api.GET("/anicli/downloads");
+    const { data, error } = await listDownloads(activeProvider);
     if (error) return;
     setRows((data ?? []).map((r) => ({ ...r, createdAt: new Date(r.createdAt!), updatedAt: new Date(r.updatedAt!) })));
-  }, []);
+  }, [activeProvider]);
 
   useEffect(() => {
     void loadLibs();
+    void loadProviders();
+    const id = setInterval(() => void loadProviders(), 10_000);
+    return () => clearInterval(id);
+  }, [loadLibs, loadProviders]);
+
+  // A provider that drops off the live list (its process died, its stack
+  // came down) can't stay the active tab — fall back to the built-in source.
+  useEffect(() => {
+    if (!providers.some((p) => p.id === activeProvider)) setActiveProvider(BUILTIN_PROVIDER.id);
+  }, [providers, activeProvider]);
+
+  useEffect(() => {
+    setResults([]);
+    setPicked(null);
     void loadRows();
     const id = setInterval(() => {
       setRows((prev) => {
@@ -108,13 +164,13 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
       });
     }, 3000);
     return () => clearInterval(id);
-  }, [loadLibs, loadRows]);
+  }, [loadRows]);
 
   const search = async () => {
     if (!query.trim() || searching) return;
     setSearching(true);
     setPicked(null);
-    const { data, error } = await api.POST("/anicli/search", { body: { query: query.trim() } });
+    const { data, error } = await searchProvider(activeProvider, query.trim());
     if (error) {
       toast("search failed — is the provider reachable?", true);
     } else {
@@ -131,7 +187,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     }
   };
 
-  const pick = (c: AnicliSearchCandidate) => {
+  const pick = (c: AcquireSearchCandidate) => {
     setQuery(c.title);
     setPicked(c.title);
     setResults([]);
@@ -146,7 +202,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     if (picked) body.title = picked;
     if (range.trim()) body.episodeRange = range.trim();
     if (dub) body.dub = true;
-    const { data, error } = await api.POST("/anicli/downloads", { body: body as never });
+    const { data, error } = await createDownload(activeProvider, body);
     if (error) {
       toast((error as { error?: string }).error ?? "could not enqueue download", true);
     } else {
@@ -159,7 +215,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   };
 
   const cancel = async (id: string) => {
-    await api.DELETE("/anicli/downloads/{id}", { params: { path: { id } } });
+    await cancelDownload(activeProvider, id);
     void loadRows();
   };
 
@@ -177,8 +233,28 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     <section className="mb-6 rounded-[32px] bg-card p-7 shadow-panel ring-1 ring-line sm:p-9">
       <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="font-display text-section font-bold tracking-[0.01em] text-ink">Download from the internet</h2>
-        <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">ani-cli · admin</span>
+        <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
+          {providers.find((p) => p.id === activeProvider)?.label ?? activeProvider} · admin
+        </span>
       </div>
+
+      {providers.length > 1 && (
+        <div className="mb-4 flex h-11 w-fit items-center rounded-full bg-paper p-1 ring-1 ring-line">
+          {providers.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={audioSeg(activeProvider === p.id)}
+              onClick={() => {
+                s.select();
+                setActiveProvider(p.id);
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2.5">
         <div className="relative min-w-[240px] flex-1">

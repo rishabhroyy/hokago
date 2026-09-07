@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, type Server } from "node:http";
 
-import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider } from "./acquire-provider-registry.js";
+import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider, checkRegisterKey } from "./acquire-provider-registry.js";
 
 async function startServer(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void): Promise<{ baseUrl: string; server: Server }> {
   const server = createServer(handler);
@@ -79,4 +79,16 @@ test("listHealthyProviders never exposes a provider's token", async () => {
 
   deregisterProvider("secret-test");
   await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test("checkRegisterKey: unset env means the feature doesn't exist, independent of the header", () => {
+  assert.equal(checkRegisterKey("anything", undefined), "not-enabled");
+  assert.equal(checkRegisterKey(undefined, undefined), "not-enabled");
+});
+
+test("checkRegisterKey: set env requires an exact header match, nothing else gets in", () => {
+  assert.equal(checkRegisterKey("s3cret", "s3cret"), "ok");
+  assert.equal(checkRegisterKey("wrong", "s3cret"), "unauthorized");
+  assert.equal(checkRegisterKey(undefined, "s3cret"), "unauthorized");
+  assert.equal(checkRegisterKey(["s3cret", "s3cret"], "s3cret"), "unauthorized", "an array header (repeated header) must not coerce into a match");
 });

@@ -7,6 +7,8 @@
  * stops answering drops out on its own within one poll cycle.
  */
 
+import { timingSafeEqual } from "node:crypto";
+
 interface Provider {
   label: string;
   baseUrl: string;
@@ -37,6 +39,30 @@ export function deregisterProvider(id: string): boolean {
 
 export function hasProvider(id: string): boolean {
   return providers.has(id);
+}
+
+/** Constant-time string compare — a naive `===` would leak how many leading bytes matched via timing. */
+export function timingSafeEqualStr(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+export type RegisterKeyCheck = "ok" | "not-enabled" | "unauthorized";
+
+/**
+ * Register/deregister auth: a single static key, nothing else. Not a
+ * fallback alongside admin-session auth — if ACQUIRE_REGISTER_KEY isn't
+ * configured, this deployment doesn't have external-provider registration
+ * at all ("not-enabled"), regardless of who's logged in. If it is
+ * configured, only a matching key gets in ("unauthorized" otherwise) — a
+ * valid admin session is not itself a way past this.
+ */
+export function checkRegisterKey(providedHeader: string | string[] | undefined, expectedEnv: string | undefined): RegisterKeyCheck {
+  if (!expectedEnv) return "not-enabled";
+  if (typeof providedHeader !== "string" || !timingSafeEqualStr(providedHeader, expectedEnv)) return "unauthorized";
+  return "ok";
 }
 
 async function isHealthy(p: Provider): Promise<boolean> {

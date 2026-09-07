@@ -3,6 +3,7 @@ import { Queue, getConnection, QUEUE_NAMES, anicliJobId, parseAnicliQuery, type 
 import { AniListProvider } from "@hokago/providers";
 import type { MetadataQuery } from "@hokago/metadata";
 import { statfs } from "node:fs/promises";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   AcquireSearchQuery,
@@ -19,7 +20,7 @@ import {
   ErrorResponse,
 } from "@hokago/contract/acquire";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
-import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider } from "./acquire-provider-registry.js";
+import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider, checkRegisterKey } from "./acquire-provider-registry.js";
 
 const db = new PrismaClient();
 
@@ -58,6 +59,7 @@ async function requireAdmin(req: { accountId?: string }): Promise<boolean> {
   const acct = await db.account.findUnique({ where: { id: req.accountId! }, select: { isAdmin: true } });
   return acct?.isAdmin === true;
 }
+
 
 /** Free bytes the process can actually write (respects reserved blocks). Fail-closed. */
 async function hasFreeSpace(dir: string): Promise<boolean> {
@@ -269,9 +271,22 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
   // process. Nothing here knows or cares what a provider actually is.
   const adminOnly = { preHandler: [app.authenticate, app.requireAdmin] };
 
+  // Register/deregister are gated solely by a static ACQUIRE_REGISTER_KEY
+  // (an X-Register-Key header) — not a fallback alongside admin-session
+  // auth, the only mechanism. Unset (the default for every deployment that
+  // doesn't opt in) means external-provider registration doesn't exist on
+  // this instance at all, full stop, independent of who's logged in.
+  const registerOrKey = {
+    preHandler: async (req: FastifyRequest, reply: FastifyReply) => {
+      const result = checkRegisterKey(req.headers["x-register-key"], process.env.ACQUIRE_REGISTER_KEY);
+      if (result === "not-enabled") reply.code(404).send({ error: "not found" });
+      else if (result === "unauthorized") reply.code(401).send({ error: "unauthorized" });
+    },
+  };
+
   app.post(
     "/acquire/providers/:providerId",
-    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireProviderRegisterBody, response: { 200: AcquireOkResponse, 409: ErrorResponse } } },
+    { ...registerOrKey, schema: { params: AcquireProviderId, body: AcquireProviderRegisterBody, response: { 200: AcquireOkResponse, 409: ErrorResponse } } },
     async (req, reply) => {
       if (req.params.providerId === RESERVED_PROVIDER_ID) {
         return reply.code(409).send({ error: `"${RESERVED_PROVIDER_ID}" is a reserved provider id` });
@@ -283,7 +298,7 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
 
   app.delete(
     "/acquire/providers/:providerId",
-    { ...adminOnly, schema: { params: AcquireProviderId, response: { 200: AcquireOkResponse } } },
+    { ...registerOrKey, schema: { params: AcquireProviderId, response: { 200: AcquireOkResponse } } },
     async (req) => {
       const ok = deregisterProvider(req.params.providerId);
       return { ok };

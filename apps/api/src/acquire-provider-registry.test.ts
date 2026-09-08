@@ -131,6 +131,58 @@ test("proxyToProvider only evicts the exact registration it started with, not a 
   await new Promise<void>((resolve) => alive.close(() => resolve()));
 });
 
+test("sweepProviderHealth only evicts the exact registration it snapshotted, not a re-registration that replaced it mid-sweep", async () => {
+  const { baseUrl: unhealthyUrl, server: unhealthy } = await startServer((req, res) => {
+    res.writeHead(404).end();
+  });
+  const { baseUrl: healthyUrl, server: healthy } = await startServer((req, res) => {
+    res.writeHead(200).end();
+  });
+
+  registerProvider("sweep-swap", { label: "A (unhealthy)", baseUrl: unhealthyUrl });
+
+  const sweeping = sweepProviderHealth();
+  // Re-register the same id to a healthy provider while the sweep above is
+  // still checking the old one -- the bug: the old implementation deleted
+  // by id alone after the await, which would delete the NEW registration
+  // once A's stale unhealthy result came back, even though B was never
+  // checked this sweep and is perfectly healthy.
+  registerProvider("sweep-swap", { label: "B (healthy)", baseUrl: healthyUrl });
+
+  await sweeping;
+
+  assert.ok(listHealthyProviders().some((p) => p.id === "sweep-swap"), "the new registration must survive a sweep that was checking the old one");
+
+  deregisterProvider("sweep-swap");
+  await new Promise<void>((resolve) => unhealthy.close(() => resolve()));
+  await new Promise<void>((resolve) => healthy.close(() => resolve()));
+});
+
+test("registerProvider strips a trailing slash from baseUrl so downstream URL joins never double up", async () => {
+  const { baseUrl, server } = await startServer((req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200).end();
+      return;
+    }
+    if (req.url === "/search" && req.method === "POST") {
+      res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ candidates: [] }));
+      return;
+    }
+    // A stray trailing slash would make the real request "//search", which
+    // falls through to here instead of matching the exact-match branch above.
+    res.writeHead(404).end();
+  });
+
+  registerProvider("trailing-slash-test", { label: "Trailing Slash", baseUrl: `${baseUrl}/` });
+
+  const result = await proxyToProvider("trailing-slash-test", "/search", { method: "POST", body: { query: "x" } });
+  assert.ok(result, "expected a proxied result");
+  assert.equal(result!.status, 201, "a double slash would 404 against this handler -- 201 proves it was stripped");
+
+  deregisterProvider("trailing-slash-test");
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
 test("canClaim: a brand-new id, or one that never set a token, stays open to the register key alone", () => {
   assert.equal(canClaim("never-registered", undefined), true);
   registerProvider("no-token-test", { label: "No Token", baseUrl: "http://127.0.0.1:1" });

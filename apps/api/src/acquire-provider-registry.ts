@@ -76,19 +76,22 @@ export function canClaim(id: string, providedToken: string | string[] | undefine
   return typeof providedToken === "string" && timingSafeEqualStr(providedToken, existing.token);
 }
 
-/** False (and a no-op) for the reserved id — checked here, not per call site, so nothing can bypass it. */
+/**
+ * False (and a no-op) for the reserved id — checked here, not per call
+ * site, so nothing can bypass it. baseUrl's trailing slash (if any) is
+ * stripped here too, once, so every downstream `${baseUrl}${path}` join
+ * stays a single slash regardless of how the caller formatted it — a
+ * trailing slash otherwise produces a double slash that many servers 404
+ * on, silently and perpetually evicting an otherwise-reachable provider.
+ */
 export function registerProvider(id: string, provider: Provider): boolean {
   if (id === RESERVED_PROVIDER_ID) return false;
-  providers.set(id, provider);
+  providers.set(id, { ...provider, baseUrl: provider.baseUrl.replace(/\/+$/, "") });
   return true;
 }
 
 export function deregisterProvider(id: string): boolean {
   return providers.delete(id);
-}
-
-export function hasProvider(id: string): boolean {
-  return providers.has(id);
 }
 
 async function isHealthy(p: Provider): Promise<boolean> {
@@ -102,17 +105,20 @@ async function isHealthy(p: Provider): Promise<boolean> {
 
 /**
  * Health-checks every registered provider in parallel and drops the dead
- * ones. Never reads `providers.get(id)` after the `await` below — only
- * `.delete(id)`, which is a no-op (not a crash) if the id is already gone —
- * so a concurrent deregister during a sweep can't throw. Exported directly
- * (as well as running on startProviderHealthSweep's interval) so tests can
- * trigger one deterministically instead of waiting out a real interval.
+ * ones — but only if the map entry is still the exact object snapshotted
+ * at the start of this sweep, same guard as proxyToProvider's catch below.
+ * Without it, a provider that re-registers (a new object) between this
+ * sweep snapshotting the old one and its stale health result coming back
+ * false would have the fresh, healthy registration deleted out from under
+ * it. Exported directly (as well as running on startProviderHealthSweep's
+ * interval) so tests can trigger one deterministically instead of waiting
+ * out a real interval.
  */
 export async function sweepProviderHealth(): Promise<void> {
   const entries = [...providers.entries()];
-  const checks = await Promise.all(entries.map(async ([id, p]) => [id, await isHealthy(p)] as const));
-  for (const [id, healthy] of checks) {
-    if (!healthy) providers.delete(id);
+  const checks = await Promise.all(entries.map(async ([id, p]) => [id, p, await isHealthy(p)] as const));
+  for (const [id, p, healthy] of checks) {
+    if (!healthy && providers.get(id) === p) providers.delete(id);
   }
 }
 

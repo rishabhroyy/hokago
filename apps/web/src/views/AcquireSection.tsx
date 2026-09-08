@@ -136,7 +136,15 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
 
   const loadRows = useCallback(async () => {
     const { data, error } = await listDownloads(activeProvider);
-    if (error) return;
+    if (error) {
+      // Never leave a *previous* provider's rows on display under a new
+      // active tab just because this fetch failed -- those rows' ids
+      // belong to a different provider, and Cancel would act on the wrong
+      // one. Clearing here (not just before the switch below) also covers
+      // a mid-session fetch failure for the still-active tab.
+      setRows([]);
+      return;
+    }
     setRows((data ?? []).map((r) => ({ ...r, createdAt: new Date(r.createdAt!), updatedAt: new Date(r.updatedAt!) })));
   }, [activeProvider]);
 
@@ -156,6 +164,10 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   useEffect(() => {
     setResults([]);
     setPicked(null);
+    // Never show the previous tab's rows while the new tab's own rows are
+    // still loading (a wrong-provider id would otherwise be actionable via
+    // Cancel for that whole window, not just on a fetch failure).
+    setRows(null);
     void loadRows();
     const id = setInterval(() => {
       setRows((prev) => {
@@ -219,7 +231,8 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   };
 
   const cancel = async (id: string) => {
-    await cancelDownload(activeProvider, id);
+    const { error } = await cancelDownload(activeProvider, id);
+    if (error) toast((error as { error?: string }).error ?? "could not cancel download", true);
     void loadRows();
   };
 

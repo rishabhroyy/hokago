@@ -18,6 +18,7 @@ import {
   AcquireOkResponse,
   ErrorResponse,
 } from "@hokago/contract/acquire";
+import { RevokedResponse } from "@hokago/contract/auth";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 import {
   registerProvider,
@@ -393,12 +394,12 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
   app.delete(
     "/acquire/:providerId/downloads/:id",
     { ...adminOnly, schema: { params: AcquireProviderDownloadParams } },
-    (req, reply) => relayProxy(reply, req.params.providerId, "DELETE", `/downloads/${req.params.id}`, undefined),
+    (req, reply) => relayProxy(reply, req.params.providerId, "DELETE", `/downloads/${req.params.id}`, undefined, RevokedResponse),
   );
 }
 
-type AnicliInfo = z.infer<typeof AcquireDownloadInfo>;
-type AnicliStatusValue = AnicliInfo["status"];
+type AcquireInfo = z.infer<typeof AcquireDownloadInfo>;
+type AcquireStatusValue = AcquireInfo["status"];
 
 function toInfo(r: {
   id: string;
@@ -407,13 +408,13 @@ function toInfo(r: {
   title: string | null;
   episodeRange: string | null;
   dub: boolean;
-  status: AnicliStatusValue;
+  status: AcquireStatusValue;
   progress: unknown;
   bytesWritten: bigint;
   error: string | null;
   createdAt: Date;
   updatedAt: Date;
-}): AnicliInfo {
+}): AcquireInfo {
   return {
     id: r.id,
     libraryId: r.libraryId,

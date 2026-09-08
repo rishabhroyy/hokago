@@ -30,6 +30,7 @@ import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
 import { registerDownloadRoutes, closeDownloadQueue } from "./download-routes.js";
 import { registerAcquireRoutes, closeAnicliQueue } from "./acquire-routes.js";
+import { startProviderHealthSweep, stopProviderHealthSweep } from "./acquire-provider-registry.js";
 import { registerMetadataRoutes } from "./metadata-routes.js";
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
@@ -183,6 +184,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   app.log.info(`${signal}: closing (tracked ffmpeg children: ${trackedPidCount()})...`);
   killTrackedChildren("SIGKILL");
+  stopProviderHealthSweep();
   await closeDownloadQueue();
   await closeAnicliQueue();
   await app.close();
@@ -207,3 +209,7 @@ setInterval(() => {
     })
     .catch((err) => app.log.error({ err }, "stale party reap failed"));
 }, 60_000);
+
+// External acquire-provider health: evicts a registered provider that stops
+// answering, off the request path entirely (see acquire-provider-registry.ts).
+startProviderHealthSweep();

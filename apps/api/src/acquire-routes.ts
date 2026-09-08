@@ -16,11 +16,18 @@ import {
   AcquireProviderRegisterBody,
   AcquireProviderInfo,
   AcquireOkResponse,
-  AcquireProxyBody,
   ErrorResponse,
 } from "@hokago/contract/acquire";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
-import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider, checkRegisterKey } from "./acquire-provider-registry.js";
+import {
+  registerProvider,
+  deregisterProvider,
+  listHealthyProviders,
+  proxyToProvider,
+  checkRegisterKey,
+  canClaim,
+  RESERVED_PROVIDER_ID,
+} from "./acquire-provider-registry.js";
 
 const db = new PrismaClient();
 
@@ -51,13 +58,18 @@ const anilist = new AniListProvider();
 const ACTIVE: ("QUEUED" | "SEARCHING" | "DOWNLOADING" | "IMPORTING")[] = ["QUEUED", "SEARCHING", "DOWNLOADING", "IMPORTING"];
 const ACTIVE_CAP_ACCOUNT = 3;
 const ACTIVE_CAP_GLOBAL = 5;
-// Reserved — the built-in source lives at /acquire/anicli/*, so nothing may
-// register itself under this id and shadow it.
-const RESERVED_PROVIDER_ID = "anicli";
 
 async function requireAdmin(req: { accountId?: string }): Promise<boolean> {
   const acct = await db.account.findUnique({ where: { id: req.accountId! }, select: { isAdmin: true } });
   return acct?.isAdmin === true;
+}
+
+/** Live DB check, not the JWT's frozen isAdmin claim (app.requireAdmin) — an
+ * admin demoted mid-token-lifetime (up to 15 minutes) should lose access to
+ * these routes immediately, same standard the anicli routes above already
+ * hold themselves to inline. */
+async function requireLiveAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (!(await requireAdmin(req))) reply.code(403).send({ error: "admin only" });
 }
 
 
@@ -269,7 +281,7 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
   // external service can offer itself as an additional search/download
   // source alongside the built-in one above, for the lifetime of its own
   // process. Nothing here knows or cares what a provider actually is.
-  const adminOnly = { preHandler: [app.authenticate, app.requireAdmin] };
+  const adminOnly = { preHandler: [app.authenticate, requireLiveAdmin] };
 
   // Register/deregister are gated solely by a static ACQUIRE_REGISTER_KEY
   // (an X-Register-Key header) — not a fallback alongside admin-session
@@ -288,18 +300,28 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     "/acquire/providers/:providerId",
     { ...registerOrKey, schema: { params: AcquireProviderId, body: AcquireProviderRegisterBody, response: { 200: AcquireOkResponse, 409: ErrorResponse } } },
     async (req, reply) => {
-      if (req.params.providerId === RESERVED_PROVIDER_ID) {
+      // The register key alone proves "registration is allowed on this
+      // deployment" — it does not prove ownership of THIS id. An id that
+      // already has its own token can only be replaced by presenting that
+      // same token back; a brand-new id, or one that never set a token,
+      // stays open to anyone holding the register key (unchanged).
+      if (!canClaim(req.params.providerId, req.headers["x-provider-token"])) {
+        return reply.code(409).send({ error: "provider id already registered with a different token" });
+      }
+      if (!registerProvider(req.params.providerId, req.body)) {
         return reply.code(409).send({ error: `"${RESERVED_PROVIDER_ID}" is a reserved provider id` });
       }
-      registerProvider(req.params.providerId, req.body);
       return { ok: true };
     },
   );
 
   app.delete(
     "/acquire/providers/:providerId",
-    { ...registerOrKey, schema: { params: AcquireProviderId, response: { 200: AcquireOkResponse } } },
-    async (req) => {
+    { ...registerOrKey, schema: { params: AcquireProviderId, response: { 200: AcquireOkResponse, 409: ErrorResponse } } },
+    async (req, reply) => {
+      if (!canClaim(req.params.providerId, req.headers["x-provider-token"])) {
+        return reply.code(409).send({ error: "provider id registered with a different token" });
+      }
       const ok = deregisterProvider(req.params.providerId);
       return { ok };
     },
@@ -308,51 +330,70 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
   app.get(
     "/acquire/providers",
     { ...adminOnly, schema: { response: { 200: z.array(AcquireProviderInfo) } } },
-    async () => listHealthyProviders(),
+    () => listHealthyProviders(),
   );
 
   // Generic proxy for any registered (non-built-in) provider — forwards
   // verbatim and relays the status/body back. Fastify prefers the static
   // /acquire/anicli/* routes above over this parametric one, so the
   // built-in source is never shadowed.
+  //
+  // A provider's response is only ever trusted as-is on a non-2xx status
+  // (relayed verbatim so the provider's own error detail reaches the UI); on
+  // 2xx it's validated against the schema the caller expects before being
+  // relayed — a malformed body becomes a clean 502 here instead of reaching
+  // AcquireSection.tsx as, say, a `.candidates` a null-deref away.
+  async function relayProxy(
+    reply: FastifyReply,
+    providerId: string,
+    method: string,
+    upstreamPath: string,
+    body: unknown,
+    responseSchema?: z.ZodTypeAny,
+  ): Promise<void> {
+    const result = await proxyToProvider(providerId, upstreamPath, { method, body });
+    if (!result) {
+      reply.code(404).send({ error: "provider not found" });
+      return;
+    }
+    if (responseSchema && result.status >= 200 && result.status < 300) {
+      const parsed = responseSchema.safeParse(result.body);
+      if (!parsed.success) {
+        reply.code(502).send({ error: "provider returned a malformed response" });
+        return;
+      }
+      reply.code(result.status).send(parsed.data);
+      return;
+    }
+    reply.code(result.status).send(result.body);
+  }
+
   app.post(
     "/acquire/:providerId/search",
-    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireProxyBody } },
-    async (req, reply) => {
-      const result = await proxyToProvider(req.params.providerId, "/search", { method: "POST", body: req.body });
-      if (!result) return reply.code(404).send({ error: "provider not found" });
-      return reply.code(result.status).send(result.body);
-    },
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireSearchQuery } },
+    (req, reply) => relayProxy(reply, req.params.providerId, "POST", "/search", req.body, AcquireSearchResponse),
   );
 
   app.post(
     "/acquire/:providerId/downloads",
-    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireProxyBody } },
-    async (req, reply) => {
-      const result = await proxyToProvider(req.params.providerId, "/downloads", { method: "POST", body: req.body });
-      if (!result) return reply.code(404).send({ error: "provider not found" });
-      return reply.code(result.status).send(result.body);
-    },
+    // .partial(): an external provider has no notion of hokago's libraryId,
+    // unlike the built-in ani-cli route above — but whatever fields it IS
+    // given (query length, episodeRange shape, etc.) still get the same
+    // limits as the built-in route, not an unconstrained z.record.
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial() } },
+    (req, reply) => relayProxy(reply, req.params.providerId, "POST", "/downloads", req.body, AcquireDownloadInfo),
   );
 
   app.get(
     "/acquire/:providerId/downloads",
     { ...adminOnly, schema: { params: AcquireProviderId } },
-    async (req, reply) => {
-      const result = await proxyToProvider(req.params.providerId, "/downloads", { method: "GET" });
-      if (!result) return reply.code(404).send({ error: "provider not found" });
-      return reply.code(result.status).send(result.body);
-    },
+    (req, reply) => relayProxy(reply, req.params.providerId, "GET", "/downloads", undefined, z.array(AcquireDownloadInfo)),
   );
 
   app.delete(
     "/acquire/:providerId/downloads/:id",
     { ...adminOnly, schema: { params: AcquireProviderDownloadParams } },
-    async (req, reply) => {
-      const result = await proxyToProvider(req.params.providerId, `/downloads/${req.params.id}`, { method: "DELETE" });
-      if (!result) return reply.code(404).send({ error: "provider not found" });
-      return reply.code(result.status).send(result.body);
-    },
+    (req, reply) => relayProxy(reply, req.params.providerId, "DELETE", `/downloads/${req.params.id}`, undefined),
   );
 }
 

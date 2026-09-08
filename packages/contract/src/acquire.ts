@@ -39,6 +39,10 @@ export const AcquireProgress = z.object({
   bytes: z.number(),
   files: z.number(),
   percent: z.number().nullable(),
+  // Only ever populated by a provider whose own backend reports a live
+  // transfer rate — ani-cli has no such notion and omits it, same as
+  // size/seeders on AcquireSearchCandidate above.
+  bytesPerSecond: z.number().nullable().optional(),
 });
 export type AcquireProgress = z.infer<typeof AcquireProgress>;
 
@@ -63,7 +67,7 @@ export const AcquireDownloadParams = z.object({ id: z.string() });
 // ── Pluggable providers ────────────────────────────────────────────────────
 // A provider is any external service that implements /health, /search and
 // /downloads itself (same shapes as above) and registers its own baseUrl at
-// runtime. Hokago holds the registration in memory only — nothing about a
+// runtime. hokago holds the registration in memory only — nothing about a
 // registered provider is ever persisted to disk or checked into this repo.
 
 export const AcquireProviderId = z.object({ providerId: z.string().min(1).max(60) });
@@ -86,10 +90,5 @@ export const AcquireProviderInfo = z.object({
 export type AcquireProviderInfo = z.infer<typeof AcquireProviderInfo>;
 
 export const AcquireOkResponse = z.object({ ok: z.boolean() });
-
-// A registered provider's /search and /downloads bodies are forwarded
-// verbatim — hokago has no way to statically know an external provider's
-// exact shape, so the proxy's own request/response typing stays loose.
-export const AcquireProxyBody = z.record(z.string(), z.unknown()).optional();
 
 export const ErrorResponse = z.object({ error: z.string() });

@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, type Server } from "node:http";
 
-import { registerProvider, deregisterProvider, listHealthyProviders, proxyToProvider, checkRegisterKey } from "./acquire-provider-registry.js";
+import {
+  registerProvider,
+  deregisterProvider,
+  listHealthyProviders,
+  proxyToProvider,
+  checkRegisterKey,
+  canClaim,
+  sweepProviderHealth,
+  RESERVED_PROVIDER_ID,
+} from "./acquire-provider-registry.js";
 
 async function startServer(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void): Promise<{ baseUrl: string; server: Server }> {
   const server = createServer(handler);
@@ -12,7 +21,7 @@ async function startServer(handler: (req: import("node:http").IncomingMessage, r
   return { baseUrl: `http://127.0.0.1:${addr.port}`, server };
 }
 
-test("register -> list -> health-fail auto-drops -> proxy 404s", async () => {
+test("register -> list -> background sweep drops a dead provider -> proxy 404s", async () => {
   const { baseUrl, server } = await startServer((req, res) => {
     if (req.url === "/health") {
       res.writeHead(200).end();
@@ -22,18 +31,34 @@ test("register -> list -> health-fail auto-drops -> proxy 404s", async () => {
   });
 
   registerProvider("drop-test", { label: "Drop Test", baseUrl });
-  const alive = await listHealthyProviders();
+  const alive = listHealthyProviders();
   assert.ok(alive.some((p) => p.id === "drop-test"), "healthy provider should be listed");
 
-  // Server goes away -- next health check must fail and drop it.
+  // Server goes away -- eviction now happens only via the background sweep,
+  // never on the listHealthyProviders() request path itself.
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  const afterDeath = await listHealthyProviders();
-  assert.ok(!afterDeath.some((p) => p.id === "drop-test"), "dead provider should be dropped from the list");
+  await sweepProviderHealth();
+  const afterDeath = listHealthyProviders();
+  assert.ok(!afterDeath.some((p) => p.id === "drop-test"), "dead provider should be dropped after a sweep");
 
   const proxied = await proxyToProvider("drop-test", "/search", { method: "POST", body: { query: "x" } });
   assert.equal(proxied, null, "a dropped provider must 404 (proxyToProvider returns null)");
 
   deregisterProvider("drop-test");
+});
+
+test("listHealthyProviders is a synchronous map read, unaffected by a deregister around it", () => {
+  // The bug this guards: the old implementation awaited a health check
+  // per entry, then did `providers.get(id)!.label` afterwards -- if that id
+  // was deregistered during the await, `.get(id)` was undefined and `!`
+  // threw. Eviction now lives entirely in sweepProviderHealth (above), and
+  // listHealthyProviders itself has no `await` between reading the map and
+  // using it -- nothing can interleave with it, so there is no window left
+  // for a concurrent deregister to land in.
+  registerProvider("sync-test", { label: "Sync Test", baseUrl: "http://127.0.0.1:1" });
+  assert.ok(listHealthyProviders().some((p) => p.id === "sync-test"));
+  deregisterProvider("sync-test");
+  assert.ok(!listHealthyProviders().some((p) => p.id === "sync-test"));
 });
 
 test("proxy forwards verbatim to a registered provider, with its token as a bearer header, and 404s for an unregistered id", async () => {
@@ -64,6 +89,67 @@ test("proxy forwards verbatim to a registered provider, with its token as a bear
 
   deregisterProvider("forward-test");
   await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test("proxyToProvider only evicts the exact registration it started with, not a re-registration that replaced it mid-flight", async () => {
+  const dead = createServer((req) => {
+    req.socket.destroy();
+  });
+  await new Promise<void>((resolve) => dead.listen(0, "127.0.0.1", resolve));
+  const deadAddr = dead.address();
+  if (deadAddr === null || typeof deadAddr === "string") throw new Error("unexpected server address");
+  const deadUrl = `http://127.0.0.1:${deadAddr.port}`;
+
+  const { baseUrl: aliveUrl, server: alive } = await startServer((req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200).end();
+      return;
+    }
+    res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ candidates: [] }));
+  });
+
+  registerProvider("swap-test", { label: "A (dying)", baseUrl: deadUrl });
+
+  const inFlight = proxyToProvider("swap-test", "/search", { method: "POST", body: { query: "x" } });
+  // Re-register the same id to a healthy provider while the call above is
+  // still in flight against the dying one -- this is the race: the old
+  // implementation's catch did an unconditional providers.delete(id), which
+  // would have deleted the NEW registration once the old call's promise
+  // rejected, even though the new one never failed.
+  registerProvider("swap-test", { label: "B (alive)", baseUrl: aliveUrl });
+
+  const result = await inFlight;
+  assert.equal(result, null, "the original in-flight call against the dead server must still fail");
+
+  assert.ok(listHealthyProviders().some((p) => p.id === "swap-test"), "the new registration must survive the old call's failure");
+  const afterSwap = await proxyToProvider("swap-test", "/search", { method: "POST", body: { query: "x" } });
+  assert.ok(afterSwap, "the surviving registration must still be usable");
+  assert.equal(afterSwap!.status, 201);
+
+  deregisterProvider("swap-test");
+  await new Promise<void>((resolve) => dead.close(() => resolve()));
+  await new Promise<void>((resolve) => alive.close(() => resolve()));
+});
+
+test("canClaim: a brand-new id, or one that never set a token, stays open to the register key alone", () => {
+  assert.equal(canClaim("never-registered", undefined), true);
+  registerProvider("no-token-test", { label: "No Token", baseUrl: "http://127.0.0.1:1" });
+  assert.equal(canClaim("no-token-test", undefined), true, "no token was ever set for this id");
+  deregisterProvider("no-token-test");
+});
+
+test("canClaim: an id with a token can only be reclaimed by presenting that same token", () => {
+  registerProvider("owned-test", { label: "Owned", baseUrl: "http://127.0.0.1:1", token: "owner-secret" });
+  assert.equal(canClaim("owned-test", undefined), false, "no token presented at all");
+  assert.equal(canClaim("owned-test", "wrong"), false);
+  assert.equal(canClaim("owned-test", ["owner-secret", "owner-secret"]), false, "array header must not coerce into a match");
+  assert.equal(canClaim("owned-test", "owner-secret"), true);
+  deregisterProvider("owned-test");
+});
+
+test("registerProvider refuses the reserved id regardless of call site", () => {
+  assert.equal(registerProvider(RESERVED_PROVIDER_ID, { label: "hijack", baseUrl: "http://127.0.0.1:1" }), false);
+  assert.ok(!listHealthyProviders().some((p) => p.id === RESERVED_PROVIDER_ID));
 });
 
 test("listHealthyProviders never exposes a provider's token", async () => {

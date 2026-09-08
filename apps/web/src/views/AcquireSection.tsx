@@ -174,8 +174,12 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     if (error) {
       toast("search failed — is the provider reachable?", true);
     } else {
-      setResults(data.candidates ?? []);
-      if (data.candidates.length === 0) toast("no titles found — try a different query");
+      // Server-side validates a provider's response shape before relaying
+      // it, but a `?? []` here costs nothing and means a misbehaving
+      // provider can never crash this render either.
+      const candidates = data?.candidates ?? [];
+      setResults(candidates);
+      if (candidates.length === 0) toast("no titles found — try a different query");
     }
     setSearching(false);
   };
@@ -206,7 +210,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     if (error) {
       toast((error as { error?: string }).error ?? "could not enqueue download", true);
     } else {
-      toast(`queued ${data.query}`);
+      toast(`queued ${data?.query ?? finalQuery}`);
       setResults([]);
       setPicked(null);
       setSeason("");
@@ -380,6 +384,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
                       {r.episodeRange && <span>ep {r.episodeRange}</span>}
                       {r.dub && <span>dub</span>}
                       <span>{fmtBytes(r.bytesWritten)}</span>
+                      {r.progress?.bytesPerSecond != null && <span>{fmtBytes(r.progress.bytesPerSecond)}/s</span>}
                       {r.progress && r.progress.files > 0 && <span>{r.progress.files} file{r.progress.files > 1 ? "s" : ""}</span>}
                     </div>
                     {r.status === "FAILED" && r.error && (
@@ -389,7 +394,16 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
                     )}
                     {active && (
                       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line">
-                        <div className="h-full w-1/3 animate-[aniclipulse_1.6s_ease-in-out_infinite] rounded-full bg-wii" />
+                        {r.progress?.percent != null ? (
+                          <div
+                            className="h-full rounded-full bg-wii transition-[width] duration-500 ease-smooth"
+                            style={{ width: `${Math.max(0, Math.min(100, r.progress.percent))}%` }}
+                          />
+                        ) : (
+                          // No numeric percent to work with (ani-cli never reports one) —
+                          // same indeterminate pulse this bar has always shown.
+                          <div className="h-full w-1/3 animate-[aniclipulse_1.6s_ease-in-out_infinite] rounded-full bg-wii" />
+                        )}
                       </div>
                     )}
                   </div>

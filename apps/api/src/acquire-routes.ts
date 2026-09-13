@@ -382,8 +382,13 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     // to a successful relay without every other route needing to know
     // about it.
     onSuccess?: (parsed: unknown) => void,
+    // Submitting a download can legitimately take longer than every other
+    // proxied call (a provider may need to search, add, and wait on its own
+    // metadata resolution before it can answer) — override per call site
+    // rather than raising the shared default for the fast paths too.
+    timeoutMs?: number,
   ): Promise<void> {
-    const result = await proxyToProvider(providerId, upstreamPath, { method, body });
+    const result = await proxyToProvider(providerId, upstreamPath, { method, body, timeoutMs });
     if (!result) {
       reply.code(404).send({ error: "provider not found" });
       return;
@@ -452,8 +457,15 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     // limits as the built-in route, not an unconstrained z.record.
     { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial() } },
     (req, reply) =>
-      relayProxy(reply, req.params.providerId, "POST", "/downloads", req.body, AcquireDownloadInfo, (parsed) =>
-        enqueueAcquireImport(req.params.providerId, parsed as z.infer<typeof AcquireDownloadInfo>, req.body),
+      relayProxy(
+        reply,
+        req.params.providerId,
+        "POST",
+        "/downloads",
+        req.body,
+        AcquireDownloadInfo,
+        (parsed) => enqueueAcquireImport(req.params.providerId, parsed as z.infer<typeof AcquireDownloadInfo>, req.body),
+        45_000,
       ),
   );
 

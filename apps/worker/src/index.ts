@@ -1523,6 +1523,7 @@ async function shutdown(signal: string): Promise<void> {
       trickplayWorker.close(),
       downloadWorker.close(),
       anicliWorker.close(),
+      acquireImportWorker.close(),
       ...Object.values(metadataWorkers).map((w) => w.close()),
     ]),
     new Promise((resolve) => setTimeout(resolve, 10_000)),

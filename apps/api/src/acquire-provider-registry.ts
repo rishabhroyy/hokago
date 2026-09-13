@@ -176,7 +176,7 @@ export interface ProxyResult {
 export async function proxyToProvider(
   id: string,
   path: string,
-  init: { method: string; body?: unknown },
+  init: { method: string; body?: unknown; timeoutMs?: number },
 ): Promise<ProxyResult | null> {
   const p = providers.get(id);
   if (!p) return null;
@@ -185,7 +185,7 @@ export async function proxyToProvider(
       method: init.method,
       headers: { ...authHeaders(p.token), ...(init.body !== undefined ? { "content-type": "application/json" } : {}) },
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-      signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
+      signal: AbortSignal.timeout(init.timeoutMs ?? PROXY_TIMEOUT_MS),
     });
     const body = await res.json().catch(() => null);
     return { status: res.status, body };

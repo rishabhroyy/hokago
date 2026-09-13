@@ -8,6 +8,7 @@ export {
   metadataJobId,
   downloadJobId,
   anicliJobId,
+  acquireImportJobId,
   type QueueName,
   type ScanJobData,
   type ArtworkJobData,
@@ -15,7 +16,8 @@ export {
   type MetadataJobData,
   type DownloadJobData,
   type AnicliDownloadJobData,
+  type AcquireImportJobData,
 } from "./queues.js";
-export { parseAnicliQuery, anicliQuerySeason, type ParsedAnicliQuery } from "./anicli.js";
+export { parseAnicliQuery, anicliQuerySeason, sanitizeFolder, seasonTargetDir, type ParsedAnicliQuery } from "./anicli.js";
 export { Queue, Worker, QueueEvents } from "bullmq";
 export type { Job } from "bullmq";

@@ -1,5 +1,14 @@
 import { PrismaClient } from "@hokago/db";
-import { Queue, getConnection, QUEUE_NAMES, anicliJobId, parseAnicliQuery, type AnicliDownloadJobData } from "@hokago/queue";
+import {
+  Queue,
+  getConnection,
+  QUEUE_NAMES,
+  anicliJobId,
+  acquireImportJobId,
+  parseAnicliQuery,
+  type AnicliDownloadJobData,
+  type AcquireImportJobData,
+} from "@hokago/queue";
 import { AniListProvider } from "@hokago/providers";
 import type { MetadataQuery } from "@hokago/metadata";
 import { statfs } from "node:fs/promises";
@@ -27,6 +36,7 @@ import {
   proxyToProvider,
   checkRegisterKey,
   canClaim,
+  getProviderConnection,
   RESERVED_PROVIDER_ID,
 } from "./acquire-provider-registry.js";
 
@@ -45,6 +55,22 @@ const anicliQueue = new Queue<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, {
 });
 export async function closeAnicliQueue(): Promise<void> {
   await anicliQueue.close().catch(() => {});
+}
+
+/**
+ * External-provider streams land through this queue instead: the provider
+ * only ever hands back JSON (AcquireDownloadInfo-shaped), so something has
+ * to actually fetch and place the bytes — the worker does that, matching
+ * ani-cli's own placement convention exactly (see apps/worker/src/index.ts).
+ * Same attempts:1 philosophy as anicliQueue above: a failed transfer is
+ * terminal, never silently re-driven.
+ */
+const acquireImportQueue = new Queue<AcquireImportJobData>(QUEUE_NAMES.ACQUIRE_IMPORT, {
+  connection: getConnection(),
+  defaultJobOptions: { attempts: 1, removeOnComplete: true, removeOnFail: true },
+});
+export async function closeAcquireImportQueue(): Promise<void> {
+  await acquireImportQueue.close().catch(() => {});
 }
 
 // Keep in step with the worker's gate (HOKAGO_ANICLI_MIN_FREE).
@@ -351,6 +377,11 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     upstreamPath: string,
     body: unknown,
     responseSchema?: z.ZodTypeAny,
+    // Fires once, only after a validated 2xx, before the reply is sent —
+    // lets one specific call site (the download-enqueue route below) react
+    // to a successful relay without every other route needing to know
+    // about it.
+    onSuccess?: (parsed: unknown) => void,
   ): Promise<void> {
     const result = await proxyToProvider(providerId, upstreamPath, { method, body });
     if (!result) {
@@ -363,10 +394,48 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
         reply.code(502).send({ error: "provider returned a malformed response" });
         return;
       }
+      onSuccess?.(parsed.data);
       reply.code(result.status).send(parsed.data);
       return;
     }
     reply.code(result.status).send(result.body);
+  }
+
+  /**
+   * The provider only ever hands back JSON acknowledging the request — this
+   * is what actually gets hokago a file. Enqueued after a successful
+   * relay, using the provider's baseUrl/token as they stood at THIS moment
+   * (see getProviderConnection's own doc for why that has to travel in the
+   * job payload rather than be re-looked-up by the worker later). A
+   * provider that vanished between the relay and this call, or a request
+   * with no libraryId/query to place the file by, just skips enqueueing —
+   * logged, not surfaced to the caller, since the HTTP response for the
+   * enqueue itself already succeeded on the provider's own terms.
+   */
+  function enqueueAcquireImport(providerId: string, info: z.infer<typeof AcquireDownloadInfo>, body: Partial<z.infer<typeof AcquireDownloadBody>>): void {
+    if (!body.libraryId || !body.query) {
+      console.error(`acquire import: skipped for ${providerId}/${info.id} -- no libraryId/query on the request`);
+      return;
+    }
+    const conn = getProviderConnection(providerId);
+    if (!conn) {
+      console.error(`acquire import: skipped for ${providerId}/${info.id} -- provider deregistered before the job could be queued`);
+      return;
+    }
+    const data: AcquireImportJobData = {
+      providerId,
+      downloadId: info.id,
+      baseUrl: conn.baseUrl,
+      token: conn.token,
+      libraryId: body.libraryId,
+      query: body.query,
+      title: body.title,
+      episodeRange: body.episodeRange,
+      dub: body.dub,
+    };
+    acquireImportQueue
+      .add(QUEUE_NAMES.ACQUIRE_IMPORT, data, { jobId: acquireImportJobId(providerId, info.id) })
+      .catch((e) => console.error(`acquire import: enqueue failed for ${providerId}/${info.id}:`, e));
   }
 
   app.post(
@@ -382,7 +451,10 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     // given (query length, episodeRange shape, etc.) still get the same
     // limits as the built-in route, not an unconstrained z.record.
     { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial() } },
-    (req, reply) => relayProxy(reply, req.params.providerId, "POST", "/downloads", req.body, AcquireDownloadInfo),
+    (req, reply) =>
+      relayProxy(reply, req.params.providerId, "POST", "/downloads", req.body, AcquireDownloadInfo, (parsed) =>
+        enqueueAcquireImport(req.params.providerId, parsed as z.infer<typeof AcquireDownloadInfo>, req.body),
+      ),
   );
 
   app.get(

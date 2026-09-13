@@ -14,7 +14,9 @@ export const AcquireSearchCandidate = z.object({
   // Only ever populated by non-built-in providers (ani-cli has no notion of
   // either) — optional so the built-in source's responses need no change.
   size: z.string().nullable().optional(),
-  seeders: z.number().int().nullable().optional(),
+  // A generic "how many places this can be fetched from" count, when a
+  // provider tracks one — not tied to any particular transfer mechanism.
+  sources: z.number().int().nullable().optional(),
 });
 export type AcquireSearchCandidate = z.infer<typeof AcquireSearchCandidate>;
 
@@ -41,7 +43,7 @@ export const AcquireProgress = z.object({
   percent: z.number().nullable(),
   // Only ever populated by a provider whose own backend reports a live
   // transfer rate — ani-cli has no such notion and omits it, same as
-  // size/seeders on AcquireSearchCandidate above.
+  // size/sources on AcquireSearchCandidate above.
   bytesPerSecond: z.number().nullable().optional(),
 });
 export type AcquireProgress = z.infer<typeof AcquireProgress>;

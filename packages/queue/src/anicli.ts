@@ -14,6 +14,8 @@
  * season/subfolder parse.
  */
 
+import path from "node:path";
+
 const ORDINAL: Record<string, number> = {
   first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
   sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
@@ -80,4 +82,22 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
  */
 export function anicliQuerySeason(query: string): number | null {
   return parseAnicliQuery(query).season;
+}
+
+/** Filesystem-safe folder name — same allowlist for any caller placing a file under a library root. */
+export const sanitizeFolder = (q: string): string => (q.replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 80) || "anicli").trim();
+
+/**
+ * Target folder for a download. The season signal lives only here (ani-cli
+ * filenames carry none, and an external provider's stream carries none
+ * either), so this MUST match the scanner's own season-dir names: flat
+ * "<root>/<Series>/" (implicit Season 1), "<root>/<Series>/Season N/", or
+ * "<root>/<Series>/Specials/" (season 0). A trailing year is re-attached to
+ * the series folder so cleanFolderTitle can feed it to the provider. Both
+ * the ani-cli worker path and any external-provider import must call this
+ * exact function — never a second, independently-written placement rule.
+ */
+export function seasonTargetDir(root: string, title: string, year: number | null, sub: string | null): string {
+  const base = path.join(root, sanitizeFolder(year !== null ? `${title} (${year})` : title));
+  return sub !== null ? path.join(base, sub) : base;
 }

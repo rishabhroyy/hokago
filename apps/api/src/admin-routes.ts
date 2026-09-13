@@ -23,6 +23,7 @@ const queues: Record<QueueName, Queue> = {
   "metadata-mal": new Queue(QUEUE_NAMES.METADATA_MAL, { connection }),
   download: new Queue(QUEUE_NAMES.DOWNLOAD, { connection }),
   anicli: new Queue(QUEUE_NAMES.ANICLI, { connection }),
+  "acquire-import": new Queue(QUEUE_NAMES.ACQUIRE_IMPORT, { connection }),
 };
 
 const JOB_STATES = ["waiting", "active", "completed", "failed", "delayed"] as const;

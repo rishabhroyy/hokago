@@ -90,6 +90,19 @@ export function registerProvider(id: string, provider: Provider): boolean {
   return true;
 }
 
+/**
+ * Raw connection details for a registered provider — unlike proxyToProvider,
+ * this makes no request of its own. Exists for callers that need to hand
+ * baseUrl/token to something outside this process (a BullMQ job payload,
+ * picked up by the worker) rather than to make a request themselves right
+ * now; the registry is this API process's own memory, so anything that
+ * needs it later has to carry a copy forward instead of re-querying it.
+ */
+export function getProviderConnection(id: string): { baseUrl: string; token?: string } | null {
+  const p = providers.get(id);
+  return p ? { baseUrl: p.baseUrl, token: p.token } : null;
+}
+
 export function deregisterProvider(id: string): boolean {
   return providers.delete(id);
 }

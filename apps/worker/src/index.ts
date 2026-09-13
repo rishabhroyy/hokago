@@ -17,14 +17,17 @@ import {
   downloadJobId,
   anicliJobId,
   parseAnicliQuery,
+  seasonTargetDir,
   type ScanJobData,
   type ArtworkJobData,
   type TrickplayJobData,
   type MetadataJobData,
   type DownloadJobData,
   type AnicliDownloadJobData,
+  type AcquireImportJobData,
   type Job,
 } from "@hokago/queue";
+import { processAcquireImport } from "./acquire-import.js";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { pruneMissingMedia } from "@hokago/scanner/prune";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
@@ -929,17 +932,9 @@ async function anicliWalkSize(dir: string): Promise<{ bytes: number; files: numb
   return { bytes, files };
 }
 
-const sanitizeFolder = (q: string): string => (q.replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 80) || "anicli").trim();
-
-// Target folder for a download. The season signal lives only here (ani-cli
-// filenames carry none), so this MUST match the scanner's own season-dir
-// names: flat "<root>/<Series>/" (implicit Season 1), "<root>/<Series>/Season N/",
-// or "<root>/<Series>/Specials/" (season 0). A trailing year is re-attached to
-// the series folder so cleanFolderTitle can feed it to the provider.
-function seasonTargetDir(root: string, title: string, year: number | null, sub: string | null): string {
-  const base = path.join(root, sanitizeFolder(year !== null ? `${title} (${year})` : title));
-  return sub !== null ? path.join(base, sub) : base;
-}
+// sanitizeFolder/seasonTargetDir now live in @hokago/queue (packages/queue/src/anicli.ts),
+// imported above -- shared verbatim with the acquire-import path below instead
+// of staying a second, worker-local copy of the same convention.
 
 async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
   const rec = await db.anicliDownload.findUnique({ where: { id: job.data.jobId }, include: { library: true } });
@@ -1180,6 +1175,23 @@ const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, proce
   limiter: { max: 1, duration: 60_000 },
 });
 
+// ── External acquire-provider import ─────────────────────────────────────
+// A registered provider only ever hands hokago JSON (search results, a
+// download's status) — it doesn't write into hokago's library itself.
+// When one exposes a streaming download, processAcquireImport (its own
+// module: apps/worker/src/acquire-import.ts, kept out of this file's heavy
+// module-scope side effects so it stays unit-testable) is what actually
+// pulls the bytes and places them, reusing ani-cli's own placement
+// convention (parseAnicliQuery + seasonTargetDir) and its attempts:1
+// "a failed transfer is terminal" philosophy (configured on the queue
+// side, in apps/api/src/acquire-routes.ts). No DB row backs this job —
+// its own BullMQ job state is the only record, matching how lightweight
+// the rest of the acquire-provider work has stayed.
+const acquireImportWorker = new Worker<AcquireImportJobData>(
+  QUEUE_NAMES.ACQUIRE_IMPORT,
+  (job) => processAcquireImport(job, { db, enqueueScan, scanSettleMs: anicliScanSettleMs }),
+  { connection, concurrency: 2 },
+);
 
 // Per-provider rate budgets (doc's real published limits) enforced by
 // BullMQ's own limiter — reused, not hand-rolled.

@@ -10,6 +10,7 @@ import {
   checkRegisterKey,
   canClaim,
   sweepProviderHealth,
+  getProviderConnection,
   RESERVED_PROVIDER_ID,
 } from "./acquire-provider-registry.js";
 
@@ -202,6 +203,13 @@ test("canClaim: an id with a token can only be reclaimed by presenting that same
 test("registerProvider refuses the reserved id regardless of call site", () => {
   assert.equal(registerProvider(RESERVED_PROVIDER_ID, { label: "hijack", baseUrl: "http://127.0.0.1:1" }), false);
   assert.ok(!listHealthyProviders().some((p) => p.id === RESERVED_PROVIDER_ID));
+});
+
+test("getProviderConnection returns the stripped baseUrl and token, or null for an unknown id", () => {
+  assert.equal(getProviderConnection("connection-test"), null);
+  registerProvider("connection-test", { label: "Connection Test", baseUrl: "http://127.0.0.1:1/", token: "s3cret" });
+  assert.deepEqual(getProviderConnection("connection-test"), { baseUrl: "http://127.0.0.1:1", token: "s3cret" });
+  deregisterProvider("connection-test");
 });
 
 test("listHealthyProviders never exposes a provider's token", async () => {

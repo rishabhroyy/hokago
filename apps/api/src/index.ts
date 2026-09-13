@@ -29,7 +29,7 @@ import { registerWatchPartyRoutes, reapStalePartyMembers } from "./watch-party-r
 import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
 import { registerDownloadRoutes, closeDownloadQueue } from "./download-routes.js";
-import { registerAcquireRoutes, closeAnicliQueue } from "./acquire-routes.js";
+import { registerAcquireRoutes, closeAnicliQueue, closeAcquireImportQueue } from "./acquire-routes.js";
 import { startProviderHealthSweep, stopProviderHealthSweep } from "./acquire-provider-registry.js";
 import { registerMetadataRoutes } from "./metadata-routes.js";
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
@@ -187,6 +187,7 @@ async function shutdown(signal: string): Promise<void> {
   stopProviderHealthSweep();
   await closeDownloadQueue();
   await closeAnicliQueue();
+  await closeAcquireImportQueue();
   await app.close();
   process.exit(0);
 }

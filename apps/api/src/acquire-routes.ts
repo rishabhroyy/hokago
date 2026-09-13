@@ -455,9 +455,20 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     // unlike the built-in ani-cli route above — but whatever fields it IS
     // given (query length, episodeRange shape, etc.) still get the same
     // limits as the built-in route, not an unconstrained z.record.
-    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial() } },
-    (req, reply) =>
-      relayProxy(
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial(), response: { 507: ErrorResponse } } },
+    async (req, reply) => {
+      // Same coarse free-space floor as the built-in route below -- it was
+      // never about knowing the download's exact size (ani-cli doesn't
+      // either), just refusing to even start when the drive is basically
+      // full. Only applies when there's a libraryId to place a file under;
+      // enqueueAcquireImport already no-ops without one.
+      if (req.body.libraryId) {
+        const lib = await db.library.findUnique({ where: { id: req.body.libraryId } });
+        if (lib && !(await hasFreeSpace(lib.rootPath))) {
+          return reply.code(507).send({ error: "insufficient disk space — free up at least 2 GiB on the library drive" });
+        }
+      }
+      return relayProxy(
         reply,
         req.params.providerId,
         "POST",
@@ -466,7 +477,8 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
         AcquireDownloadInfo,
         (parsed) => enqueueAcquireImport(req.params.providerId, parsed as z.infer<typeof AcquireDownloadInfo>, req.body),
         45_000,
-      ),
+      );
+    },
   );
 
   app.get(

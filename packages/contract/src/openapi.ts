@@ -952,24 +952,24 @@ export function buildOpenApiDocument(): OpenAPIObject {
    registry.registerPath({
      method: "post",
      path: "/acquire/providers/{providerId}",
-     summary: "Register (or replace) an external acquisition provider — requires HOKAGO_KEY (X-Register-Key header), not an admin session",
+     summary: "Register (or replace) an external acquisition provider — requires HOKAGO_ACQUIRE_KEY (X-Register-Key header), not an admin session",
      request: { params: AcquireProviderId, body: json(AcquireProviderRegisterBody) },
      responses: {
        200: { description: "OK", ...json(AcquireOkResponse) },
        401: { description: "Missing/wrong X-Register-Key", ...json(AcquireErrorResponse) },
-       404: { description: "HOKAGO_KEY not configured on this deployment", ...json(AcquireErrorResponse) },
+       404: { description: "HOKAGO_ACQUIRE_KEY not configured on this deployment", ...json(AcquireErrorResponse) },
        409: { description: "Reserved provider id, or this id already has an owner token and X-Provider-Token didn't match it", ...json(AcquireErrorResponse) },
      },
    });
    registry.registerPath({
      method: "delete",
      path: "/acquire/providers/{providerId}",
-     summary: "Deregister an external acquisition provider — requires HOKAGO_KEY (X-Register-Key header), not an admin session",
+     summary: "Deregister an external acquisition provider — requires HOKAGO_ACQUIRE_KEY (X-Register-Key header), not an admin session",
      request: { params: AcquireProviderId },
      responses: {
        200: { description: "OK", ...json(AcquireOkResponse) },
        401: { description: "Missing/wrong X-Register-Key", ...json(AcquireErrorResponse) },
-       404: { description: "HOKAGO_KEY not configured on this deployment", ...json(AcquireErrorResponse) },
+       404: { description: "HOKAGO_ACQUIRE_KEY not configured on this deployment", ...json(AcquireErrorResponse) },
        409: { description: "This id has an owner token and X-Provider-Token didn't match it", ...json(AcquireErrorResponse) },
      },
    });

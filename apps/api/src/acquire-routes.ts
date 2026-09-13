@@ -310,14 +310,14 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
   // process. Nothing here knows or cares what a provider actually is.
   const adminOnly = { preHandler: [app.authenticate, requireLiveAdmin] };
 
-  // Register/deregister are gated solely by a static HOKAGO_KEY (an
+  // Register/deregister are gated solely by a static HOKAGO_ACQUIRE_KEY (an
   // X-Register-Key header) — not a fallback alongside admin-session
   // auth, the only mechanism. Unset (the default for every deployment that
   // doesn't opt in) means external-provider registration doesn't exist on
   // this instance at all, full stop, independent of who's logged in.
   const registerOrKey = {
     preHandler: async (req: FastifyRequest, reply: FastifyReply) => {
-      const result = checkRegisterKey(req.headers["x-register-key"], process.env.HOKAGO_KEY);
+      const result = checkRegisterKey(req.headers["x-register-key"], process.env.HOKAGO_ACQUIRE_KEY);
       if (result === "not-enabled") reply.code(404).send({ error: "not found" });
       else if (result === "unauthorized") reply.code(401).send({ error: "unauthorized" });
     },

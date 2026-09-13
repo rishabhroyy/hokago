@@ -50,7 +50,7 @@ export type RegisterKeyCheck = "ok" | "not-enabled" | "unauthorized";
 
 /**
  * Register/deregister auth: a single static key, nothing else. Not a
- * fallback alongside admin-session auth — if ACQUIRE_REGISTER_KEY isn't
+ * fallback alongside admin-session auth — if HOKAGO_KEY isn't
  * configured, this deployment doesn't have external-provider registration
  * at all ("not-enabled"), regardless of who's logged in. If it is
  * configured, only a matching key gets in ("unauthorized" otherwise) — a

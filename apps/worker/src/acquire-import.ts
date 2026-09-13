@@ -24,8 +24,27 @@ import path from "node:path";
 import { existsSync, createWriteStream } from "node:fs";
 import { mkdir, rm, stat, rename } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
+
+/**
+ * Passes chunks through unchanged, calling onData for each -- a Transform
+ * participates in the pipeline's own consumption (backpressure included),
+ * unlike an `.on("data", ...)` listener attached alongside it. Attaching
+ * "data" directly to a stream also being consumed by pipeline() switches it
+ * to flowing mode and competes with pipeline's own reader for the same
+ * bytes, which starves pipeline() of everything and hangs it forever --
+ * this exists specifically to avoid that trap.
+ */
+class StallTracker extends Transform {
+  constructor(private onData: () => void) {
+    super();
+  }
+  override _transform(chunk: Buffer, _enc: BufferEncoding, cb: (err?: Error | null, data?: Buffer) => void): void {
+    this.onData();
+    cb(null, chunk);
+  }
+}
 
 import { parseAnicliQuery, seasonTargetDir, sanitizeFolder, type AcquireImportJobData, type Job } from "@hokago/queue";
 
@@ -33,6 +52,13 @@ export interface AcquireImportDeps {
   db: { library: { findUnique: (args: { where: { id: string } }) => Promise<{ rootPath: string } | null> } };
   enqueueScan: (libraryId: string, mode: "light" | "heavy", delayMs?: number) => Promise<void>;
   scanSettleMs: number;
+  /** No bytes at all for this long (initial connect included) -- something's
+   * actually stuck, not just slow -- aborts the transfer. Injectable so a
+   * test can prove the behavior without a real 5-minute wait. Deliberately
+   * NOT an overall-duration cap: a large file over a slow-but-progressing
+   * connection can legitimately take much longer than this between its
+   * first and last byte. */
+  stallMs?: number;
 }
 
 const EXT_BY_CONTENT_TYPE: Record<string, string> = {
@@ -92,17 +118,48 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
     await cleanup();
     await mkdir(stagingDir, { recursive: true });
 
-    const res = await fetch(`${baseUrl}/downloads/${downloadId}/stream`, {
-      headers: token ? { authorization: `Bearer ${token}` } : undefined,
-    });
-    if (!res.ok || !res.body) throw new Error(`stream fetch failed: HTTP ${res.status}`);
+    // This deliberately does not bound the transfer's overall duration --
+    // a provider fetching from a slow upstream of its own can legitimately
+    // take a long time between bytes without being stuck. What's needed
+    // instead is exactly this: reset the clock on every chunk (including
+    // the initial connect), only fire if nothing arrives at all for a
+    // while. The single outer `finally` is load-bearing -- an exception
+    // from fetch() itself (a destroyed connection, not just a bad status)
+    // skips right past any clearTimeout that isn't in it, leaving the
+    // timer armed and the process alive for no reason.
+    const stallMs = deps.stallMs ?? 5 * 60_000;
+    const stallMinutes = Math.round(stallMs / 60_000);
+    const controller = new AbortController();
+    let stallTimer: NodeJS.Timeout;
+    const armStall = (msg: string) => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => controller.abort(new Error(msg)), stallMs);
+    };
 
-    const contentLength = Number(res.headers.get("content-length"));
-    if (!Number.isFinite(contentLength) || contentLength <= 0) {
-      throw new Error("provider did not report a Content-Length for the stream");
+    let res: Response;
+    let contentLength: number;
+    try {
+      armStall(`provider never responded within ${stallMinutes} minutes`);
+      res = await fetch(`${baseUrl}/downloads/${downloadId}/stream`, {
+        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`stream fetch failed: HTTP ${res.status}`);
+
+      contentLength = Number(res.headers.get("content-length"));
+      if (!Number.isFinite(contentLength) || contentLength <= 0) {
+        throw new Error("provider did not report a Content-Length for the stream");
+      }
+
+      armStall(`stream stalled -- no bytes in ${stallMinutes} minutes`);
+      await pipeline(
+        Readable.fromWeb(res.body as WebReadableStream),
+        new StallTracker(() => armStall(`stream stalled -- no bytes in ${stallMinutes} minutes`)),
+        createWriteStream(tmpPath),
+      );
+    } finally {
+      clearTimeout(stallTimer!);
     }
-
-    await pipeline(Readable.fromWeb(res.body as WebReadableStream), createWriteStream(tmpPath));
 
     const written = (await stat(tmpPath)).size;
     if (written !== contentLength) {

@@ -97,10 +97,9 @@ function Postertile({ candidate, onPick, picked }: { candidate: AcquireSearchCan
           <span className="line-clamp-2 text-meta font-bold leading-tight text-ink">{candidate.title}</span>
           {picked && <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-wii-deep" />}
         </div>
-        {(candidate.size != null || candidate.sources != null) && (
+        {candidate.size != null && (
           <div className="flex items-center gap-2 font-mono text-kicker font-medium uppercase tracking-[0.08em] text-ink-3">
-            {candidate.size != null && <span>{candidate.size}</span>}
-            {candidate.sources != null && <span>{candidate.sources} sources</span>}
+            <span>{candidate.size}</span>
           </div>
         )}
       </div>

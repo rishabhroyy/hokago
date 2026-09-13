@@ -121,6 +121,38 @@ test("processAcquireImport rejects and cleans up when the provider omits Content
   }
 });
 
+test("processAcquireImport aborts a stalled stream (no bytes at all, connection left open) instead of hanging forever", async () => {
+  const { baseUrl, server } = await startServer((req, res) => {
+    // Headers only, then silence -- never writes another byte and never
+    // ends the response. A real stall, not a destroyed connection: proves
+    // the timeout is watching for "no progress", not just "stream broke".
+    res.writeHead(200, { "content-length": "1000" });
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await assert.rejects(
+      processAcquireImport(
+        fakeJob({ providerId: "ext1", downloadId: "dl-5", baseUrl, libraryId: "lib-1", query: "Frieren" }),
+        {
+          db: { library: { findUnique: async () => ({ rootPath: root }) } },
+          enqueueScan: async () => {},
+          scanSettleMs: 0,
+          stallMs: 200, // real default is 5 minutes -- tiny here so the test doesn't wait for it
+        },
+      ),
+      // Either message is the same protection firing -- whether the abort
+      // lands during connect or during the (headers-only, bodyless) stream
+      // phase is a timing race this test has no reason to pin down.
+      /never responded|stalled/,
+    );
+    assert.equal(await existsDir(acquireImportStagingDir(root, "ext1", "dl-5")), false, "nothing left behind after an aborted stall");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("processAcquireImport never clobbers a file that already exists at the destination", async () => {
   const payload = Buffer.from("new bytes");
   const { baseUrl, server } = await startServer((req, res) => {

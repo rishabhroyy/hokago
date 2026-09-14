@@ -476,7 +476,7 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
         req.body,
         AcquireDownloadInfo,
         (parsed) => enqueueAcquireImport(req.params.providerId, parsed as z.infer<typeof AcquireDownloadInfo>, req.body),
-        45_000,
+        60_000,
       );
     },
   );

@@ -29,7 +29,8 @@ import { registerWatchPartyRoutes, reapStalePartyMembers } from "./watch-party-r
 import { registerWebRoutes } from "./web-routes.js";
 import { registerPresence } from "./presence.js";
 import { registerDownloadRoutes, closeDownloadQueue } from "./download-routes.js";
-import { registerAnicliRoutes, closeAnicliQueue } from "./anicli-routes.js";
+import { registerAcquireRoutes, closeAnicliQueue, closeAcquireImportQueue } from "./acquire-routes.js";
+import { startProviderHealthSweep, stopProviderHealthSweep } from "./acquire-provider-registry.js";
 import { registerMetadataRoutes } from "./metadata-routes.js";
 import { reapStaleSessions, killOrphanedTranscodes, cleanOrphanedTranscodeDirs } from "./playback-routes.js";
 import { seedVendoredFonts } from "./font-seed.js";
@@ -136,7 +137,7 @@ await registerWatchStateRoutes(app);
 await registerWatchPartyRoutes(app);
 await registerMetadataRoutes(app);
 await registerDownloadRoutes(app);
-await registerAnicliRoutes(app);
+await registerAcquireRoutes(app);
 await registerStaticRoutes(app);
 // Last: the SPA catch-all — everything the API doesn't own is the web app.
 await registerWebRoutes(app);
@@ -183,8 +184,10 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   app.log.info(`${signal}: closing (tracked ffmpeg children: ${trackedPidCount()})...`);
   killTrackedChildren("SIGKILL");
+  stopProviderHealthSweep();
   await closeDownloadQueue();
   await closeAnicliQueue();
+  await closeAcquireImportQueue();
   await app.close();
   process.exit(0);
 }
@@ -207,3 +210,7 @@ setInterval(() => {
     })
     .catch((err) => app.log.error({ err }, "stale party reap failed"));
 }, 60_000);
+
+// External acquire-provider health: evicts a registered provider that stops
+// answering, off the request path entirely (see acquire-provider-registry.ts).
+startProviderHealthSweep();

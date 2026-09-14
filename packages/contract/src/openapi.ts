@@ -993,6 +993,7 @@ export function buildOpenApiDocument(): OpenAPIObject {
        201: { description: "Created — job queued", ...json(AcquireDownloadInfo) },
        404: { description: "Provider not registered/reachable", ...json(AcquireErrorResponse) },
        502: { description: "Provider responded 2xx but the body didn't match the expected shape", ...json(AcquireErrorResponse) },
+       507: { description: "Insufficient disk space on the target library", ...json(AcquireErrorResponse) },
      },
    });
    registry.registerPath({

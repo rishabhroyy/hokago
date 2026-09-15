@@ -144,7 +144,16 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
       setRows([]);
       return;
     }
-    setRows((data ?? []).map((r) => ({ ...r, createdAt: new Date(r.createdAt!), updatedAt: new Date(r.updatedAt!) })));
+    setRows(
+      (data ?? []).map((r) => ({
+        ...r,
+        createdAt: new Date(r.createdAt!),
+        updatedAt: new Date(r.updatedAt!),
+        // `also` carries the same wire-format (string) dates one level
+        // down -- the conversion above only reaches the row itself.
+        also: r.also?.map((a) => ({ ...a, createdAt: new Date(a.createdAt!), updatedAt: new Date(a.updatedAt!) })),
+      })),
+    );
   }, [activeProvider]);
 
   useEffect(() => {

@@ -417,7 +417,7 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
    * logged, not surfaced to the caller, since the HTTP response for the
    * enqueue itself already succeeded on the provider's own terms.
    */
-  function enqueueAcquireImport(providerId: string, info: z.infer<typeof AcquireDownloadInfo>, body: Partial<z.infer<typeof AcquireDownloadBody>>): void {
+  function enqueueOneAcquireImport(providerId: string, info: { id: string }, body: Partial<z.infer<typeof AcquireDownloadBody>>): void {
     if (!body.libraryId || !body.query) {
       console.error(`acquire import: skipped for ${providerId}/${info.id} -- no libraryId/query on the request`);
       return;
@@ -441,6 +441,13 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     acquireImportQueue
       .add(QUEUE_NAMES.ACQUIRE_IMPORT, data, { jobId: acquireImportJobId(providerId, info.id) })
       .catch((e) => console.error(`acquire import: enqueue failed for ${providerId}/${info.id}:`, e));
+  }
+
+  // Most providers resolve one item per request; a provider that resolved
+  // more lists the rest under `also`, each queued exactly like the primary.
+  function enqueueAcquireImport(providerId: string, info: z.infer<typeof AcquireDownloadInfo>, body: Partial<z.infer<typeof AcquireDownloadBody>>): void {
+    enqueueOneAcquireImport(providerId, info, body);
+    for (const extra of info.also ?? []) enqueueOneAcquireImport(providerId, extra, body);
   }
 
   app.post(

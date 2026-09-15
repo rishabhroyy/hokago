@@ -45,7 +45,7 @@ export const AcquireProgress = z.object({
 });
 export type AcquireProgress = z.infer<typeof AcquireProgress>;
 
-export const AcquireDownloadInfo = z.object({
+const AcquireDownloadInfoBase = z.object({
   id: z.string(),
   libraryId: z.string(),
   query: z.string(),
@@ -58,6 +58,16 @@ export const AcquireDownloadInfo = z.object({
   error: z.string().nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
+});
+
+export const AcquireDownloadInfo = AcquireDownloadInfoBase.extend({
+  // A provider whose one request resolves more than one importable item
+  // can list the rest here — each one gets imported exactly like the
+  // primary object above. Most providers return exactly one item and
+  // omit this entirely. Capped at the same ceiling as the built-in
+  // route's own episodeRange (see MAX_EPISODES) rather than trusting a
+  // provider's response size unconditionally.
+  also: z.array(AcquireDownloadInfoBase).max(100).optional(),
 });
 export type AcquireDownloadInfo = z.infer<typeof AcquireDownloadInfo>;
 

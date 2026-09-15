@@ -417,7 +417,11 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
    * logged, not surfaced to the caller, since the HTTP response for the
    * enqueue itself already succeeded on the provider's own terms.
    */
-  function enqueueOneAcquireImport(providerId: string, info: { id: string }, body: Partial<z.infer<typeof AcquireDownloadBody>>): void {
+  function enqueueOneAcquireImport(
+    providerId: string,
+    info: { id: string; title?: string | null; episodeRange?: string | null },
+    body: Partial<z.infer<typeof AcquireDownloadBody>>,
+  ): void {
     if (!body.libraryId || !body.query) {
       console.error(`acquire import: skipped for ${providerId}/${info.id} -- no libraryId/query on the request`);
       return;
@@ -434,8 +438,14 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       token: conn.token,
       libraryId: body.libraryId,
       query: body.query,
-      title: body.title,
-      episodeRange: body.episodeRange,
+      // Each item's own resolved value, not the shared original request --
+      // this is exactly what distinguishes sibling files from one another
+      // in the import step's own destination-path computation. Using
+      // body's here unconditionally (the bug this replaces) meant every
+      // sibling from one request built the identical destination path
+      // regardless of what the provider actually returned per item.
+      title: info.title ?? body.title,
+      episodeRange: info.episodeRange ?? body.episodeRange,
       dub: body.dub,
     };
     acquireImportQueue

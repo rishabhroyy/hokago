@@ -107,7 +107,14 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   const library = await deps.db.library.findUnique({ where: { id: libraryId } });
   if (!library) return; // deleted between enqueue and run -- nothing to place this into
 
-  const parsed = parseAnicliQuery(query);
+  // Same preference the filename's own `base` computation below already
+  // uses: a provider's `title` is a resolved, human result, `query` is
+  // just whatever the caller searched for -- an external provider's own
+  // search conventions (tags, quality/group markers) can differ a lot
+  // from ani-cli's, and parseAnicliQuery was only ever built for the
+  // latter. Placement should follow the same source the filename does,
+  // not fall back to the rawer, noisier string on its own.
+  const parsed = parseAnicliQuery(title?.trim() || query);
   const finalDir = seasonTargetDir(library.rootPath, parsed.title, parsed.year, parsed.sub);
   const stagingDir = acquireImportStagingDir(library.rootPath, providerId, downloadId);
   const tmpPath = path.join(stagingDir, "download.tmp");
@@ -175,6 +182,13 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
     if (existsSync(dest)) {
       // Never clobber existing library content -- the file that matters is
       // already there (most likely a duplicate enqueue for the same id).
+      // A real, fully-downloaded transfer ends here every time this
+      // fires, so it stays visible rather than a silent no-op -- a
+      // provider whose sibling items ever collide on this same path
+      // (this is the only thing standing between that and quietly
+      // losing a real download) shows up in logs instead of disappearing
+      // without a trace.
+      console.error(`acquire import (${providerId}/${downloadId}): ${dest} already exists, discarding this transfer as a likely duplicate`);
       await cleanup();
     } else {
       await rename(tmpPath, dest); // same filesystem as staging -- atomic

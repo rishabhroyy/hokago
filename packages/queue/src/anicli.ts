@@ -98,6 +98,13 @@ export const sanitizeFolder = (q: string): string => (q.replace(/[^a-zA-Z0-9 _-]
  * exact function — never a second, independently-written placement rule.
  */
 export function seasonTargetDir(root: string, title: string, year: number | null, sub: string | null): string {
-  const base = path.join(root, sanitizeFolder(year !== null ? `${title} (${year})` : title));
+  // sanitizeFolder truncates its whole input to 80 characters -- reserve
+  // room for the year suffix first rather than truncating the combined
+  // string blindly, which could otherwise let two different long-titled
+  // shows with different years collapse to the identical truncated
+  // folder name (the same class of bug fixed in acquire-import.ts's own
+  // filename computation, on the folder side this time).
+  const yearSuffix = year !== null ? ` (${year})` : "";
+  const base = path.join(root, sanitizeFolder(title.slice(0, Math.max(1, 80 - yearSuffix.length)) + yearSuffix));
   return sub !== null ? path.join(base, sub) : base;
 }

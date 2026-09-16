@@ -216,3 +216,52 @@ test("processAcquireImport reuses an existing similar-sounding series instead of
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("processAcquireImport keeps sibling files distinct even when the title alone consumes sanitizeFolder's whole 80-char budget", async () => {
+  // The exact title length from a real production failure: exactly 80
+  // characters, leaving zero room for " - Episode NN" once appended --
+  // every sibling job truncated to the identical filename despite
+  // genuinely different episodeRange values, and only the first ever
+  // landed. This is that title, verbatim.
+  const longTitle = "Judas Sewayaki Kitsune no Senko-san The Helpful Fox Senko-san Season 1 BD 1080pH";
+  assert.equal(longTitle.length, 80, "test fixture must reproduce the exact failure length");
+
+  const payload1 = Buffer.from("episode one bytes");
+  const payload2 = Buffer.from("episode two bytes");
+  let call = 0;
+  const { baseUrl, server } = await startServer((req, res) => {
+    call += 1;
+    const payload = call === 1 ? payload1 : payload2;
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  const deps = {
+    db: {
+      library: { findUnique: async () => ({ rootPath: root }) },
+      mediaItem: { findMany: async () => [] },
+    },
+    enqueueScan: async () => {},
+    scanSettleMs: 0,
+  };
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-7", baseUrl, libraryId: "lib-1", query: longTitle, title: longTitle, episodeRange: "Episode 01" }),
+      deps,
+    );
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-8", baseUrl, libraryId: "lib-1", query: longTitle, title: longTitle, episodeRange: "Episode 02" }),
+      deps,
+    );
+
+    const finalDir = seasonTargetDir(root, longTitle, null, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 2, "both sibling files must land, not just the first one");
+    const contents = await Promise.all(files.map((f) => readFile(path.join(finalDir, f))));
+    assert.deepEqual(new Set(contents.map(String)), new Set([payload1.toString(), payload2.toString()]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

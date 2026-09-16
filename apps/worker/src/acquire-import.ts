@@ -236,7 +236,18 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
     // file consistent with its own folder instead of the folder reflecting
     // an existing show's canonical name while the filename still carries
     // this request's raw one.
-    const base = effectiveTitle + (episodeRange ? ` - ${episodeRange}` : "");
+    //
+    // sanitizeFolder truncates its whole input to 80 characters -- reserve
+    // room for the episodeRange suffix FIRST (the only thing that actually
+    // distinguishes sibling files from one another) instead of truncating
+    // the combined string blindly. Confirmed, not theoretical: a title
+    // alone at or past 80 characters consumes the entire budget, silently
+    // dropping the suffix and leaving every sibling file computing the
+    // identical destination path despite genuinely different episodeRange
+    // values -- exactly the "only one file landed" failure traced back to
+    // a real production run.
+    const suffix = episodeRange ? ` - ${episodeRange}` : "";
+    const base = effectiveTitle.slice(0, Math.max(1, 80 - suffix.length)) + suffix;
     const filename = acquireFilenameFromContentDisposition(res.headers.get("content-disposition")) ?? `${sanitizeFolder(base)}.${ext}`;
 
     await mkdir(finalDir, { recursive: true });

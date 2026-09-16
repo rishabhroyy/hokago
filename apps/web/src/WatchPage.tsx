@@ -1737,24 +1737,37 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     commitRestart(buildSeekRequest(targetMs));
   }, [buildSeekRequest, commitRestart, bumpSrcNonce]);
 
-  const src =
-    start?.method === "DIRECT_PLAY"
-      ? { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const }
-      : start?.method === "REMUX" && start.streamUrl
-        ? {
-            // Native <video> + range requests against the live remux — no
-            // MSE, which is exactly why HEVC works here. Restarts (seek past
-            // the written frontier, audio switch) truncate and rewrite the
-            // file, so the nonce forces a fresh open.
-            src: srcNonce > 0 ? `${start.streamUrl}?r=${srcNonce}` : start.streamUrl,
-            type: "video/mp4" as const,
-          }
-        : start?.playlistUrl
-          ? {
-              src: srcNonce > 0 ? `${start.playlistUrl}?r=${srcNonce}` : start.playlistUrl,
-              type: "application/x-mpegurl" as const,
-            }
-          : undefined;
+  // Memoized on the fields that should actually cause a reload — every other
+  // derived value in this file follows the same rule (see e.g. selectedQuality
+  // above). A plain object literal here would get a fresh identity on every
+  // WatchPage re-render (heartbeat ticks, timeupdate-driven state, etc.),
+  // and vidstack reloads the source whenever the src prop's identity changes
+  // even when the URL is byte-for-byte the same — observed live as a client
+  // reload loop (repeated `Range: bytes=0-` requests seconds apart with no
+  // user seek, ending in aborted connections) that explains the reported
+  // lag/instability across DIRECT_PLAY, REMUX, and TRANSCODE alike.
+  const src = useMemo(() => {
+    if (start?.method === "DIRECT_PLAY") {
+      return { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const };
+    }
+    if (start?.method === "REMUX" && start.streamUrl) {
+      // Native <video> + range requests against the live remux — no
+      // MSE, which is exactly why HEVC works here. Restarts (seek past
+      // the written frontier, audio switch) truncate and rewrite the
+      // file, so the nonce forces a fresh open.
+      return {
+        src: srcNonce > 0 ? `${start.streamUrl}?r=${srcNonce}` : start.streamUrl,
+        type: "video/mp4" as const,
+      };
+    }
+    if (start?.playlistUrl) {
+      return {
+        src: srcNonce > 0 ? `${start.playlistUrl}?r=${srcNonce}` : start.playlistUrl,
+        type: "application/x-mpegurl" as const,
+      };
+    }
+    return undefined;
+  }, [start?.method, start?.streamUrl, start?.playlistUrl, mediaFileId, srcNonce]);
 
   // Server-side audio switching only makes sense while transcoding; DIRECT_PLAY
   // already has a native audio menu, so we don't double it up.

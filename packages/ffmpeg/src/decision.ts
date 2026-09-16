@@ -31,7 +31,24 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
   // Shared compatibility checks — a container/audio mismatch alone is
   // remux-fixable, everything else here is not.
   const containerOk = profile.supportedContainers.includes(input.container);
-  const videoCodecOk = input.videoCodec !== null && profile.supportedVideoCodecs.includes(input.videoCodec);
+  // A 10-bit HEVC source needs its own, explicit "hevc10" claim in the
+  // profile -- 8-bit HEVC (Main) and 10-bit HEVC (Main10) are different
+  // decode profiles, and a capability probe that only ever tested the
+  // 8-bit codec string (a real, previously-shipped gap) would otherwise
+  // report plain "hevc" support for a device that can only actually
+  // decode 8-bit, leading DIRECT_PLAY/REMUX to hand it a bitstream it
+  // can't decode instead of falling through to TRANSCODE (which already
+  // forces 8-bit output regardless of profile support).
+  const requiresHevc10 = input.videoCodec === "hevc" && (input.bitDepth ?? 8) >= 10;
+  // Folded directly into videoCodecOk (not a separate gate) so it correctly
+  // rules out REMUX too, not just DIRECT_PLAY -- unlike audio, a broken
+  // video stream is never remux-fixable (REMUX copies it verbatim), so
+  // both of the checks below that key on videoCodecOk need to see it as
+  // unsupported.
+  const videoCodecOk =
+    !input.videoKnownBroken &&
+    input.videoCodec !== null &&
+    profile.supportedVideoCodecs.includes(requiresHevc10 ? "hevc10" : input.videoCodec);
   const audioCodecOk =
     !input.audioKnownBroken &&
     (input.audioCodec === null || profile.supportedAudioCodecs.includes(input.audioCodec));
@@ -46,7 +63,13 @@ export function decidePlaybackMethod(input: PlaybackCandidateInput, profile: Dev
   // wants everything burned (e.g. airplay) forces it independent of the track.
   const burnRequired = input.subtitleRequiresBurnIn || profile.subtitleMode === "burn";
 
-  if (!videoCodecOk) reasons.push(`video codec ${input.videoCodec ?? "unknown"} unsupported by profile`);
+  if (!videoCodecOk) {
+    reasons.push(
+      input.videoKnownBroken
+        ? `video codec ${input.videoCodec ?? "unknown"} previously reported undecodable — forcing transcode`
+        : `video codec ${input.videoCodec ?? "unknown"} unsupported by profile`,
+    );
+  }
   if (!audioCodecOk) {
     reasons.push(
       input.audioKnownBroken

@@ -744,6 +744,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         }
         setStart(data);
         audioDecodeFallbackTriedRef.current = false;
+        videoDecodeFallbackTriedRef.current = false;
         setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
         // Party members link their session so heartbeats flow into the
         // member list (positions + liveness) and the server knows the
@@ -1543,35 +1544,54 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // on a DIRECT_PLAY session means the bytes are broken, not that the format
   // is genuinely unsupported.
   const audioDecodeFallbackTriedRef = useRef(false);
-  const tryAudioDecodeFallback = useCallback((): boolean => {
-    const session = startRef.current;
-    if (!session || session.method !== "DIRECT_PLAY" || audioDecodeFallbackTriedRef.current) return false;
-    audioDecodeFallbackTriedRef.current = true;
-    const sessionId = session.sessionId;
-    const positionMs = Math.round(
-      (playerRef.current && Number.isFinite(playerRef.current.currentTime) ? playerRef.current.currentTime : 0) * 1000 +
-        timelineOffsetRef.current,
-    );
-    commitRestart({
-      attempt: 0,
-      maxRetries: 1,
-      targetMs: positionMs,
-      run: async () => {
-        const { data, response } = await api.POST("/playback/{sessionId}/quality", {
-          params: { path: { sessionId } },
-          body: { positionMs, reportAudioDecodeError: true },
-        });
-        // Session moved on (user navigated to a different title) while this
-        // was in flight — its outcome describes a session nobody's watching
-        // anymore; discard rather than clobber whatever's playing now.
-        if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
-        if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
-        // restarted:false with a non-DIRECT_PLAY method means a concurrent
-        // request already moved this session off DIRECT_PLAY (e.g. its own
-        // in-flight decode-fallback, or an unrelated quality change) before
-        // this report's session read landed — the file is already fixed,
-        // not unrecoverable.
-        if (!data?.restarted && data?.method && data.method !== "DIRECT_PLAY") {
+  const videoDecodeFallbackTriedRef = useRef(false);
+
+  // Shared by tryAudioDecodeFallback/tryVideoDecodeFallback below — same
+  // report-then-restart shape either way, differing only in which flag
+  // gets reported to /quality. Callers have already checked eligibility
+  // and set their own tried-ref before calling this.
+  const runDecodeFallback = useCallback(
+    (reportField: "reportAudioDecodeError" | "reportVideoDecodeError"): void => {
+      const session = startRef.current;
+      if (!session) return;
+      const sessionId = session.sessionId;
+      const positionMs = Math.round(
+        (playerRef.current && Number.isFinite(playerRef.current.currentTime) ? playerRef.current.currentTime : 0) *
+          1000 +
+          timelineOffsetRef.current,
+      );
+      commitRestart({
+        attempt: 0,
+        maxRetries: 1,
+        targetMs: positionMs,
+        run: async () => {
+          const { data, response } = await api.POST("/playback/{sessionId}/quality", {
+            params: { path: { sessionId } },
+            body: { positionMs, [reportField]: true },
+          });
+          // Session moved on (user navigated to a different title) while this
+          // was in flight — its outcome describes a session nobody's watching
+          // anymore; discard rather than clobber whatever's playing now.
+          if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
+          if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
+          // restarted:false with a non-DIRECT_PLAY method means a concurrent
+          // request already moved this session off DIRECT_PLAY (e.g. its own
+          // in-flight decode-fallback, or an unrelated quality change) before
+          // this report's session read landed — the file is already fixed,
+          // not unrecoverable.
+          if (!data?.restarted && data?.method && data.method !== "DIRECT_PLAY") {
+            return {
+              ok: true,
+              restarted: true,
+              authoritative: true,
+              method: data.method,
+              segmentFrom: data.segmentFrom,
+              actualStartMs: data.actualStartMs,
+              playlistUrl: data.playlistUrl,
+              streamUrl: data.streamUrl,
+            };
+          }
+          if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
           return {
             ok: true,
             restarted: true,
@@ -1582,33 +1602,47 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             playlistUrl: data.playlistUrl,
             streamUrl: data.streamUrl,
           };
-        }
-        if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
-        return {
-          ok: true,
-          restarted: true,
-          authoritative: true,
-          method: data.method,
-          segmentFrom: data.segmentFrom,
-          actualStartMs: data.actualStartMs,
-          playlistUrl: data.playlistUrl,
-          streamUrl: data.streamUrl,
-        };
-      },
-      apply: (outcome) => {
-        if (!outcome.restarted || !startRef.current) return;
-        setPlayerError(null);
-        const method = outcome.method ?? startRef.current.method;
-        setStart((prev) => (prev ? { ...prev, method, playlistUrl: outcome.playlistUrl ?? null, streamUrl: outcome.streamUrl ?? null } : prev));
-        setKeyNonce((n) => n + 1);
-        userPausedRef.current = false;
-        bumpSrcNonce();
-        applyRestart(method, outcome.segmentFrom ?? null, outcome.actualStartMs ?? null, positionMs);
-      },
-      onFail: (message) => setPlayerError(message),
-    });
+        },
+        apply: (outcome) => {
+          if (!outcome.restarted || !startRef.current) return;
+          setPlayerError(null);
+          const method = outcome.method ?? startRef.current.method;
+          setStart((prev) => (prev ? { ...prev, method, playlistUrl: outcome.playlistUrl ?? null, streamUrl: outcome.streamUrl ?? null } : prev));
+          setKeyNonce((n) => n + 1);
+          userPausedRef.current = false;
+          bumpSrcNonce();
+          applyRestart(method, outcome.segmentFrom ?? null, outcome.actualStartMs ?? null, positionMs);
+        },
+        onFail: (message) => setPlayerError(message),
+      });
+    },
+    [commitRestart, applyRestart, bumpSrcNonce],
+  );
+
+  const tryAudioDecodeFallback = useCallback((): boolean => {
+    const session = startRef.current;
+    if (!session || session.method !== "DIRECT_PLAY" || audioDecodeFallbackTriedRef.current) return false;
+    audioDecodeFallbackTriedRef.current = true;
+    runDecodeFallback("reportAudioDecodeError");
     return true;
-  }, [commitRestart, applyRestart, bumpSrcNonce]);
+  }, [runDecodeFallback]);
+
+  // Only eligible once the session has already moved off DIRECT_PLAY —
+  // that happens either via the audio fallback above, or because the file
+  // never qualified for DIRECT_PLAY to begin with (e.g. an audio-codec
+  // mismatch on its own). Either way, REMUX and TRANSCODE already
+  // re-encode/handle audio compatibility, so a decode error recurring
+  // under one of them means audio was never the actual problem — the
+  // audio fallback's own DIRECT_PLAY-only guard means it can never catch
+  // this case, which is exactly why this needs to be a separate tier
+  // rather than just letting tryAudioDecodeFallback retry.
+  const tryVideoDecodeFallback = useCallback((): boolean => {
+    const session = startRef.current;
+    if (!session || session.method === "DIRECT_PLAY" || videoDecodeFallbackTriedRef.current) return false;
+    videoDecodeFallbackTriedRef.current = true;
+    runDecodeFallback("reportVideoDecodeError");
+    return true;
+  }, [runDecodeFallback]);
 
   // Some browsers abandon a DIRECT_PLAY resource without ever dispatching a
   // native `error` event — no MediaError, nothing for handleMediaError to
@@ -1646,6 +1680,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     (detail: MediaErrorDetail) => {
       if (detail.code === 3 || detail.code === 4) {
         if (tryAudioDecodeFallback()) return;
+        // Audio fallback wasn't eligible (already tried, or this session
+        // was never DIRECT_PLAY) — a decode error at this point is under
+        // REMUX/TRANSCODE, which already handle audio compatibility, so
+        // it's the video stream this time. One more escalation tier
+        // before giving up, same as the audio one above.
+        if (tryVideoDecodeFallback()) return;
         // Fallback already fired once for this session and a restart is
         // still in flight (a stray duplicate decode-error event, e.g. from
         // the old element mid-teardown) — let it finish instead of racing
@@ -1658,7 +1698,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       pendingSeekRef.current = null;
       setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);
     },
-    [tryAudioDecodeFallback],
+    [tryAudioDecodeFallback, tryVideoDecodeFallback],
   );
 
   const retryPlayback = useCallback(() => {
@@ -1686,6 +1726,13 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     // TRANSCODE/REMUX: reload the current src (a transient hiccup heals with a
     // plain reload) *and* commit a seek-restart, which respawns a dead ffmpeg
     // child server-side — the reload alone would fail exactly the same way.
+    //
+    // Same reasoning as the DIRECT_PLAY reset above, for the video
+    // fallback's own one-shot ref: only meaningful while still on REMUX
+    // (its eligible starting point) — if it already escalated all the way
+    // to TRANSCODE, the flag did its job and re-arming it here would let a
+    // stray duplicate error event fire a second, redundant report.
+    if (method === "REMUX") videoDecodeFallbackTriedRef.current = false;
     bumpSrcNonce();
     commitRestart(buildSeekRequest(targetMs));
   }, [buildSeekRequest, commitRestart, bumpSrcNonce]);

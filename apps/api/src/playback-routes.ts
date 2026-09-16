@@ -196,6 +196,7 @@ async function buildCandidateInput(
     input: {
       container: normalizeContainer(mediaFile.container ?? ""),
       videoCodec: videoStream?.codec ?? null,
+      bitDepth: videoStream?.bitDepth ?? null,
       audioCodec: audioStream?.codec ?? null,
       width: videoStream?.width ?? null,
       height: videoStream?.height ?? null,
@@ -203,6 +204,7 @@ async function buildCandidateInput(
       isHdr: videoStream?.hdrMeta !== null && videoStream?.hdrMeta !== undefined,
       subtitleRequiresBurnIn: subtitleTrack?.requiresBurnIn ?? false,
       audioKnownBroken: mediaFile.audioDecodeBroken,
+      videoKnownBroken: mediaFile.videoDecodeBroken,
     },
     path: mediaFile.path,
     durationMs: mediaFile.durationMs ?? 0,
@@ -1344,6 +1346,13 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       // client misreporting from a REMUX/TRANSCODE session (already
       // re-encoding audio) would otherwise flip the sticky flag on bytes
       // that were never the problem.
+      // Video's own equivalent of the audio report above — but gated the
+      // opposite way: only trusted from a session that is NOT (anymore)
+      // DIRECT_PLAY, i.e. one where the audio fallback already ran once and
+      // the same decode error recurred regardless. That recurrence is what
+      // actually proves audio was never the problem; a report arriving
+      // while still on DIRECT_PLAY hasn't earned that conclusion yet and
+      // should go through the audio path above first.
       const updatedMediaFile =
         req.body.reportAudioDecodeError && session.method === "DIRECT_PLAY"
           ? await db.mediaFile.update({
@@ -1351,7 +1360,13 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
               data: { audioDecodeBroken: true },
               include: { streams: true },
             })
-          : null;
+          : req.body.reportVideoDecodeError && session.method !== "DIRECT_PLAY"
+            ? await db.mediaFile.update({
+                where: { id: session.mediaFileId },
+                data: { videoDecodeBroken: true },
+                include: { streams: true },
+              })
+            : null;
 
       // The DB row keeps the session's *start* profile — the raw, un-normalized
       // profile (no 1080p ceiling) — so reset re-decides exactly like /start did.

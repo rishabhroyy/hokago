@@ -609,6 +609,13 @@ model MediaFile {
   /// future session skips straight to REMUX with audio forced to re-encode
   /// instead of repeating the same broken direct play.
   audioDecodeBroken Boolean @default(false)
+  /// Same idea as audioDecodeBroken, for the video stream — set once the
+  /// client has already tried the audio-decode fallback (REMUX with audio
+  /// re-encoded) on this file and the decode error recurred anyway, proving
+  /// the bytes that were never the problem. Video is never remux-fixable
+  /// (decision.ts's own doc comment), so this forces straight to TRANSCODE
+  /// rather than repeating a REMUX that can't help.
+  videoDecodeBroken Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

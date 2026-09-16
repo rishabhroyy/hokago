@@ -114,6 +114,13 @@ export interface PlaybackCandidateInput {
   /** ffprobe format name, e.g. "matroska,webm" or "mov,mp4,m4a,3gp,3g2,mj2". */
   container: string;
   videoCodec: string | null;
+  /** From ffprobe pix_fmt (e.g. yuv420p10le -> 10). Only load-bearing for
+   * HEVC today — see decidePlaybackMethod's videoCodecOk: a device that
+   * decodes 8-bit HEVC natively doesn't necessarily decode 10-bit HEVC
+   * (Main vs Main10 profile), and canPlayType-style capability probes are
+   * commonly only ever run against an 8-bit codec string, so a profile
+   * that lists plain "hevc" cannot be trusted for a 10-bit source. */
+  bitDepth: number | null;
   audioCodec: string | null;
   width: number | null;
   height: number | null;
@@ -130,4 +137,13 @@ export interface PlaybackCandidateInput {
    * downstream REMUX build must re-encode it, never copy.
    */
   audioKnownBroken: boolean;
+  /**
+   * Same idea as audioKnownBroken, for video (see MediaFile.videoDecodeBroken)
+   * — set once a client already tried the audio fallback (REMUX, audio
+   * re-encoded) and the decode error recurred anyway, proving the video
+   * bytes were the actual problem. Video is never remux-fixable (a REMUX
+   * copies it verbatim), so this must force TRANSCODE, not just rule out
+   * REMUX the way audioKnownBroken rules out DIRECT_PLAY.
+   */
+  videoKnownBroken: boolean;
 }

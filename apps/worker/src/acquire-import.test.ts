@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { processAcquireImport, acquireImportStagingDir } from "./acquire-import.js";
-import type { AcquireImportJobData, Job } from "@hokago/queue";
+import { seasonTargetDir, type AcquireImportJobData, type Job } from "@hokago/queue";
 
 async function startServer(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void): Promise<{ baseUrl: string; server: Server }> {
   const server = createServer(handler);
@@ -38,7 +38,7 @@ test("processAcquireImport streams to the library-convention path, cleans stagin
     await processAcquireImport(
       fakeJob({ providerId: "ext1", downloadId: "dl-1", baseUrl, libraryId: "lib-1", query: "Frieren", title: "Frieren" }),
       {
-        db: { library: { findUnique: async () => ({ rootPath: root }) } },
+        db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
         enqueueScan: async (libraryId) => {
           scannedLibraryId = libraryId;
         },
@@ -78,7 +78,7 @@ test("processAcquireImport treats a truncated stream as a failure: rejects, no f
       processAcquireImport(
         fakeJob({ providerId: "ext1", downloadId: "dl-2", baseUrl, libraryId: "lib-1", query: "Frieren" }),
         {
-          db: { library: { findUnique: async () => ({ rootPath: root }) } },
+          db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
           enqueueScan: async () => {
             scanCalled = true;
           },
@@ -108,7 +108,7 @@ test("processAcquireImport rejects and cleans up when the provider omits Content
       processAcquireImport(
         fakeJob({ providerId: "ext1", downloadId: "dl-3", baseUrl, libraryId: "lib-1", query: "Frieren" }),
         {
-          db: { library: { findUnique: async () => ({ rootPath: root }) } },
+          db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
           enqueueScan: async () => {},
           scanSettleMs: 0,
         },
@@ -135,7 +135,7 @@ test("processAcquireImport aborts a stalled stream (no bytes at all, connection 
       processAcquireImport(
         fakeJob({ providerId: "ext1", downloadId: "dl-5", baseUrl, libraryId: "lib-1", query: "Frieren" }),
         {
-          db: { library: { findUnique: async () => ({ rootPath: root }) } },
+          db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
           enqueueScan: async () => {},
           scanSettleMs: 0,
           stallMs: 200, // real default is 5 minutes -- tiny here so the test doesn't wait for it
@@ -170,12 +170,47 @@ test("processAcquireImport never clobbers a file that already exists at the dest
     await processAcquireImport(
       fakeJob({ providerId: "ext1", downloadId: "dl-4", baseUrl, libraryId: "lib-1", query: "Frieren", title: "Frieren" }),
       {
-        db: { library: { findUnique: async () => ({ rootPath: root }) } },
+        db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
         enqueueScan: async () => {},
         scanSettleMs: 0,
       },
     );
     assert.equal((await readFile(path.join(finalDir, "Frieren.mp4"))).toString(), "already here");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport reuses an existing similar-sounding series instead of creating a near-duplicate folder", async () => {
+  const payload = Buffer.from("existing-series bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-6", baseUrl, libraryId: "lib-1", query: "Frieren", title: "Frieren" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          // A show this library already has, under its own fuller,
+          // canonical title -- the "query embedded in the fuller title"
+          // shape acceptMatch's own doc comment gives as its example.
+          mediaItem: { findMany: async () => [{ title: "Frieren: Beyond Journey's End", originalTitle: null, year: null }] },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Frieren: Beyond Journey's End", null, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "file should land under the existing series' own folder, not a fresh one derived from this request's raw title");
+    assert.deepEqual(await readFile(path.join(finalDir, files[0]!)), payload);
+    assert.equal(await existsDir(path.join(root, "Frieren")), false, "must not also create a near-duplicate folder from the raw query/title text");
   } finally {
     await rm(root, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));

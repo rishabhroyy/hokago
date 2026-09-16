@@ -6,6 +6,13 @@
  * the exact same convention the built-in ani-cli import already
  * established (parseAnicliQuery + seasonTargetDir, from @hokago/queue) —
  * never a second, independently-invented rule for where a file goes.
+ * Before that, it also checks whether this library already has a
+ * matching show (findExistingSeries, reusing @hokago/providers'
+ * acceptMatch — the same acceptance test the scanner's own metadata step
+ * trusts) and places under its existing canonical title/year instead of
+ * whatever this one request's text happens to produce, so the same show
+ * arriving via a different release/provider doesn't fork into a second
+ * near-duplicate folder.
  *
  * No DB row backs this job — its own BullMQ job state is the only record,
  * deliberately, matching how lightweight the rest of the acquire-provider
@@ -47,9 +54,23 @@ class StallTracker extends Transform {
 }
 
 import { parseAnicliQuery, seasonTargetDir, sanitizeFolder, type AcquireImportJobData, type Job } from "@hokago/queue";
+import { acceptMatch } from "@hokago/providers";
+import type { MetadataMatch, MetadataQuery } from "@hokago/metadata";
 
 export interface AcquireImportDeps {
-  db: { library: { findUnique: (args: { where: { id: string } }) => Promise<{ rootPath: string } | null> } };
+  db: {
+    library: { findUnique: (args: { where: { id: string } }) => Promise<{ rootPath: string } | null> };
+    // Existing SERIES-level items in the target library, for the
+    // find-before-create check below -- selected fields only, same
+    // reasoning as the library lookup above: keep this file's own
+    // dependency shape small and easy to fake in a test rather than
+    // pulling in a full Prisma client type.
+    mediaItem: {
+      findMany: (args: {
+        where: { libraryId: string; kind: "SERIES" };
+      }) => Promise<{ title: string; originalTitle: string | null; year: number | null }[]>;
+    };
+  };
   enqueueScan: (libraryId: string, mode: "light" | "heavy", delayMs?: number) => Promise<void>;
   scanSettleMs: number;
   /** No bytes at all for this long (initial connect included) -- something's
@@ -59,6 +80,37 @@ export interface AcquireImportDeps {
    * connection can legitimately take much longer than this between its
    * first and last byte. */
   stallMs?: number;
+}
+
+/**
+ * Reuses a show this library already has instead of always deriving a
+ * fresh title from whatever text this one request happened to carry --
+ * the same acceptance logic (@hokago/providers' acceptMatch) the scanner's
+ * own metadata step already trusts for "is this the same show", applied
+ * locally against this library's existing items instead of a remote
+ * provider's search results. No network call: the library's own history
+ * is the candidate list. A near-duplicate folder for a show hokago
+ * already knows about (different release, different raw title, same
+ * actual anime) is exactly what this exists to prevent.
+ */
+async function findExistingSeries(
+  deps: AcquireImportDeps,
+  libraryId: string,
+  title: string,
+  year: number | null,
+): Promise<{ title: string; year: number | null } | undefined> {
+  const existing = await deps.db.mediaItem.findMany({ where: { libraryId, kind: "SERIES" } });
+  const query: MetadataQuery = { title, year: year ?? undefined, kind: "SERIES" };
+  const match = existing.find((item) => {
+    const candidate: MetadataMatch = {
+      providerId: "local",
+      title: item.title,
+      year: item.year ?? undefined,
+      titles: item.originalTitle ? [{ type: "SYNONYM", value: item.originalTitle }] : undefined,
+    };
+    return acceptMatch(query, candidate);
+  });
+  return match ? { title: match.title, year: match.year ?? null } : undefined;
 }
 
 const EXT_BY_CONTENT_TYPE: Record<string, string> = {
@@ -115,7 +167,13 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   // latter. Placement should follow the same source the filename does,
   // not fall back to the rawer, noisier string on its own.
   const parsed = parseAnicliQuery(title?.trim() || query);
-  const finalDir = seasonTargetDir(library.rootPath, parsed.title, parsed.year, parsed.sub);
+  // Best-effort only: a lookup hiccup here degrades to "no match found",
+  // not a failed import -- this only ever improves on parsed.title/year,
+  // never gates whether the transfer itself can proceed.
+  const existing = await findExistingSeries(deps, libraryId, parsed.title, parsed.year).catch(() => undefined);
+  const effectiveTitle = existing?.title ?? parsed.title;
+  const effectiveYear = existing?.year ?? parsed.year;
+  const finalDir = seasonTargetDir(library.rootPath, effectiveTitle, effectiveYear, parsed.sub);
   const stagingDir = acquireImportStagingDir(library.rootPath, providerId, downloadId);
   const tmpPath = path.join(stagingDir, "download.tmp");
   const cleanup = () => rm(stagingDir, { recursive: true, force: true }).catch(() => {});
@@ -174,7 +232,11 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
     }
 
     const ext = EXT_BY_CONTENT_TYPE[res.headers.get("content-type") ?? ""] ?? "mkv";
-    const base = (title?.trim() || parsed.title) + (episodeRange ? ` - ${episodeRange}` : "");
+    // Same effective title the folder above was placed under -- keeps a
+    // file consistent with its own folder instead of the folder reflecting
+    // an existing show's canonical name while the filename still carries
+    // this request's raw one.
+    const base = effectiveTitle + (episodeRange ? ` - ${episodeRange}` : "");
     const filename = acquireFilenameFromContentDisposition(res.headers.get("content-disposition")) ?? `${sanitizeFolder(base)}.${ext}`;
 
     await mkdir(finalDir, { recursive: true });

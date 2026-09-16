@@ -742,9 +742,33 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             .catch(() => {});
           return;
         }
+        // A title change (mediaFileId) reuses this WatchPage instance rather
+        // than remounting it (see the mountDefaultId comment above), so every
+        // piece of per-session state that every OTHER restart path already
+        // resets (handleQualityChange, runDecodeFallback, retryPlayback) must
+        // be reset here too -- this is the one path those didn't cover.
+        const prevMethod = startRef.current?.method;
         setStart(data);
         audioDecodeFallbackTriedRef.current = false;
         videoDecodeFallbackTriedRef.current = false;
+        // A paused pause from the previous episode must not carry over and
+        // silently suppress autoplay on the next one.
+        userPausedRef.current = false;
+        // The previous episode's muted-autoplay unlock (if any) is now stale
+        // -- its listener already consumed itself on the first gesture, or
+        // never fired at all. Either way, without this the ref stays stuck
+        // `true` forever and every later episode that hits the same
+        // blocked-autoplay path silently skips arming a new unlock listener,
+        // leaving it muted with no way to auto-recover on the next gesture.
+        autoplayUnmuteArmedRef.current = false;
+        // vidstack can't hot-swap between the native <video> and HLS/MSE
+        // providers via a src change alone (see the keyNonce comment above) --
+        // every other path that can change method (quality switch, decode
+        // fallback) already forces a remount when it does. This is the one
+        // remaining path that can change method (a new episode landing on a
+        // different DIRECT_PLAY/REMUX/TRANSCODE tier than the last) without
+        // going through either of those.
+        if (prevMethod && prevMethod !== data.method) setKeyNonce((n) => n + 1);
         setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
         // Party members link their session so heartbeats flow into the
         // member list (positions + liveness) and the server knows the

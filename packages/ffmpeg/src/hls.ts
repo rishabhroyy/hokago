@@ -36,7 +36,7 @@ export function buildM3u8(durationMs: number, segmentSeconds: number, startSegme
   // remainders into the previous segment instead of writing a stub file —
   // a phantom trailing EXTINF would make players fetch a segment that never
   // exists and wedge the loader queue. Drop ghosts under half a second.
-  if (segmentCount > 1 && totalSeconds - (segmentCount - 1) * segmentSeconds < 0.5) {
+  if (segmentCount > 1 && totalSeconds - (segmentCount - 1) * segmentSeconds < 0.2) {
     segmentCount--;
   }
   const lines = [
@@ -220,9 +220,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     // download path (CPU scale + nvenc encode) instead.
     input.hwaccel.filters.has("scale_npp") &&
     !input.toneMap &&
-    !input.subtitleBurnIn &&
-    input.maxWidth !== undefined &&
-    input.maxHeight !== undefined;
+    !input.subtitleBurnIn;
   const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
@@ -266,10 +264,13 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     // (HEVC Main 10) to 8-bit 4:2:0 on-GPU — the 10→8-bit step the CPU path
     // does via format=yuv420p. Odd-dimension sources fail here and ride the
     // hw→CPU fallback; every real-world resolution is even. The w/h
-    // expressions resolve once at init (eval=init default).
-    videoFilters.push(
-      `scale_npp=w='min(${input.maxWidth},iw)':h='min(${input.maxHeight},ih)':format=nv12`,
-    );
+    // expressions resolve once at init (eval=init default). No cap (the
+    // common full-quality case) falls back to a no-op iw/ih passthrough
+    // instead of requiring a resize — a real resize was never the point of
+    // this branch, only staying GPU-resident is.
+    const scaleW = input.maxWidth !== undefined ? `min(${input.maxWidth},iw)` : "iw";
+    const scaleH = input.maxHeight !== undefined ? `min(${input.maxHeight},ih)` : "ih";
+    videoFilters.push(`scale_npp=w='${scaleW}':h='${scaleH}':format=nv12`);
   } else if (input.maxWidth !== undefined || input.maxHeight !== undefined) {
     videoFilters.push(`scale='min(${input.maxWidth ?? -2},iw)':'min(${input.maxHeight ?? -2},ih)'`);
   }

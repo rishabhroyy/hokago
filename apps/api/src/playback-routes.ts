@@ -1,4 +1,5 @@
 import { execFileSync, execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -437,6 +438,31 @@ async function cancelCurrentJob(sessionId: string): Promise<void> {
 }
 
 /**
+ * Commits a restart's DB write gated on the session still being live — mirrors
+ * the guarded-updateMany pattern the first-spawn quality-switch branch already
+ * uses. A /stop landing while a seek/audio-track/quality restart is mid-flight
+ * marks the row endedAt and tears down liveSessions, but the restart already
+ * in flight has no way to see that until it's done spawning; committing
+ * unconditionally would resurrect a live entry for a session that's actually
+ * dead. On a lost race, kill the just-spawned child (its own exit callback
+ * releases the slot) and mark its job cancelled instead of leaving it running
+ * unowned, then report the same 503 the caller already uses for a busy slot.
+ */
+async function commitOrCancelRestart(
+  transcode: RunningTranscode,
+  jobId: string,
+  dbUpdate: () => Promise<{ count: number }>,
+): Promise<boolean> {
+  const commit = await dbUpdate();
+  if (commit.count > 0) return true;
+  if (transcode.child.exitCode === null && transcode.child.signalCode === null) {
+    transcode.child.kill("SIGKILL");
+  }
+  await db.transcodeJob.update({ where: { id: jobId }, data: { state: "CANCELLED", endedAt: new Date() } });
+  return false;
+}
+
+/**
  * Records a job's terminal state — unless a cancel path already marked it
  * CANCELLED. The exit callback races the cancel (the SIGKILL fires the
  * callback after cancelCurrentJob wrote CANCELLED) and would otherwise
@@ -532,6 +558,16 @@ async function attemptHwFallback(sessionId: string, outDir: string): Promise<voi
   const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, segmentFrom);
   await writePlaylistAtomically(outDir, playlist).catch(() => {});
 
+  // /stop can race this background respawn the same way it races the
+  // client-facing restart routes — restartTranscode's own liveSessions.has()
+  // check only covers up to the point it returned; a stop landing in the
+  // narrow window between that and here would otherwise get silently
+  // resurrected by the unconditional set() below.
+  if (!liveSessions.has(sessionId)) {
+    if (transcode.child.exitCode === null && transcode.child.signalCode === null) transcode.child.kill("SIGKILL");
+    return;
+  }
+
   liveSessions.set(sessionId, {
     ...live,
     transcode,
@@ -598,7 +634,15 @@ async function spawnTranscodeJob(
       }
     })();
   }, input);
-  await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
+  // Best-effort — see the identical comment in restartTranscode: letting this
+  // throw would lose the only reference to `transcode` at this call site (the
+  // caller's catch only has releaseTranscodeSlot() to fall back on), and this
+  // child's own exit callback above already releases that same slot once —
+  // a second manual release would over-credit the semaphore, and the child
+  // itself would run untracked and unreapable (no persisted pid).
+  await db.transcodeJob
+    .update({ where: { id: job.id }, data: { pid: transcode.pid } })
+    .catch((e) => console.warn(`transcode job ${job.id}: failed to persist pid ${transcode.pid}: ${String(e).slice(0, 200)}`));
   return { transcode, jobId: job.id };
 }
 
@@ -608,13 +652,24 @@ async function restartTranscode(
   targetMs: number,
   overrides?: { profile?: DeviceProfile; method?: "REMUX" | "TRANSCODE" },
 ): Promise<
-    { transcode: RunningTranscode; jobId: string; startMs: number; segmentFrom: number } | { cancelled: true }
+    | { transcode: RunningTranscode; jobId: string; startMs: number; segmentFrom: number; remuxOutFile: string | null }
+    | { cancelled: true }
   > {
   // Mark the session as restarting *before* the kill: the old child's exit
   // callback runs during the kill-await below, while the map still holds the
   // old entry — without the flag its truncatePlaylistOnExit would rewrite the
   // playlist the caller is about to replace (pid guard can't tell it apart).
+  //
+  // Also doubles as a mutex: `restarting` was previously cosmetic (only read
+  // by truncatePlaylistOnExit/attemptHwFallback to skip a stale child), so
+  // two overlapping restarts for the same session (e.g. a double seek) both
+  // passed this point, both killed the same old child, and both spawned a
+  // fresh ffmpeg — for REMUX both write into the same outDir (see the
+  // per-restart remux filename below) and for TRANSCODE both write
+  // `segment-N.ts` under the *same* unchanged outDir with colliding names.
+  // Bailing out here when a restart is already in flight closes that gap.
   const current = liveSessions.get(sessionId);
+  if (current?.restarting) return { cancelled: true };
   if (current) liveSessions.set(sessionId, { ...current, restarting: true });
 
   // The ffmpeg child may have already finished on its own (e.g. it reached
@@ -689,16 +744,24 @@ async function restartTranscode(
     // probe), so -ss on mkv would start at a different media time than startMs
     // and subs drift. Falls back to the legacy -ss remux when probing fails.
     const resumeInput = isRemux ? await buildResumeInput(live.mediaFile.path, startMs) : null;
+    // A fresh, uniquely-named file per restart, not a fixed "stream.mp4" —
+    // every restart (seek, audio-switch, quality-switch) kills the old ffmpeg
+    // and spawns a new one with `-y`, which truncates-in-place on open. A
+    // seek-restart keeps outDir unchanged (audio/quality switches move to a
+    // fresh per-track/per-quality dir instead), so a fixed filename there had
+    // the new child truncate the exact file a client's in-flight range
+    // request could be mid-read on — an abrupt short-read/corruption to
+    // whatever <video> element was mid-buffer. A unique name per restart
+    // means an old, already-exited generation is only ever read (and
+    // mehd-patched) after its own writer has fully exited, never overwritten
+    // by a later one — the caller swaps the live session's remux.outFile to
+    // this new path and best-effort deletes the previous generation once the
+    // swap lands (still-open reads against it keep working on POSIX either way).
+    const remuxOutFile = isRemux ? path.join(live.outDir, `stream-${randomUUID()}.mp4`) : null;
     const args = isRemux
       ? buildRemuxArgs({
           inputPath: live.mediaFile.path,
-          // Derive from outDir, not live.remux.outFile: the audio-track route
-          // restarts into a fresh per-track outDir (spread sets live.outDir,
-          // leaving remux.outFile pointing at the previous track's dir), and
-          // writing the new stream there means it lands on the disk the stream
-          // route then serves. Seek-restarts keep outDir unchanged, so this is
-          // the same file either way.
-          outputPath: path.join(live.outDir, "stream.mp4"),
+          outputPath: remuxOutFile!,
           startMs,
           durationMs: live.mediaFile.durationMs,
           audioStreamIndex: live.audioStreamIndex,
@@ -765,11 +828,34 @@ async function restartTranscode(
         }
       })();
     }, resumeInput?.input);
-    await db.transcodeJob.update({ where: { id: job.id }, data: { pid: transcode.pid } });
-  
-    return { transcode, jobId: job.id, startMs, segmentFrom };
+    // Best-effort — losing this write only risks killOrphanedTranscodes not
+    // finding this job's pid if the process dies before a later restart
+    // updates it; the live session already carries the pid in memory
+    // regardless. Letting this throw would lose the only reference to
+    // `transcode` at this call site (the enclosing catch below only has
+    // `releaseTranscodeSlot()` to fall back on), and this child's own exit
+    // callback above will release that same slot again once it exits —
+    // double-releasing the semaphore and leaking an untracked orphan.
+    await db.transcodeJob
+      .update({ where: { id: job.id }, data: { pid: transcode.pid } })
+      .catch((e) => console.warn(`transcode job ${job.id}: failed to persist pid ${transcode.pid}: ${String(e).slice(0, 200)}`));
+
+    // The previous generation's remux file (if any) is now orphaned, but its
+    // cleanup is the caller's job, not this function's — deleting it here,
+    // before the caller has swapped liveSessions over to the new path, would
+    // leave a window where the live entry still points at a file that no
+    // longer exists. Callers already have `live.remux?.outFile` in scope and
+    // do the rm right after their own liveSessions.set().
+
+    return { transcode, jobId: job.id, startMs, segmentFrom, remuxOutFile };
   } catch (e) {
     releaseTranscodeSlot();
+    // Without this, the entry-guard mutex above (`if (current?.restarting)
+    // return { cancelled: true }`) would see this session as permanently
+    // mid-restart — any failure here (e.g. db.transcodeJob.create rejecting)
+    // would wedge every future seek/audio-track/quality-switch for this
+    // session as "busy" forever, until a full /stop + /start.
+    if (liveSessions.has(sessionId)) liveSessions.set(sessionId, live);
     throw e;
   }
 }
@@ -1139,6 +1225,14 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
         await writePlaylistAtomically(live.outDir, playlist);
 
+        const committed = await commitOrCancelRestart(transcode, jobId, () =>
+          db.playbackSession.updateMany({
+            where: { id: req.params.sessionId, endedAt: null },
+            data: { positionMs: targetMs },
+          }),
+        );
+        if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
+
         liveSessions.set(req.params.sessionId, {
           ...live,
           transcode,
@@ -1147,7 +1241,6 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           currentTranscodeJobId: jobId,
         });
 
-        await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
         return {
           restarted: true,
           segmentFrom: actualSegmentFrom,
@@ -1184,18 +1277,28 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs } = restarted;
+      const { transcode, jobId, startMs, remuxOutFile } = restarted;
       const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
+
+      const committed = await commitOrCancelRestart(transcode, jobId, () =>
+        db.playbackSession.updateMany({
+          where: { id: req.params.sessionId, endedAt: null },
+          data: { positionMs: targetMs },
+        }),
+      );
+      if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
 
       liveSessions.set(req.params.sessionId, {
         ...live,
         transcode,
         currentSegmentFrom: segmentFrom,
         currentTranscodeJobId: jobId,
-        remux: { outFile: live.remux.outFile, startMs, patched: false },
+        remux: { outFile: remuxOutFile!, startMs, patched: false },
       });
+      // Only now, after the live entry points at the new file — the old
+      // generation's writer already exited, so nothing opens it fresh again.
+      if (live.remux?.outFile) void rm(live.remux.outFile, { force: true }).catch(() => {});
 
-      await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
       return {
         restarted: true,
         segmentFrom,
@@ -1264,13 +1367,21 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
+      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile } = restarted;
       if (!isRemux) {
         // Written after the restart so the first listed segment matches the
         // segment the new child actually starts at.
         const m3u8 = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
         await writePlaylistAtomically(newOutDir, m3u8);
       }
+
+      const committed = await commitOrCancelRestart(transcode, jobId, () =>
+        db.playbackSession.updateMany({
+          where: { id: req.params.sessionId, endedAt: null },
+          data: { positionMs: targetMs },
+        }),
+      );
+      if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
 
       liveSessions.set(req.params.sessionId, {
         ...live,
@@ -1282,10 +1393,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         audioStreamIndex: audioIndex,
         audioCodec,
         sourceAudioCodec: requestedStream.codec,
-        remux: isRemux ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
+        remux: isRemux ? { outFile: remuxOutFile!, startMs, patched: false } : null,
       });
+      // Only now, after the live entry points at the new file — the old
+      // generation's writer already exited, so nothing opens it fresh again.
+      if (live.remux?.outFile) void rm(live.remux.outFile, { force: true }).catch(() => {});
 
-      await db.playbackSession.update({ where: { id: req.params.sessionId }, data: { positionMs: targetMs } });
       return {
         restarted: true,
         segmentFrom: actualSegmentFrom,
@@ -1620,13 +1733,21 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
+      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile } = restarted;
       if (newMethod === "TRANSCODE") {
         // Written after the restart: the first listed segment must be the
         // keyframe-anchored one the new child actually starts at.
         const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
         await writePlaylistAtomically(newOutDir, playlist);
       }
+
+      const committed = await commitOrCancelRestart(transcode, jobId, () =>
+        db.playbackSession.updateMany({
+          where: { id: req.params.sessionId, endedAt: null },
+          data: { method: newMethod, positionMs: targetMs },
+        }),
+      );
+      if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
 
       liveSessions.set(req.params.sessionId, {
         ...live,
@@ -1637,13 +1758,16 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         currentTranscodeJobId: jobId,
         deviceProfile: newProfile,
         method: newMethod,
-        remux: newMethod === "REMUX" ? { outFile: path.join(newOutDir, "stream.mp4"), startMs, patched: false } : null,
+        // restartTranscode always writes REMUX output to its own fresh
+        // per-restart filename now (never plain "stream.mp4") — reconstructing
+        // the path here instead of using its actual return value would 404
+        // every request against a file that doesn't exist.
+        remux: newMethod === "REMUX" ? { outFile: remuxOutFile!, startMs, patched: false } : null,
       });
+      // Only now, after the live entry points at the new file — the old
+      // generation's writer already exited, so nothing opens it fresh again.
+      if (live.remux?.outFile) void rm(live.remux.outFile, { force: true }).catch(() => {});
 
-      await db.playbackSession.update({
-        where: { id: req.params.sessionId },
-        data: { method: newMethod, positionMs: targetMs },
-      });
       return {
         restarted: true,
         method: newMethod,

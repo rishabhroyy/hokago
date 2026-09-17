@@ -75,6 +75,15 @@ const GATE_ENCODER: Record<HwaccelMethod, string> = {
 };
 
 let cached: HwaccelState | null = null;
+let disabledAt: number | null = null;
+// A runtime hwaccel failure is often transient (e.g. losing a race for the
+// GPU's own limited concurrent-encode-session cap against another process's
+// background work, not a genuinely broken driver/device) — permanently
+// disabling for the rest of this process's uptime turns one contention blip
+// into every later session silently running slow CPU-only encoding until
+// restart. Retry detection after a cooldown instead; a still-broken device
+// just gets disabled again for another window.
+const HW_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
 function envRequest(): HwaccelRequest {
   const value = process.env.HOKAGO_HWACCEL ?? "auto";
@@ -212,14 +221,21 @@ async function detect(): Promise<HwaccelState> {
 
 /** Resolved, process-lifetime-cached acceleration state (first call runs detection). */
 export async function getHwaccel(): Promise<HwaccelState> {
-  if (cached === null) cached = await detect();
+  if (cached === null) {
+    cached = await detect();
+  } else if (cached.disabledAfterFailure && disabledAt !== null && Date.now() - disabledAt > HW_RETRY_COOLDOWN_MS) {
+    disabledAt = null;
+    cached = await detect();
+  }
   return cached;
 }
 
 /**
- * Disables hardware acceleration for the rest of this process after a runtime
- * failure — a broken driver/device must not take every play session down.
- * The caller retries the failed work with the software path.
+ * Disables hardware acceleration for this process for a cooldown window after
+ * a runtime failure — a broken driver/device must not take every play session
+ * down. The caller retries the failed work with the software path; the next
+ * getHwaccel() call past the cooldown re-runs detection instead of staying
+ * disabled for the rest of the process's uptime (see HW_RETRY_COOLDOWN_MS).
  */
 export function reportHwFailure(method: HwaccelMethod, reason: string): void {
   if (cached !== null) {
@@ -228,6 +244,7 @@ export function reportHwFailure(method: HwaccelMethod, reason: string): void {
     cached.disabledAfterFailure = true;
     cached.note = `${method} failed at runtime (${reason}) — CPU fallback active`;
   }
+  disabledAt = Date.now();
   console.warn(`hwaccel: ${method} failed at runtime (${reason}) — falling back to CPU for this process`);
 }
 

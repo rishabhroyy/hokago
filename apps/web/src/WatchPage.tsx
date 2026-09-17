@@ -1297,6 +1297,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             params: { path: { sessionId } },
             body,
           });
+          // Session ended underneath (stop / episode navigation / tab close)
+          // while this was in flight — its response describes a session
+          // nobody's watching anymore; applying it against the *new* one
+          // (same startRef, different sessionId) would seek/reload the wrong
+          // episode. Same guard buildSeekRequest and runDecodeFallback use.
+          if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
           if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — audio switch retried" };
           if (!data) return { ok: false, retryable: false, message: "audio switch failed" };
           return { ok: true, restarted: data.restarted, segmentFrom: data.segmentFrom, actualStartMs: data.actualStartMs };
@@ -1477,6 +1483,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                   maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
                 },
           });
+          // Session ended underneath (stop / episode navigation / tab close)
+          // while this was in flight — applying it against the *new* session
+          // (same startRef, different sessionId) would overwrite the new
+          // episode's playlistUrl/streamUrl with the old one's. Same guard
+          // buildSeekRequest and runDecodeFallback use.
+          if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
           if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — quality switch retried" };
           if (!data?.restarted) return { ok: true, restarted: false };
           return {

@@ -467,14 +467,26 @@ async function cancelCurrentJob(sessionId: string): Promise<void> {
  * dead. On a lost race, kill the just-spawned child (its own exit callback
  * releases the slot) and mark its job cancelled instead of leaving it running
  * unowned, then report the same 503 the caller already uses for a busy slot.
+ *
+ * Also re-checks liveSessions itself, not just the DB row — the two aren't
+ * updated atomically together. A /stop can run to completion (delete the
+ * liveSessions entry, kill the *old* child, rm the transcode dir) in the gap
+ * between this function's dbUpdate() call committing and its continuation
+ * resuming; the DB write alone would still report success, and the caller's
+ * unconditional liveSessions.set() right after this returns would resurrect
+ * an entry pointing a live child at a directory that no longer exists —
+ * exactly the class of bug this whole guarded-commit pattern exists to close,
+ * just moved from the DB layer to the in-memory one. Mirrors the identical
+ * check attemptHwFallback already does before its own liveSessions.set().
  */
 async function commitOrCancelRestart(
+  sessionId: string,
   transcode: RunningTranscode,
   jobId: string,
   dbUpdate: () => Promise<{ count: number }>,
 ): Promise<boolean> {
   const commit = await dbUpdate();
-  if (commit.count > 0) return true;
+  if (commit.count > 0 && liveSessions.has(sessionId)) return true;
   if (transcode.child.exitCode === null && transcode.child.signalCode === null) {
     transcode.child.kill("SIGKILL");
   }
@@ -839,14 +851,26 @@ async function restartTranscode(
     // A restart spawns a genuinely new ffmpeg process, so it needs its own
     // claim on the cross-process GPU budget just like a first spawn does —
     // the old child's exit (awaited above) already released whatever slot
-    // *it* held; nothing carries that forward automatically. Gated the same
-    // way resolveHwaccelForSpawn already is (skipped for REMUX, and for a
-    // session hwaccel already decided as "none," whether from real detection
-    // or a prior lost race) so this never claims a slot the args won't use.
+    // *it* held; nothing carries that forward automatically.
+    //
+    // The candidate is a *fresh* getHwaccel() read, not live.hwaccel — with
+    // GPU_SLOT_WAIT_MS_RESTART cut down to 1.5s (a restart's own mutex-hold
+    // concern), a single lost slot race is a real, likely event under
+    // contention, not a rare one. Reading live.hwaccel here would mean the
+    // first restart to ever lose that race pins the session to CPU
+    // permanently (resolveHwaccelForSpawn's downgraded copy has
+    // method:"none", and every later restart's gate would then skip trying
+    // again) even seconds after the contention that caused it clears.
+    // getHwaccel() returns the process-shared, still-generally-active
+    // capability regardless of what any one session's earlier restart did
+    // with it — mutated only by a genuine runtime failure (reportHwFailure),
+    // not by losing a slot race — so every restart gets its own honest shot.
+    // Skipped entirely for REMUX, which never touches hwaccel at all.
+    const candidateHwaccel = isRemux ? live.hwaccel : await getHwaccel();
     const hwResolved =
-      !isRemux && live.hwaccel && live.hwaccel.method !== "none"
-        ? await resolveHwaccelForSpawn(live.hwaccel, GPU_SLOT_WAIT_MS_RESTART)
-        : { hwaccel: live.hwaccel, gpuSlot: null as string | null };
+      !isRemux && candidateHwaccel && candidateHwaccel.method !== "none"
+        ? await resolveHwaccelForSpawn(candidateHwaccel, GPU_SLOT_WAIT_MS_RESTART)
+        : { hwaccel: candidateHwaccel, gpuSlot: null as string | null };
     const effectiveHwaccel = hwResolved.hwaccel;
     gpuSlot = hwResolved.gpuSlot;
     const args = isRemux
@@ -1323,7 +1347,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
         await writePlaylistAtomically(live.outDir, playlist);
 
-        const committed = await commitOrCancelRestart(transcode, jobId, () =>
+        const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
           db.playbackSession.updateMany({
             where: { id: req.params.sessionId, endedAt: null },
             data: { positionMs: targetMs },
@@ -1384,7 +1408,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const { transcode, jobId, startMs, remuxOutFile } = restarted;
       const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
 
-      const committed = await commitOrCancelRestart(transcode, jobId, () =>
+      const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
         db.playbackSession.updateMany({
           where: { id: req.params.sessionId, endedAt: null },
           data: { positionMs: targetMs },
@@ -1479,7 +1503,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         await writePlaylistAtomically(newOutDir, m3u8);
       }
 
-      const committed = await commitOrCancelRestart(transcode, jobId, () =>
+      const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
         db.playbackSession.updateMany({
           where: { id: req.params.sessionId, endedAt: null },
           data: { positionMs: targetMs },
@@ -1866,7 +1890,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         await writePlaylistAtomically(newOutDir, playlist);
       }
 
-      const committed = await commitOrCancelRestart(transcode, jobId, () =>
+      const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
         db.playbackSession.updateMany({
           where: { id: req.params.sessionId, endedAt: null },
           data: { method: newMethod, positionMs: targetMs },

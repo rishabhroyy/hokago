@@ -604,25 +604,40 @@ async function attemptHwFallback(sessionId: string, outDir: string): Promise<voi
 // itself allows (that's about queueing behind other *live* sessions; this is
 // about a background sweep that should yield quickly, not block a request).
 const GPU_SLOT_WAIT_MS = 8_000;
+// A seek/audio-track/quality-switch restart runs while restartTranscode's own
+// `restarting` mutex is held (see its own comment) — every OTHER request for
+// this session (a second seek, a stop) gets an immediate 503 until this
+// function returns, and the client's retry budget for that 503 (WatchPage.tsx's
+// pumpRestart, maxRetries: 1 on the audio-track/quality-switch call sites)
+// was never sized to outlast a wait anywhere near GPU_SLOT_WAIT_MS. A restart
+// is also a live, latency-sensitive user action (a seek should feel
+// near-instant) in a way /start's initial wait isn't — so it gets a much
+// shorter budget than a first spawn does, trading a bit of GPU-budget
+// precision for not reintroducing the "seeking sometimes doesn't work"
+// symptom this whole PR exists to fix.
+const GPU_SLOT_WAIT_MS_RESTART = 1_500;
 
 /**
- * Resolves the hwaccel state a brand-new session's first TRANSCODE spawn
- * should actually use, claiming a slot in the cross-process GPU budget
- * shared with apps/worker's background trickplay/artwork sweeps (see
- * @hokago/queue's acquireGpuSlot) — only a first spawn is a genuinely new
- * concurrent GPU user; restarts replace one process with another for a
- * session whose hwaccel decision (and GPU usage) was already accounted for,
- * so they're left alone here.
+ * Resolves the hwaccel state a TRANSCODE spawn should actually use, claiming
+ * a slot in the cross-process GPU budget shared with apps/worker's background
+ * trickplay/artwork sweeps (see @hokago/queue's acquireGpuSlot). Used for both
+ * a session's first spawn (default `waitMs`) and every restart thereafter
+ * (restartTranscode passes GPU_SLOT_WAIT_MS_RESTART instead) — a restart
+ * spawns a genuinely new ffmpeg process, so it needs its own claim just like
+ * a first spawn does; nothing carries an earlier claim forward.
  *
- * On a lost race (no slot within GPU_SLOT_WAIT_MS), degrades to a CPU-only
- * copy of the state for this session's entire lifetime rather than blocking
+ * On a lost race (no slot within `waitMs`), degrades to a CPU-only copy of
+ * the state for this session's entire lifetime rather than blocking further
  * — simpler and safer than re-deciding per restart: attemptHwFallback's own
  * gate already treats a CPU-decided session as "nothing to fall back from,"
  * so this must never look hw-active without actually holding a slot for it.
  */
-async function resolveHwaccelForSpawn(hwaccel: HwaccelState): Promise<{ hwaccel: HwaccelState; gpuSlot: string | null }> {
+async function resolveHwaccelForSpawn(
+  hwaccel: HwaccelState,
+  waitMs: number = GPU_SLOT_WAIT_MS,
+): Promise<{ hwaccel: HwaccelState; gpuSlot: string | null }> {
   if (hwaccel.method === "none") return { hwaccel, gpuSlot: null };
-  const gpuSlot = await acquireGpuSlot(GPU_SLOT_WAIT_MS);
+  const gpuSlot = await acquireGpuSlot(waitMs);
   if (gpuSlot !== null) return { hwaccel, gpuSlot };
   return {
     hwaccel: { ...hwaccel, method: "none", device: null, note: "GPU session budget exhausted — using CPU for this session" },
@@ -830,7 +845,7 @@ async function restartTranscode(
     // or a prior lost race) so this never claims a slot the args won't use.
     const hwResolved =
       !isRemux && live.hwaccel && live.hwaccel.method !== "none"
-        ? await resolveHwaccelForSpawn(live.hwaccel)
+        ? await resolveHwaccelForSpawn(live.hwaccel, GPU_SLOT_WAIT_MS_RESTART)
         : { hwaccel: live.hwaccel, gpuSlot: null as string | null };
     const effectiveHwaccel = hwResolved.hwaccel;
     gpuSlot = hwResolved.gpuSlot;

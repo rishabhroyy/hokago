@@ -1284,7 +1284,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const sessionId = session.sessionId;
       commitRestart({
         attempt: 0,
-        maxRetries: 1,
+        // 2 retries (~2s of budget at pumpRestart's 1000ms requeue delay) —
+        // apps/api's restart path can now wait up to 1.5s on a cross-process
+        // GPU-slot budget while a session's restart mutex is held, and a
+        // second request for the same session hitting that mutex gets an
+        // immediate 503; 1 retry didn't leave enough room to outlast it.
+        maxRetries: 2,
         targetMs: positionMs,
         run: async () => {
           const body: AudioTrackSwitchBody = { audioStreamIndex: absoluteIndex, positionMs };
@@ -1453,7 +1458,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const sessionId = session.sessionId;
       commitRestart({
         attempt: 0,
-        maxRetries: 1,
+        // 2 retries (~2s of budget at pumpRestart's 1000ms requeue delay) —
+        // apps/api's restart path can now wait up to 1.5s on a cross-process
+        // GPU-slot budget while a session's restart mutex is held, and a
+        // second request for the same session hitting that mutex gets an
+        // immediate 503; 1 retry didn't leave enough room to outlast it.
+        maxRetries: 2,
         targetMs: positionMs,
         run: async () => {
           const { data, response } = await api.POST("/playback/{sessionId}/quality", {
@@ -1586,7 +1596,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       );
       commitRestart({
         attempt: 0,
-        maxRetries: 1,
+        // 2 retries (~2s of budget at pumpRestart's 1000ms requeue delay) —
+        // apps/api's restart path can now wait up to 1.5s on a cross-process
+        // GPU-slot budget while a session's restart mutex is held, and a
+        // second request for the same session hitting that mutex gets an
+        // immediate 503; 1 retry didn't leave enough room to outlast it.
+        maxRetries: 2,
         targetMs: positionMs,
         run: async () => {
           const { data, response } = await api.POST("/playback/{sessionId}/quality", {

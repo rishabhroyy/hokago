@@ -35,7 +35,7 @@ export function buildM3u8(durationMs: number, segmentSeconds: number, startSegme
   // ffmpeg's segment muxer merges sub-`-segment_time_delta` (default 0.2s)
   // remainders into the previous segment instead of writing a stub file —
   // a phantom trailing EXTINF would make players fetch a segment that never
-  // exists and wedge the loader queue. Drop ghosts under half a second.
+  // exists and wedge the loader queue. Drop ghosts under that same 0.2s.
   if (segmentCount > 1 && totalSeconds - (segmentCount - 1) * segmentSeconds < 0.2) {
     segmentCount--;
   }

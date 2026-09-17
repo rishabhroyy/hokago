@@ -650,7 +650,18 @@ async function resolveHwaccelForSpawn(
 ): Promise<{ hwaccel: HwaccelState; gpuSlot: string | null }> {
   if (hwaccel.method === "none") return { hwaccel, gpuSlot: null };
   const gpuSlot = await acquireGpuSlot(waitMs);
-  if (gpuSlot !== null) return { hwaccel, gpuSlot };
+  // A shallow copy, not the shared getHwaccel()/reportHwFailure() singleton
+  // reference — LiveSession.hwaccel gets stored long-term (until this
+  // session's next restart), and reportHwFailure mutates that singleton
+  // *in place*. Storing the live reference here would mean a sibling
+  // session's later, unrelated hw failure retroactively (and silently)
+  // flips this session's own bookkeeping to method:"none" too, even though
+  // nothing about THIS session's already-spawned, still-running process
+  // changed — and attemptHwFallback's gate (`live.hwaccel.method === "none"`
+  // means "nothing to fall back from") would then wrongly skip this
+  // session's own genuine CPU-fallback recovery the next time its child
+  // happens to exit non-zero, for any reason, during that window.
+  if (gpuSlot !== null) return { hwaccel: { ...hwaccel }, gpuSlot };
   return {
     hwaccel: { ...hwaccel, method: "none", device: null, note: "GPU session budget exhausted — using CPU for this session" },
     gpuSlot: null,

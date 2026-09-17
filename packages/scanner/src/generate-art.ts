@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { hwDecodeArgs, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
+import { acquireGpuSlot, releaseGpuSlot } from "@hokago/queue";
 import { trackPid, untrackPid } from "./child-registry.js";
+
+// A background thumbnail pass has nowhere near the urgency of someone
+// actively watching something — wait just long enough to smooth over a
+// fleeting handoff, then fall back to CPU for this one pass rather than
+// making the GPU's shared session budget (see @hokago/queue's
+// acquireGpuSlot) contend with a live playback transcode that's blocking a
+// real viewer.
+const GPU_SLOT_WAIT_MS = 3_000;
 
 const POSTER_WIDTH = 1000;
 const POSTER_HEIGHT = 1500; // 2:3
@@ -73,7 +82,13 @@ async function runFfmpegInner(args: string[], hw: HwaccelState | null, opts?: { 
 export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): Promise<{ stdout: string; stderr: string }> {
   // JPEG inputs (scoring, poster compose) never benefit from hw decode — force CPU
   const isJpegInput = args.some((a) => a.endsWith(".jpg") || a.endsWith(".jpeg"));
-  const hw = isJpegInput ? null : hwState;
+  const wantsHw = !isJpegInput && hwState !== null && hwState.method !== "none";
+  // Cross-process GPU budget shared with apps/api's live transcodes (see
+  // @hokago/queue's acquireGpuSlot) — a background pass that can't get a
+  // slot within GPU_SLOT_WAIT_MS just runs this one call on CPU instead of
+  // contending with playback for the GPU's real concurrent-session capacity.
+  const gpuSlot = wantsHw ? await acquireGpuSlot(GPU_SLOT_WAIT_MS) : null;
+  const hw = gpuSlot !== null ? hwState : null;
   try {
     return await runFfmpegInner(args, hw, opts);
   } catch (err) {
@@ -86,6 +101,8 @@ export async function runFfmpeg(args: string[], opts?: { timeoutMs?: number }): 
       return runFfmpegInner(args, null, opts);
     }
     throw err;
+  } finally {
+    void releaseGpuSlot(gpuSlot);
   }
 }
 

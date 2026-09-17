@@ -22,6 +22,7 @@ import { buildM3u8, buildTruncatedM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/h
 import { buildRemuxArgs, buildResumeInput, patchRemuxMehd } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
+import { acquireGpuSlot, releaseGpuSlot } from "@hokago/queue";
 import { broadcastPresence } from "./presence.js";
 import { acquireTranscodeSlot, releaseTranscodeSlot } from "./transcode-slot.js";
 import { configDir } from "./config.js";
@@ -579,6 +580,37 @@ async function attemptHwFallback(sessionId: string, outDir: string): Promise<voi
   console.warn(`hwaccel: session ${sessionId} fell back to CPU transcode from segment ${segmentFrom} (startMs ${startMs})`);
 }
 
+// A real viewer is waiting on /start or a quality switch to respond — worth
+// a modest wait for the GPU budget, but not the full 60s the transcode slot
+// itself allows (that's about queueing behind other *live* sessions; this is
+// about a background sweep that should yield quickly, not block a request).
+const GPU_SLOT_WAIT_MS = 8_000;
+
+/**
+ * Resolves the hwaccel state a brand-new session's first TRANSCODE spawn
+ * should actually use, claiming a slot in the cross-process GPU budget
+ * shared with apps/worker's background trickplay/artwork sweeps (see
+ * @hokago/queue's acquireGpuSlot) — only a first spawn is a genuinely new
+ * concurrent GPU user; restarts replace one process with another for a
+ * session whose hwaccel decision (and GPU usage) was already accounted for,
+ * so they're left alone here.
+ *
+ * On a lost race (no slot within GPU_SLOT_WAIT_MS), degrades to a CPU-only
+ * copy of the state for this session's entire lifetime rather than blocking
+ * — simpler and safer than re-deciding per restart: attemptHwFallback's own
+ * gate already treats a CPU-decided session as "nothing to fall back from,"
+ * so this must never look hw-active without actually holding a slot for it.
+ */
+async function resolveHwaccelForSpawn(hwaccel: HwaccelState): Promise<{ hwaccel: HwaccelState; gpuSlot: string | null }> {
+  if (hwaccel.method === "none") return { hwaccel, gpuSlot: null };
+  const gpuSlot = await acquireGpuSlot(GPU_SLOT_WAIT_MS);
+  if (gpuSlot !== null) return { hwaccel, gpuSlot };
+  return {
+    hwaccel: { ...hwaccel, method: "none", device: null, note: "GPU session budget exhausted — using CPU for this session" },
+    gpuSlot: null,
+  };
+}
+
 /**
  * Spawns a session's first ffmpeg child and records its TranscodeJob. The
  * caller already holds the transcode slot (released here when the child
@@ -597,6 +629,7 @@ async function spawnTranscodeJob(
   durationMs: number,
   input?: Readable,
   hwaccel?: HwaccelState,
+  gpuSlot?: string | null,
 ): Promise<{ transcode: RunningTranscode; jobId: string }> {
   const job = await db.transcodeJob.create({
     data: {
@@ -616,6 +649,7 @@ async function spawnTranscodeJob(
     // this, every finished transcode pins a slot forever and later
     // sessions queue behind ghosts until /stop or the 5-minute reaper.
     releaseTranscodeSlot();
+    if (gpuSlot) void releaseGpuSlot(gpuSlot);
     void setTranscodeJobTerminal(job.id, result.code === 0 ? "DONE" : "FAILED", result.code === 0 ? null : result.stderr.slice(0, 2000))
       .catch((e) => console.warn(`failed to persist transcode job ${job.id} terminal state: ${e.message}`));
     void (async () => {
@@ -927,12 +961,17 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
 
     // Hardware acceleration resolution (process-cached after the first call) —
     // only real encodes need it, so resolve after the DIRECT_PLAY early-out.
-    const hwaccel = await getHwaccel();
+    // REMUX never touches hwaccel/GPU at all, so only claim a GPU-budget slot
+    // for a real TRANSCODE.
+    const { hwaccel, gpuSlot } = isRemux
+      ? { hwaccel: await getHwaccel(), gpuSlot: null }
+      : await resolveHwaccelForSpawn(await getHwaccel());
 
     // Bounded ffmpeg concurrency: wait for a slot instead of stacking
     // transcodes on the box. 503 tells the client to retry shortly.
     if (!(await acquireTranscodeSlot())) {
       await db.playbackSession.updateMany({ where: { id: session.id }, data: { endedAt: new Date() } });
+      void releaseGpuSlot(gpuSlot);
       return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
     }
 
@@ -998,9 +1037,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         candidate.durationMs,
         resumeInput?.input,
         hwaccel,
+        gpuSlot,
       );
     } catch (e) {
       releaseTranscodeSlot();
+      void releaseGpuSlot(gpuSlot);
       throw e;
     }
     const { transcode, jobId } = spawned;
@@ -1575,8 +1616,14 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         // Already reserved above, right after reading `live`; released by
         // the outer try/finally.
         {
-          const hwaccel = await getHwaccel();
+          // REMUX never touches hwaccel/GPU at all, so only claim a
+          // GPU-budget slot for a real TRANSCODE.
+          const { hwaccel, gpuSlot } =
+            newMethod === "REMUX"
+              ? { hwaccel: await getHwaccel(), gpuSlot: null }
+              : await resolveHwaccelForSpawn(await getHwaccel());
           if (!(await acquireTranscodeSlot())) {
+            void releaseGpuSlot(gpuSlot);
             return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
           }
           const targetSegment = segmentFor(targetMs, candidate.durationMs);
@@ -1648,9 +1695,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
               candidate.durationMs,
               resumeInput?.input,
               hwaccel,
+              gpuSlot,
             );
           } catch (e) {
             releaseTranscodeSlot();
+            void releaseGpuSlot(gpuSlot);
             throw e;
           }
           const { transcode, jobId } = spawned;

@@ -213,6 +213,9 @@ importers:
       '@hokago/providers':
         specifier: workspace:*
         version: link:../providers
+      '@hokago/queue':
+        specifier: workspace:*
+        version: link:../queue
       anitomy:
         specifier: ^0.0.35
         version: 0.0.35

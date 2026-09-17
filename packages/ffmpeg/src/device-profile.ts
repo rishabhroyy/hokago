@@ -80,7 +80,16 @@ const AUDIO_ENCODERS: Record<string, string> = {
  * (e.g. vp9_vaapi on an old iGPU) degrades per-codec, not per-method.
  */
 export function pickVideoEncoder(supportedVideoCodecs: string[], hw?: HwaccelState): string {
-  for (const codec of supportedVideoCodecs) {
+  for (const rawCodec of supportedVideoCodecs) {
+    // "hevc10" is a decode-capability claim (see decision.ts), not a distinct
+    // encode target — TRANSCODE always forces 8-bit output regardless of
+    // source depth, so it needs the exact same encoder "hevc" does. Neither
+    // encoder map below has a separate entry for it; without this a profile
+    // that ever listed "hevc10" without also listing plain "hevc" would skip
+    // past it and fall through to the next codec instead of ever producing
+    // HEVC output. (Harmless today: every caller that can claim "hevc10"
+    // already claims "hevc" too — see apps/web/src/device-profile.ts.)
+    const codec = rawCodec === "hevc10" ? "hevc" : rawCodec;
     const hardware = hw ? hwEncoderFor(hw, codec) : null;
     if (hardware) return hardware;
     const encoder = VIDEO_ENCODERS[codec];

@@ -418,13 +418,32 @@ async function killSessionTranscode(sessionId: string): Promise<void> {
  * transcode files (a 24-minute 8 Mbps episode is ~1.4 GB of segments). Called
  * by the /stop route, the idle reaper, and shutdown — without this, every
  * watched title leaves its full transcode on disk forever.
+ *
+ * The `endedAt` write happens *before* killSessionTranscode's
+ * liveSessions.delete(), not after — with killSessionTranscode first (the
+ * order this used to run in), there was a real window where liveSessions was
+ * already gone but the DB still read endedAt: null, long enough for a
+ * concurrent restart's own guarded write (commitOrCancelRestart's
+ * `where: { endedAt: null }`) to land, succeed, and call liveSessions.set()
+ * for a session this function was about to delete the transcode directory
+ * out from under — the production-confirmed failure mode this whole guarded-
+ * commit pattern exists for.
+ *
+ * This reorder doesn't make the two writes atomic with each other (they're
+ * two separate statements, not one transaction) — a restart's write can still
+ * occasionally win the race and resurrect liveSessions for a moment. What it
+ * guarantees is that killSessionTranscode always runs immediately after *this
+ * function's own* endedAt write lands, so any such resurrection is
+ * immediately un-done by this same call rather than left permanently
+ * orphaned pointing at a directory about to be deleted. The DB write ending
+ * up unconditionally correct either way is what actually matters here.
  */
 export async function stopSession(sessionId: string): Promise<void> {
-  await killSessionTranscode(sessionId);
   await db.playbackSession.updateMany({
     where: { id: sessionId, endedAt: null },
     data: { endedAt: new Date() },
   });
+  await killSessionTranscode(sessionId);
   await rm(transcodeDir(sessionId), { recursive: true, force: true });
 }
 
@@ -686,7 +705,14 @@ async function restartTranscode(
   targetMs: number,
   overrides?: { profile?: DeviceProfile; method?: "REMUX" | "TRANSCODE" },
 ): Promise<
-    | { transcode: RunningTranscode; jobId: string; startMs: number; segmentFrom: number; remuxOutFile: string | null }
+    | {
+        transcode: RunningTranscode;
+        jobId: string;
+        startMs: number;
+        segmentFrom: number;
+        remuxOutFile: string | null;
+        hwaccel: HwaccelState | undefined;
+      }
     | { cancelled: true }
   > {
   // Mark the session as restarting *before* the kill: the old child's exit
@@ -733,6 +759,9 @@ async function restartTranscode(
   // spawned, any failure below must release it or the slot leaks forever
   // (a phantom: the wakeup logic in spawnTeardown can't recover what never
   // had a process).
+  // Declared outside the try so the catch below can release it too — a
+  // const inside the try block wouldn't be visible there.
+  let gpuSlot: string | null = null;
   try {
     const profile = overrides?.profile ?? live.deviceProfile;
     // The live entry's *method* is the source of truth; the quality route
@@ -792,6 +821,19 @@ async function restartTranscode(
     // this new path and best-effort deletes the previous generation once the
     // swap lands (still-open reads against it keep working on POSIX either way).
     const remuxOutFile = isRemux ? path.join(live.outDir, `stream-${randomUUID()}.mp4`) : null;
+    // A restart spawns a genuinely new ffmpeg process, so it needs its own
+    // claim on the cross-process GPU budget just like a first spawn does —
+    // the old child's exit (awaited above) already released whatever slot
+    // *it* held; nothing carries that forward automatically. Gated the same
+    // way resolveHwaccelForSpawn already is (skipped for REMUX, and for a
+    // session hwaccel already decided as "none," whether from real detection
+    // or a prior lost race) so this never claims a slot the args won't use.
+    const hwResolved =
+      !isRemux && live.hwaccel && live.hwaccel.method !== "none"
+        ? await resolveHwaccelForSpawn(live.hwaccel)
+        : { hwaccel: live.hwaccel, gpuSlot: null as string | null };
+    const effectiveHwaccel = hwResolved.hwaccel;
+    gpuSlot = hwResolved.gpuSlot;
     const args = isRemux
       ? buildRemuxArgs({
           inputPath: live.mediaFile.path,
@@ -811,10 +853,8 @@ async function restartTranscode(
           // -ss targets the stream origin exactly — the reported startMs — so
           // the browser timeline origin matches the client offset.
           seekMs: startMs,
-          // live.hwaccel is the process-cached state: mutated to "none" by a
-          // prior runtime failure, so seek restarts stay on CPU automatically.
-          hwaccel: live.hwaccel,
-          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, live.hwaccel),
+          hwaccel: effectiveHwaccel,
+          videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, effectiveHwaccel),
           audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
           audioStreamIndex: live.audioStreamIndex,
           maxWidth: profile.maxWidth,
@@ -838,6 +878,7 @@ async function restartTranscode(
   
     const transcode = spawnFfmpeg(args, (result) => {
       releaseTranscodeSlot();
+      if (gpuSlot) void releaseGpuSlot(gpuSlot);
       // Never overwrite a deliberate CANCELLED (stop/restart already marked
       // it) — the exit callback races the cancel path and would otherwise
       // clobber the real reason with a spurious FAILED. A freshly killed
@@ -856,7 +897,7 @@ async function restartTranscode(
       void (async () => {
         try {
           await truncatePlaylistOnExit(sessionId, transcode.pid, live.outDir, live.mediaFile.durationMs, segmentFrom);
-          if (result.code !== 0 && live.hwaccel) await attemptHwFallback(sessionId, live.outDir);
+          if (result.code !== 0 && effectiveHwaccel) await attemptHwFallback(sessionId, live.outDir);
         } catch (e) {
           console.warn(`session ${sessionId}: post-exit fallback failed: ${String(e).slice(0, 300)}`);
         }
@@ -881,9 +922,10 @@ async function restartTranscode(
     // longer exists. Callers already have `live.remux?.outFile` in scope and
     // do the rm right after their own liveSessions.set().
 
-    return { transcode, jobId: job.id, startMs, segmentFrom, remuxOutFile };
+    return { transcode, jobId: job.id, startMs, segmentFrom, remuxOutFile, hwaccel: effectiveHwaccel };
   } catch (e) {
     releaseTranscodeSlot();
+    if (gpuSlot) void releaseGpuSlot(gpuSlot);
     // Without this, the entry-guard mutex above (`if (current?.restarting)
     // return { cancelled: true }`) would see this session as permanently
     // mid-restart — any failure here (e.g. db.transcodeJob.create rejecting)
@@ -1258,7 +1300,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         if ("cancelled" in restarted) {
           return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
         }
-        const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom } = restarted;
+        const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, hwaccel } = restarted;
         // Seeking backwards below the original media sequence — rewrite the
         // playlist so the player knows segments before it exist again. Uses
         // the actual keyframe-anchored segment the new child starts at (it
@@ -1280,6 +1322,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           currentSegmentFrom: actualSegmentFrom,
           playlistStartSegment: actualSegmentFrom,
           currentTranscodeJobId: jobId,
+          // This restart's own GPU-slot decision, not the stale value the
+          // ...live spread would otherwise carry forward — a lost slot race
+          // here must show up as method:"none" or attemptHwFallback would
+          // misread this deliberately-CPU respawn's later non-zero exit as a
+          // genuine hw failure.
+          hwaccel,
         });
 
         return {
@@ -1408,7 +1456,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile } = restarted;
+      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile, hwaccel } = restarted;
       if (!isRemux) {
         // Written after the restart so the first listed segment matches the
         // segment the new child actually starts at.
@@ -1435,6 +1483,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         audioCodec,
         sourceAudioCodec: requestedStream.codec,
         remux: isRemux ? { outFile: remuxOutFile!, startMs, patched: false } : null,
+        // This restart's own GPU-slot decision (no-op for REMUX, which never
+        // resolves anything different) rather than the stale value the
+        // ...live spread would otherwise carry forward.
+        hwaccel,
       });
       // Only now, after the live entry points at the new file — the old
       // generation's writer already exited, so nothing opens it fresh again.
@@ -1539,8 +1591,17 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       const newProfile = normalizeDeviceProfile(mergedRaw);
 
       // Same caps as the running encode — nothing to do; report current state
-      // so the client can just sync its menu.
-      if (live) {
+      // so the client can just sync its menu. Never true when a sticky flag
+      // was just set above: reportAudioDecodeError/reportVideoDecodeError
+      // change the *candidate flags* decidePlaybackMethod sees, not the caps,
+      // so capsSame alone would short-circuit before ever re-deciding —
+      // reporting "current state" back would silently re-serve the exact
+      // broken stream the client just reported. (reportAudioDecodeError never
+      // actually reaches this branch in practice — its gate requires
+      // session.method === "DIRECT_PLAY", which means no live entry exists
+      // yet — but the guard is written generically for both flags rather
+      // than relying on that gate as the only thing preventing it.)
+      if (live && updatedMediaFile === null) {
         const capsSame =
           newProfile.maxWidth === live.deviceProfile.maxWidth &&
           newProfile.maxHeight === live.deviceProfile.maxHeight &&
@@ -1782,7 +1843,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
       if ("cancelled" in restarted) {
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
-      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile } = restarted;
+      const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile, hwaccel } = restarted;
       if (newMethod === "TRANSCODE") {
         // Written after the restart: the first listed segment must be the
         // keyframe-anchored one the new child actually starts at.
@@ -1812,6 +1873,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         // the path here instead of using its actual return value would 404
         // every request against a file that doesn't exist.
         remux: newMethod === "REMUX" ? { outFile: remuxOutFile!, startMs, patched: false } : null,
+        // This restart's own GPU-slot decision, not the stale value the
+        // ...live spread would otherwise carry forward.
+        hwaccel,
       });
       // Only now, after the live entry points at the new file — the old
       // generation's writer already exited, so nothing opens it fresh again.

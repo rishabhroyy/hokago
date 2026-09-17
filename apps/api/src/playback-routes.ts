@@ -1355,8 +1355,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         // playlist so the player knows segments before it exist again. Uses
         // the actual keyframe-anchored segment the new child starts at (it
         // may differ from the requested target's floored segment by one).
+        // Computed (pure) here, but the actual write waits until after the
+        // guarded commit below — writing into live.outDir for a session that
+        // /stop already deleted the transcode directory for would throw an
+        // uncaught ENOENT and surface as a 500 instead of the intended 503.
         const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
-        await writePlaylistAtomically(live.outDir, playlist);
 
         const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
           db.playbackSession.updateMany({
@@ -1365,6 +1368,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           }),
         );
         if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
+        await writePlaylistAtomically(live.outDir, playlist);
 
         liveSessions.set(req.params.sessionId, {
           ...live,
@@ -1507,12 +1511,13 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
       const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile, hwaccel } = restarted;
-      if (!isRemux) {
-        // Written after the restart so the first listed segment matches the
-        // segment the new child actually starts at.
-        const m3u8 = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
-        await writePlaylistAtomically(newOutDir, m3u8);
-      }
+      // Written after the restart so the first listed segment matches the
+      // segment the new child actually starts at — computed (pure) here, but
+      // the actual write waits until after the guarded commit below, same
+      // reasoning as the /seek route: newOutDir is a subdirectory of this
+      // session's transcodeDir, which /stop can have already rm -rf'd by the
+      // time this runs.
+      const m3u8 = !isRemux ? buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom) : null;
 
       const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
         db.playbackSession.updateMany({
@@ -1521,6 +1526,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         }),
       );
       if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
+      if (m3u8 !== null) await writePlaylistAtomically(newOutDir, m3u8);
 
       liveSessions.set(req.params.sessionId, {
         ...live,
@@ -1894,12 +1900,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
       }
       const { transcode, jobId, startMs, segmentFrom: actualSegmentFrom, remuxOutFile, hwaccel } = restarted;
-      if (newMethod === "TRANSCODE") {
-        // Written after the restart: the first listed segment must be the
-        // keyframe-anchored one the new child actually starts at.
-        const playlist = buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom);
-        await writePlaylistAtomically(newOutDir, playlist);
-      }
+      // Written after the restart: the first listed segment must be the
+      // keyframe-anchored one the new child actually starts at — computed
+      // (pure) here, but the actual write waits until after the guarded
+      // commit below, same reasoning as the /seek and /audio-track routes.
+      const playlist = newMethod === "TRANSCODE" ? buildM3u8(live.mediaFile.durationMs, HLS_SEGMENT_SECONDS, actualSegmentFrom) : null;
 
       const committed = await commitOrCancelRestart(req.params.sessionId, transcode, jobId, () =>
         db.playbackSession.updateMany({
@@ -1908,6 +1913,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         }),
       );
       if (!committed) return reply.code(503).send({ error: "transcoder busy or session ended — retry shortly" });
+      if (playlist !== null) await writePlaylistAtomically(newOutDir, playlist);
 
       liveSessions.set(req.params.sessionId, {
         ...live,

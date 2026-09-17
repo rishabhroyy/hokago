@@ -1,4 +1,5 @@
 export { getConnection } from "./connection.js";
+export { acquireGpuSlot, releaseGpuSlot } from "./gpu-slot.js";
 export {
   QUEUE_NAMES,
   JOB_FAILURE_THRESHOLD,

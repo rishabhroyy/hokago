@@ -92,6 +92,12 @@ export const QualitySwitchBody = z.object({
    *  future session for this file past DIRECT_PLAY into REMUX with audio
    *  forced to re-encode. */
   reportAudioDecodeError: z.boolean().optional(),
+  /** The audio fallback above already ran for this session (method is no
+   *  longer DIRECT_PLAY) and the decode error recurred anyway — proves the
+   *  video bytes were the actual problem. Sticky server-side, forces every
+   *  future session for this file straight to TRANSCODE (REMUX can't fix a
+   *  video stream, it only ever copies it). */
+  reportVideoDecodeError: z.boolean().optional(),
 });
 export type QualitySwitchBody = z.infer<typeof QualitySwitchBody>;
 

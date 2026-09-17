@@ -80,7 +80,16 @@ const AUDIO_ENCODERS: Record<string, string> = {
  * (e.g. vp9_vaapi on an old iGPU) degrades per-codec, not per-method.
  */
 export function pickVideoEncoder(supportedVideoCodecs: string[], hw?: HwaccelState): string {
-  for (const codec of supportedVideoCodecs) {
+  for (const rawCodec of supportedVideoCodecs) {
+    // "hevc10" is a decode-capability claim (see decision.ts), not a distinct
+    // encode target — TRANSCODE always forces 8-bit output regardless of
+    // source depth, so it needs the exact same encoder "hevc" does. Neither
+    // encoder map below has a separate entry for it; without this a profile
+    // that ever listed "hevc10" without also listing plain "hevc" would skip
+    // past it and fall through to the next codec instead of ever producing
+    // HEVC output. (Harmless today: every caller that can claim "hevc10"
+    // already claims "hevc" too — see apps/web/src/device-profile.ts.)
+    const codec = rawCodec === "hevc10" ? "hevc" : rawCodec;
     const hardware = hw ? hwEncoderFor(hw, codec) : null;
     if (hardware) return hardware;
     const encoder = VIDEO_ENCODERS[codec];
@@ -114,6 +123,13 @@ export interface PlaybackCandidateInput {
   /** ffprobe format name, e.g. "matroska,webm" or "mov,mp4,m4a,3gp,3g2,mj2". */
   container: string;
   videoCodec: string | null;
+  /** From ffprobe pix_fmt (e.g. yuv420p10le -> 10). Only load-bearing for
+   * HEVC today — see decidePlaybackMethod's videoCodecOk: a device that
+   * decodes 8-bit HEVC natively doesn't necessarily decode 10-bit HEVC
+   * (Main vs Main10 profile), and canPlayType-style capability probes are
+   * commonly only ever run against an 8-bit codec string, so a profile
+   * that lists plain "hevc" cannot be trusted for a 10-bit source. */
+  bitDepth: number | null;
   audioCodec: string | null;
   width: number | null;
   height: number | null;
@@ -130,4 +146,13 @@ export interface PlaybackCandidateInput {
    * downstream REMUX build must re-encode it, never copy.
    */
   audioKnownBroken: boolean;
+  /**
+   * Same idea as audioKnownBroken, for video (see MediaFile.videoDecodeBroken)
+   * — set once a client already tried the audio fallback (REMUX, audio
+   * re-encoded) and the decode error recurred anyway, proving the video
+   * bytes were the actual problem. Video is never remux-fixable (a REMUX
+   * copies it verbatim), so this must force TRANSCODE, not just rule out
+   * REMUX the way audioKnownBroken rules out DIRECT_PLAY.
+   */
+  videoKnownBroken: boolean;
 }

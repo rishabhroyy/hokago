@@ -742,8 +742,33 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             .catch(() => {});
           return;
         }
+        // A title change (mediaFileId) reuses this WatchPage instance rather
+        // than remounting it (see the mountDefaultId comment above), so every
+        // piece of per-session state that every OTHER restart path already
+        // resets (handleQualityChange, runDecodeFallback, retryPlayback) must
+        // be reset here too -- this is the one path those didn't cover.
+        const prevMethod = startRef.current?.method;
         setStart(data);
         audioDecodeFallbackTriedRef.current = false;
+        videoDecodeFallbackTriedRef.current = false;
+        // A paused pause from the previous episode must not carry over and
+        // silently suppress autoplay on the next one.
+        userPausedRef.current = false;
+        // The previous episode's muted-autoplay unlock (if any) is now stale
+        // -- its listener already consumed itself on the first gesture, or
+        // never fired at all. Either way, without this the ref stays stuck
+        // `true` forever and every later episode that hits the same
+        // blocked-autoplay path silently skips arming a new unlock listener,
+        // leaving it muted with no way to auto-recover on the next gesture.
+        autoplayUnmuteArmedRef.current = false;
+        // vidstack can't hot-swap between the native <video> and HLS/MSE
+        // providers via a src change alone (see the keyNonce comment above) --
+        // every other path that can change method (quality switch, decode
+        // fallback) already forces a remount when it does. This is the one
+        // remaining path that can change method (a new episode landing on a
+        // different DIRECT_PLAY/REMUX/TRANSCODE tier than the last) without
+        // going through either of those.
+        if (prevMethod && prevMethod !== data.method) setKeyNonce((n) => n + 1);
         setAbsoluteDurationMs(data.absoluteDurationMs ?? 0);
         // Party members link their session so heartbeats flow into the
         // member list (positions + liveness) and the server knows the
@@ -1259,7 +1284,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const sessionId = session.sessionId;
       commitRestart({
         attempt: 0,
-        maxRetries: 1,
+        // 2 retries (~2s of budget at pumpRestart's 1000ms requeue delay) —
+        // apps/api's restart path can now wait up to 1.5s on a cross-process
+        // GPU-slot budget while a session's restart mutex is held, and a
+        // second request for the same session hitting that mutex gets an
+        // immediate 503; 1 retry didn't leave enough room to outlast it.
+        maxRetries: 2,
         targetMs: positionMs,
         run: async () => {
           const body: AudioTrackSwitchBody = { audioStreamIndex: absoluteIndex, positionMs };
@@ -1267,6 +1297,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             params: { path: { sessionId } },
             body,
           });
+          // Session ended underneath (stop / episode navigation / tab close)
+          // while this was in flight — its response describes a session
+          // nobody's watching anymore; applying it against the *new* one
+          // (same startRef, different sessionId) would seek/reload the wrong
+          // episode. Same guard buildSeekRequest and runDecodeFallback use.
+          if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
           if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — audio switch retried" };
           if (!data) return { ok: false, retryable: false, message: "audio switch failed" };
           return { ok: true, restarted: data.restarted, segmentFrom: data.segmentFrom, actualStartMs: data.actualStartMs };
@@ -1428,7 +1464,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       const sessionId = session.sessionId;
       commitRestart({
         attempt: 0,
-        maxRetries: 1,
+        // 2 retries (~2s of budget at pumpRestart's 1000ms requeue delay) —
+        // apps/api's restart path can now wait up to 1.5s on a cross-process
+        // GPU-slot budget while a session's restart mutex is held, and a
+        // second request for the same session hitting that mutex gets an
+        // immediate 503; 1 retry didn't leave enough room to outlast it.
+        maxRetries: 2,
         targetMs: positionMs,
         run: async () => {
           const { data, response } = await api.POST("/playback/{sessionId}/quality", {
@@ -1442,6 +1483,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
                   maxVideoBitrateKbps: opt.maxVideoBitrateKbps,
                 },
           });
+          // Session ended underneath (stop / episode navigation / tab close)
+          // while this was in flight — applying it against the *new* session
+          // (same startRef, different sessionId) would overwrite the new
+          // episode's playlistUrl/streamUrl with the old one's. Same guard
+          // buildSeekRequest and runDecodeFallback use.
+          if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
           if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — quality switch retried" };
           if (!data?.restarted) return { ok: true, restarted: false };
           return {
@@ -1543,35 +1590,59 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // on a DIRECT_PLAY session means the bytes are broken, not that the format
   // is genuinely unsupported.
   const audioDecodeFallbackTriedRef = useRef(false);
-  const tryAudioDecodeFallback = useCallback((): boolean => {
-    const session = startRef.current;
-    if (!session || session.method !== "DIRECT_PLAY" || audioDecodeFallbackTriedRef.current) return false;
-    audioDecodeFallbackTriedRef.current = true;
-    const sessionId = session.sessionId;
-    const positionMs = Math.round(
-      (playerRef.current && Number.isFinite(playerRef.current.currentTime) ? playerRef.current.currentTime : 0) * 1000 +
-        timelineOffsetRef.current,
-    );
-    commitRestart({
-      attempt: 0,
-      maxRetries: 1,
-      targetMs: positionMs,
-      run: async () => {
-        const { data, response } = await api.POST("/playback/{sessionId}/quality", {
-          params: { path: { sessionId } },
-          body: { positionMs, reportAudioDecodeError: true },
-        });
-        // Session moved on (user navigated to a different title) while this
-        // was in flight — its outcome describes a session nobody's watching
-        // anymore; discard rather than clobber whatever's playing now.
-        if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
-        if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
-        // restarted:false with a non-DIRECT_PLAY method means a concurrent
-        // request already moved this session off DIRECT_PLAY (e.g. its own
-        // in-flight decode-fallback, or an unrelated quality change) before
-        // this report's session read landed — the file is already fixed,
-        // not unrecoverable.
-        if (!data?.restarted && data?.method && data.method !== "DIRECT_PLAY") {
+  const videoDecodeFallbackTriedRef = useRef(false);
+
+  // Shared by tryAudioDecodeFallback/tryVideoDecodeFallback below — same
+  // report-then-restart shape either way, differing only in which flag
+  // gets reported to /quality. Callers have already checked eligibility
+  // and set their own tried-ref before calling this.
+  const runDecodeFallback = useCallback(
+    (reportField: "reportAudioDecodeError" | "reportVideoDecodeError"): void => {
+      const session = startRef.current;
+      if (!session) return;
+      const sessionId = session.sessionId;
+      const positionMs = Math.round(
+        (playerRef.current && Number.isFinite(playerRef.current.currentTime) ? playerRef.current.currentTime : 0) *
+          1000 +
+          timelineOffsetRef.current,
+      );
+      commitRestart({
+        attempt: 0,
+        // 2 retries (~2s of budget at pumpRestart's 1000ms requeue delay) —
+        // apps/api's restart path can now wait up to 1.5s on a cross-process
+        // GPU-slot budget while a session's restart mutex is held, and a
+        // second request for the same session hitting that mutex gets an
+        // immediate 503; 1 retry didn't leave enough room to outlast it.
+        maxRetries: 2,
+        targetMs: positionMs,
+        run: async () => {
+          const { data, response } = await api.POST("/playback/{sessionId}/quality", {
+            params: { path: { sessionId } },
+            body: { positionMs, [reportField]: true },
+          });
+          // Session moved on (user navigated to a different title) while this
+          // was in flight — its outcome describes a session nobody's watching
+          // anymore; discard rather than clobber whatever's playing now.
+          if (startRef.current?.sessionId !== sessionId) return { ok: true, restarted: false };
+          if (response?.status === 503) return { ok: false, retryable: true, message: "transcoder busy — retrying" };
+          // restarted:false with a non-DIRECT_PLAY method means a concurrent
+          // request already moved this session off DIRECT_PLAY (e.g. its own
+          // in-flight decode-fallback, or an unrelated quality change) before
+          // this report's session read landed — the file is already fixed,
+          // not unrecoverable.
+          if (!data?.restarted && data?.method && data.method !== "DIRECT_PLAY") {
+            return {
+              ok: true,
+              restarted: true,
+              authoritative: true,
+              method: data.method,
+              segmentFrom: data.segmentFrom,
+              actualStartMs: data.actualStartMs,
+              playlistUrl: data.playlistUrl,
+              streamUrl: data.streamUrl,
+            };
+          }
+          if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
           return {
             ok: true,
             restarted: true,
@@ -1582,33 +1653,47 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             playlistUrl: data.playlistUrl,
             streamUrl: data.streamUrl,
           };
-        }
-        if (!data?.restarted) return { ok: false, message: "server could not recover this file" };
-        return {
-          ok: true,
-          restarted: true,
-          authoritative: true,
-          method: data.method,
-          segmentFrom: data.segmentFrom,
-          actualStartMs: data.actualStartMs,
-          playlistUrl: data.playlistUrl,
-          streamUrl: data.streamUrl,
-        };
-      },
-      apply: (outcome) => {
-        if (!outcome.restarted || !startRef.current) return;
-        setPlayerError(null);
-        const method = outcome.method ?? startRef.current.method;
-        setStart((prev) => (prev ? { ...prev, method, playlistUrl: outcome.playlistUrl ?? null, streamUrl: outcome.streamUrl ?? null } : prev));
-        setKeyNonce((n) => n + 1);
-        userPausedRef.current = false;
-        bumpSrcNonce();
-        applyRestart(method, outcome.segmentFrom ?? null, outcome.actualStartMs ?? null, positionMs);
-      },
-      onFail: (message) => setPlayerError(message),
-    });
+        },
+        apply: (outcome) => {
+          if (!outcome.restarted || !startRef.current) return;
+          setPlayerError(null);
+          const method = outcome.method ?? startRef.current.method;
+          setStart((prev) => (prev ? { ...prev, method, playlistUrl: outcome.playlistUrl ?? null, streamUrl: outcome.streamUrl ?? null } : prev));
+          setKeyNonce((n) => n + 1);
+          userPausedRef.current = false;
+          bumpSrcNonce();
+          applyRestart(method, outcome.segmentFrom ?? null, outcome.actualStartMs ?? null, positionMs);
+        },
+        onFail: (message) => setPlayerError(message),
+      });
+    },
+    [commitRestart, applyRestart, bumpSrcNonce],
+  );
+
+  const tryAudioDecodeFallback = useCallback((): boolean => {
+    const session = startRef.current;
+    if (!session || session.method !== "DIRECT_PLAY" || audioDecodeFallbackTriedRef.current) return false;
+    audioDecodeFallbackTriedRef.current = true;
+    runDecodeFallback("reportAudioDecodeError");
     return true;
-  }, [commitRestart, applyRestart, bumpSrcNonce]);
+  }, [runDecodeFallback]);
+
+  // Only eligible once the session has already moved off DIRECT_PLAY —
+  // that happens either via the audio fallback above, or because the file
+  // never qualified for DIRECT_PLAY to begin with (e.g. an audio-codec
+  // mismatch on its own). Either way, REMUX and TRANSCODE already
+  // re-encode/handle audio compatibility, so a decode error recurring
+  // under one of them means audio was never the actual problem — the
+  // audio fallback's own DIRECT_PLAY-only guard means it can never catch
+  // this case, which is exactly why this needs to be a separate tier
+  // rather than just letting tryAudioDecodeFallback retry.
+  const tryVideoDecodeFallback = useCallback((): boolean => {
+    const session = startRef.current;
+    if (!session || session.method === "DIRECT_PLAY" || videoDecodeFallbackTriedRef.current) return false;
+    videoDecodeFallbackTriedRef.current = true;
+    runDecodeFallback("reportVideoDecodeError");
+    return true;
+  }, [runDecodeFallback]);
 
   // Some browsers abandon a DIRECT_PLAY resource without ever dispatching a
   // native `error` event — no MediaError, nothing for handleMediaError to
@@ -1646,6 +1731,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     (detail: MediaErrorDetail) => {
       if (detail.code === 3 || detail.code === 4) {
         if (tryAudioDecodeFallback()) return;
+        // Audio fallback wasn't eligible (already tried, or this session
+        // was never DIRECT_PLAY) — a decode error at this point is under
+        // REMUX/TRANSCODE, which already handle audio compatibility, so
+        // it's the video stream this time. One more escalation tier
+        // before giving up, same as the audio one above.
+        if (tryVideoDecodeFallback()) return;
         // Fallback already fired once for this session and a restart is
         // still in flight (a stray duplicate decode-error event, e.g. from
         // the old element mid-teardown) — let it finish instead of racing
@@ -1658,7 +1749,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
       pendingSeekRef.current = null;
       setPlayerError(detail.message || `playback error${detail.code ? ` (${detail.code})` : ""}`);
     },
-    [tryAudioDecodeFallback],
+    [tryAudioDecodeFallback, tryVideoDecodeFallback],
   );
 
   const retryPlayback = useCallback(() => {
@@ -1686,28 +1777,48 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     // TRANSCODE/REMUX: reload the current src (a transient hiccup heals with a
     // plain reload) *and* commit a seek-restart, which respawns a dead ffmpeg
     // child server-side — the reload alone would fail exactly the same way.
+    //
+    // Same reasoning as the DIRECT_PLAY reset above, for the video
+    // fallback's own one-shot ref: only meaningful while still on REMUX
+    // (its eligible starting point) — if it already escalated all the way
+    // to TRANSCODE, the flag did its job and re-arming it here would let a
+    // stray duplicate error event fire a second, redundant report.
+    if (method === "REMUX") videoDecodeFallbackTriedRef.current = false;
     bumpSrcNonce();
     commitRestart(buildSeekRequest(targetMs));
   }, [buildSeekRequest, commitRestart, bumpSrcNonce]);
 
-  const src =
-    start?.method === "DIRECT_PLAY"
-      ? { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const }
-      : start?.method === "REMUX" && start.streamUrl
-        ? {
-            // Native <video> + range requests against the live remux — no
-            // MSE, which is exactly why HEVC works here. Restarts (seek past
-            // the written frontier, audio switch) truncate and rewrite the
-            // file, so the nonce forces a fresh open.
-            src: srcNonce > 0 ? `${start.streamUrl}?r=${srcNonce}` : start.streamUrl,
-            type: "video/mp4" as const,
-          }
-        : start?.playlistUrl
-          ? {
-              src: srcNonce > 0 ? `${start.playlistUrl}?r=${srcNonce}` : start.playlistUrl,
-              type: "application/x-mpegurl" as const,
-            }
-          : undefined;
+  // Memoized on the fields that should actually cause a reload — every other
+  // derived value in this file follows the same rule (see e.g. selectedQuality
+  // above). A plain object literal here would get a fresh identity on every
+  // WatchPage re-render (heartbeat ticks, timeupdate-driven state, etc.),
+  // and vidstack reloads the source whenever the src prop's identity changes
+  // even when the URL is byte-for-byte the same — observed live as a client
+  // reload loop (repeated `Range: bytes=0-` requests seconds apart with no
+  // user seek, ending in aborted connections) that explains the reported
+  // lag/instability across DIRECT_PLAY, REMUX, and TRANSCODE alike.
+  const src = useMemo(() => {
+    if (start?.method === "DIRECT_PLAY") {
+      return { src: `/media-files/${mediaFileId}/direct`, type: "video/mp4" as const };
+    }
+    if (start?.method === "REMUX" && start.streamUrl) {
+      // Native <video> + range requests against the live remux — no
+      // MSE, which is exactly why HEVC works here. Restarts (seek past
+      // the written frontier, audio switch) truncate and rewrite the
+      // file, so the nonce forces a fresh open.
+      return {
+        src: srcNonce > 0 ? `${start.streamUrl}?r=${srcNonce}` : start.streamUrl,
+        type: "video/mp4" as const,
+      };
+    }
+    if (start?.playlistUrl) {
+      return {
+        src: srcNonce > 0 ? `${start.playlistUrl}?r=${srcNonce}` : start.playlistUrl,
+        type: "application/x-mpegurl" as const,
+      };
+    }
+    return undefined;
+  }, [start?.method, start?.streamUrl, start?.playlistUrl, mediaFileId, srcNonce]);
 
   // Server-side audio switching only makes sense while transcoding; DIRECT_PLAY
   // already has a native audio menu, so we don't double it up.

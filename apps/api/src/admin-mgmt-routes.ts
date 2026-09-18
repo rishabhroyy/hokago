@@ -300,7 +300,16 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
         where: { mediaItem: { OR: [{ id: show.id }, { parentId: show.id }, { parent: { parentId: show.id } }] } },
         select: { path: true },
       });
-      await Promise.all(files.map((f) => rm(f.path, { force: true }).catch(() => {})));
+      // force:true only suppresses ENOENT (already-gone files) — any other
+      // rejection here (EACCES/EROFS, e.g. a read-only library mount like
+      // Movies/TV default to in docker-compose.yml) is a real failure, not
+      // noise to swallow. Reporting it beats silently returning
+      // filesRemoved: 0 and letting the admin believe the delete worked.
+      const results = await Promise.allSettled(files.map((f) => rm(f.path, { force: true })));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        return reply.code(503).send({ error: `could not delete ${failed} of ${files.length} file(s) — check the library's mount is writable` });
+      }
 
       // filesRemoved is pruneMissingMedia's library-wide count, not scoped to
       // this show — harmless in practice (this show's files are the only
@@ -325,7 +334,15 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
       const folder = resolveShowFolderPath(show.library.rootPath, show.title);
       if (!folder) return reply.code(400).send({ error: "resolved show path is unsafe — refusing to delete" });
 
-      await rm(folder, { recursive: true, force: true });
+      // force:true only suppresses ENOENT — a real write failure (EACCES/
+      // EROFS, e.g. a read-only library mount) must not fall through to
+      // pruneMissingMedia at all: the folder is still there, so pruning now
+      // would be wrong (nothing was actually deleted).
+      try {
+        await rm(folder, { recursive: true, force: true });
+      } catch {
+        return reply.code(503).send({ error: "could not delete the show folder — check the library's mount is writable" });
+      }
       await pruneMissingMedia(db, show.libraryId, show.library.rootPath);
       return { deleted: true };
     },

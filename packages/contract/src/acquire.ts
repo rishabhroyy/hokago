@@ -100,4 +100,27 @@ export type AcquireProviderInfo = z.infer<typeof AcquireProviderInfo>;
 
 export const AcquireOkResponse = z.object({ ok: z.boolean() });
 
+// ── What the library already has ────────────────────────────────────────
+// Surfaces the same show-matching + real SEASON/EPISODE hierarchy the dedup
+// gate on /acquire/anicli/downloads and /acquire/:providerId/downloads
+// already checks against, so a client can show "already have..." before the
+// user picks what to grab instead of it only ever being enforced silently
+// at submit time.
+
+export const AcquireExistingQuery = z.object({ libraryId: z.string().uuid(), query: z.string().min(1).max(200) });
+export type AcquireExistingQuery = z.infer<typeof AcquireExistingQuery>;
+
+export const AcquireExistingSeason = z.object({
+  /** 0 = specials. */
+  season: z.number().int(),
+  episodeCount: z.number().int(),
+  episodeNumbers: z.array(z.number().int()),
+});
+
+export const AcquireExistingResponse = z.object({
+  matched: z.object({ id: z.string(), title: z.string(), year: z.number().int().nullable() }).nullable(),
+  seasons: z.array(AcquireExistingSeason),
+});
+export type AcquireExistingResponse = z.infer<typeof AcquireExistingResponse>;
+
 export const ErrorResponse = z.object({ error: z.string() });

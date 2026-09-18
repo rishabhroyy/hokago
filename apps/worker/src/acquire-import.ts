@@ -6,13 +6,14 @@
  * the exact same convention the built-in ani-cli import already
  * established (parseAnicliQuery + seasonTargetDir, from @hokago/queue) —
  * never a second, independently-invented rule for where a file goes.
- * Before that, it also checks whether this library already has a
- * matching show (findExistingSeries, reusing @hokago/providers'
- * acceptMatch — the same acceptance test the scanner's own metadata step
- * trusts) and places under its existing canonical title/year instead of
- * whatever this one request's text happens to produce, so the same show
- * arriving via a different release/provider doesn't fork into a second
- * near-duplicate folder.
+ * Before that, it also checks whether this library already has a matching
+ * show (@hokago/providers' findExistingSeries — the same shared matching
+ * apps/api's acquire-routes.ts also uses for season/episode dedup, so "is
+ * this the same show" is answered exactly one way everywhere) and places
+ * under its existing canonical title/year instead of whatever this one
+ * request's text happens to produce, so the same show arriving via a
+ * different release/provider doesn't fork into a second near-duplicate
+ * folder.
  *
  * No DB row backs this job — its own BullMQ job state is the only record,
  * deliberately, matching how lightweight the rest of the acquire-provider
@@ -54,22 +55,11 @@ class StallTracker extends Transform {
 }
 
 import { parseAnicliQuery, seasonTargetDir, sanitizeFolder, type AcquireImportJobData, type Job } from "@hokago/queue";
-import { acceptMatch } from "@hokago/providers";
-import type { MetadataMatch, MetadataQuery } from "@hokago/metadata";
+import { findExistingSeries, type ExistingSeriesDeps } from "@hokago/providers";
 
-export interface AcquireImportDeps {
-  db: {
+export interface AcquireImportDeps extends ExistingSeriesDeps {
+  db: ExistingSeriesDeps["db"] & {
     library: { findUnique: (args: { where: { id: string } }) => Promise<{ rootPath: string } | null> };
-    // Existing SERIES-level items in the target library, for the
-    // find-before-create check below -- selected fields only, same
-    // reasoning as the library lookup above: keep this file's own
-    // dependency shape small and easy to fake in a test rather than
-    // pulling in a full Prisma client type.
-    mediaItem: {
-      findMany: (args: {
-        where: { libraryId: string; kind: "SERIES" };
-      }) => Promise<{ title: string; originalTitle: string | null; year: number | null }[]>;
-    };
   };
   enqueueScan: (libraryId: string, mode: "light" | "heavy", delayMs?: number) => Promise<void>;
   scanSettleMs: number;
@@ -82,36 +72,10 @@ export interface AcquireImportDeps {
   stallMs?: number;
 }
 
-/**
- * Reuses a show this library already has instead of always deriving a
- * fresh title from whatever text this one request happened to carry --
- * the same acceptance logic (@hokago/providers' acceptMatch) the scanner's
- * own metadata step already trusts for "is this the same show", applied
- * locally against this library's existing items instead of a remote
- * provider's search results. No network call: the library's own history
- * is the candidate list. A near-duplicate folder for a show hokago
- * already knows about (different release, different raw title, same
- * actual anime) is exactly what this exists to prevent.
- */
-async function findExistingSeries(
-  deps: AcquireImportDeps,
-  libraryId: string,
-  title: string,
-  year: number | null,
-): Promise<{ title: string; year: number | null } | undefined> {
-  const existing = await deps.db.mediaItem.findMany({ where: { libraryId, kind: "SERIES" } });
-  const query: MetadataQuery = { title, year: year ?? undefined, kind: "SERIES" };
-  const match = existing.find((item) => {
-    const candidate: MetadataMatch = {
-      providerId: "local",
-      title: item.title,
-      year: item.year ?? undefined,
-      titles: item.originalTitle ? [{ type: "SYNONYM", value: item.originalTitle }] : undefined,
-    };
-    return acceptMatch(query, candidate);
-  });
-  return match ? { title: match.title, year: match.year ?? null } : undefined;
-}
+// findExistingSeries itself now lives in @hokago/providers (the one shared
+// implementation apps/api's acquire-routes.ts also calls for season/episode
+// dedup) -- this file only ever consumed it for file placement, never
+// defined the matching rule.
 
 const EXT_BY_CONTENT_TYPE: Record<string, string> = {
   "video/x-matroska": "mkv",

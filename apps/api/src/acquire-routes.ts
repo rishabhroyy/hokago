@@ -9,7 +9,7 @@ import {
   type AnicliDownloadJobData,
   type AcquireImportJobData,
 } from "@hokago/queue";
-import { AniListProvider } from "@hokago/providers";
+import { AniListProvider, checkSeasonDedup, findExistingSeries, seasonsForSeries } from "@hokago/providers";
 import type { MetadataQuery } from "@hokago/metadata";
 import { statfs } from "node:fs/promises";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -25,6 +25,8 @@ import {
   AcquireProviderRegisterBody,
   AcquireProviderInfo,
   AcquireOkResponse,
+  AcquireExistingQuery,
+  AcquireExistingResponse,
   ErrorResponse,
 } from "@hokago/contract/acquire";
 import { RevokedResponse } from "@hokago/contract/auth";
@@ -110,8 +112,6 @@ async function hasFreeSpace(dir: string): Promise<boolean> {
   }
 }
 
-const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-
 export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<void> {
   // ── Search ───────────────────────────────────────────────────────────
   // Real title search via AniList (keyless GraphQL, reliable) — NOT ani-cli's
@@ -173,41 +173,13 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       if (active >= ACTIVE_CAP_ACCOUNT) return reply.code(429).send({ error: "too many active downloads (max 3 per account)" });
       if (global >= ACTIVE_CAP_GLOBAL) return reply.code(429).send({ error: "server busy — max 5 concurrent anicli downloads" });
 
-      // Dedup — block an already-on-server show, but allow a NEW season and
-      // allow re-downloading a placeholder tile that never got files. The
-      // series identity the scanner will create is the folder basename we land
-      // in ("Frieren S2" → series "Frieren"; "Demon Slayer (2019)" → series
-      // "Demon Slayer (2019)"), so match against that — not the raw query.
-      const parsed = parseAnicliQuery(body.query);
-      const seriesFolder = parsed.year !== null ? `${parsed.title} (${parsed.year})` : parsed.title;
-      const qNorm = norm(seriesFolder);
-      const qSeason = parsed.season;
-      const existing = await db.mediaItem.findMany({
-        where: { libraryId: body.libraryId },
-        select: { title: true, seasonNumber: true, titles: { select: { value: true } }, files: { select: { id: true } } },
-      });
-      for (const it of existing) {
-        const names = [it.title, ...it.titles.map((t) => t.value)].map(norm);
-        if (!names.includes(qNorm)) continue;
-        if (it.files.length === 0) continue; // placeholder / not-downloaded tile — allowed
-        if (qSeason !== null) {
-          // Season 0 (specials/OVA/ONA) lands in a distinct "Specials" folder
-          // that never collides with episode numbering — always allow it.
-          if (qSeason === 0) continue;
-          const sameShow = existing.filter((e) => {
-            const en = [e.title, ...e.titles.map((t) => t.value)].map(norm);
-            return en.some((n) => names.includes(n));
-          });
-          const maxSeason = Math.max(1, ...sameShow.map((e) => e.seasonNumber ?? 1));
-          if (qSeason > maxSeason) continue; // new season — allowed
-        }
-        return reply.code(409).send({ error: "show already exists on the server — new seasons allowed (e.g. \"Frieren S2\")" });
-      }
-
       // Episode range guard — must be a single episode ("5") or an ascending
       // "A-B" of positive integers, ≤ MAX_EPISODES total. Anything else
       // (garbage, non-integers, multi-hyphen "1-12-3", descending) is rejected
-      // before it reaches ani-cli's -r flag.
+      // before it reaches ani-cli's -r flag. Runs BEFORE dedup below: dedup
+      // also parses episodeRange internally, and a malformed range against
+      // an already-partially-filled season would otherwise surface as a
+      // misleading 409 ("specify a range") instead of the real 422.
       if (body.episodeRange) {
         const raw = body.episodeRange.trim();
         if (!/^\d+(-\d+)?$/.test(raw)) {
@@ -219,6 +191,24 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
           return reply.code(422).send({ error: `episodeRange must be 1-based ascending and ≤ ${MAX_EPISODES} episodes` });
         }
       }
+
+      // Dedup — the shared engine (@hokago/providers) walks the real
+      // SERIES -> SEASON -> EPISODE hierarchy for this show (found via the
+      // same acceptMatch-based matching findExistingSeries already uses for
+      // file placement, both here and in the worker) rather than matching
+      // by flat title equality across every item kind the way this used to.
+      // Blocks an already-fully-downloaded season; allows a new season, an
+      // episode range not yet fully present, and specials (season 0) always.
+      const parsed = parseAnicliQuery(body.query);
+      const dedup = await checkSeasonDedup(
+        { db },
+        body.libraryId,
+        parsed.title,
+        parsed.year,
+        parsed.season,
+        body.episodeRange,
+      );
+      if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
 
       let job;
       try {
@@ -360,6 +350,25 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     () => listHealthyProviders(),
   );
 
+  // ── What the library already has ────────────────────────────────────
+  // Same matching + hierarchy walk checkSeasonDedup uses, exposed as a read
+  // so the UI can show "already have Season 1 (12 ep)..." while the user is
+  // still typing, instead of only ever finding out at submit time.
+  app.get(
+    "/acquire/existing",
+    { ...adminOnly, schema: { querystring: AcquireExistingQuery, response: { 200: AcquireExistingResponse } } },
+    async (req) => {
+      const parsed = parseAnicliQuery(req.query.query);
+      const match = await findExistingSeries({ db }, req.query.libraryId, parsed.title, parsed.year);
+      if (!match) return { matched: null, seasons: [] };
+      const breakdown = await seasonsForSeries({ db }, match.id);
+      return {
+        matched: { id: match.id, title: match.title, year: match.year },
+        seasons: breakdown.map((b) => ({ season: b.season, episodeCount: b.episodeNumbers.length, episodeNumbers: b.episodeNumbers })),
+      };
+    },
+  );
+
   // Generic proxy for any registered (non-built-in) provider — forwards
   // verbatim and relays the status/body back. Fastify prefers the static
   // /acquire/anicli/* routes above over this parametric one, so the
@@ -472,7 +481,7 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
     // unlike the built-in ani-cli route above — but whatever fields it IS
     // given (query length, episodeRange shape, etc.) still get the same
     // limits as the built-in route, not an unconstrained z.record.
-    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial(), response: { 507: ErrorResponse } } },
+    { ...adminOnly, schema: { params: AcquireProviderId, body: AcquireDownloadBody.partial(), response: { 409: ErrorResponse, 507: ErrorResponse } } },
     async (req, reply) => {
       // Same coarse free-space floor as the built-in route below -- it was
       // never about knowing the download's exact size (ani-cli doesn't
@@ -484,6 +493,23 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
         if (lib && !(await hasFreeSpace(lib.rootPath))) {
           return reply.code(507).send({ error: "insufficient disk space — free up at least 2 GiB on the library drive" });
         }
+      }
+      // Same shared season/episode dedup gate the built-in ani-cli route
+      // uses (checkSeasonDedup, @hokago/providers) — previously external
+      // providers had no protection against re-downloading an already-
+      // complete season at all. Only meaningful once there's both a library
+      // to check against and a query to parse a title/season out of.
+      if (req.body.libraryId && req.body.query) {
+        const parsed = parseAnicliQuery(req.body.query);
+        const dedup = await checkSeasonDedup(
+          { db },
+          req.body.libraryId,
+          parsed.title,
+          parsed.year,
+          parsed.season,
+          req.body.episodeRange,
+        );
+        if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
       }
       return relayProxy(
         reply,

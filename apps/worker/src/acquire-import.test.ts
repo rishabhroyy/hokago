@@ -199,7 +199,7 @@ test("processAcquireImport reuses an existing similar-sounding series instead of
           // A show this library already has, under its own fuller,
           // canonical title -- the "query embedded in the fuller title"
           // shape acceptMatch's own doc comment gives as its example.
-          mediaItem: { findMany: async () => [{ title: "Frieren: Beyond Journey's End", originalTitle: null, year: null }] },
+          mediaItem: { findMany: async () => [{ id: "series-1", title: "Frieren: Beyond Journey's End", originalTitle: null, year: null }] },
         },
         enqueueScan: async () => {},
         scanSettleMs: 0,

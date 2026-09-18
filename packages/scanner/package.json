@@ -13,11 +13,13 @@
     "./trickplay": "./dist/trickplay.js",
     "./artwork": "./dist/artwork.js",
     "./constants": "./dist/constants.js",
-    "./evidence": "./dist/evidence.js"
+    "./evidence": "./dist/evidence.js",
+    "./show-folder": "./dist/show-folder.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts",
     "scan": "tsx scripts/scan.ts",
     "seed:anime": "tsx scripts/seed-anime.ts",
     "episode-titles": "tsx scripts/refresh-episode-titles.ts"

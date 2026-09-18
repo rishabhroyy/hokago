@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodeCard } from "@hokago/contract/browse";
 import { fetchMediaItemDetail, invalidateMediaItemDetail, prefetchMediaItemDetail, type MediaItemDetail } from "../browse-api";
 import { api } from "../api-client";
-import { useProfileId } from "../profile";
+import { useProfileId, useIsAdmin } from "../profile";
+import { adminApi } from "../admin-api";
 import { paths, useRouter } from "../router";
 import { canDownload, createDownload, recordLocalDownload, saveToDevice, waitReady } from "../downloads";
 import { recordOfflineEntry } from "../offline";
@@ -212,6 +213,7 @@ function DetailSkeleton({ itemId }: { itemId: string }) {
 export function DetailView({ itemId }: { itemId: string }) {
   const { navigate } = useRouter();
   const profileId = useProfileId();
+  const isAdmin = useIsAdmin();
   const s = useWiiSound();
   const reduced = useReducedMotion();
   const [item, setItem] = useState<MediaItemDetail | null>(null);
@@ -364,6 +366,28 @@ export function DetailView({ itemId }: { itemId: string }) {
       .then(() => { invalidateMediaItemDetail(itemId); return fetchMediaItemDetail(itemId, profileId); })
       .then((detail) => { if (detail) setItem(detail); })
       .catch((err: Error) => console.warn("mass mark failed", err.message));
+  };
+
+  const handleDeleteShowFiles = () => {
+    if (!item) return;
+    if (!confirm(`Delete all downloaded files for "${item.title}"? The show stays in your library so you can re-download it. This cannot be undone.`)) return;
+    adminApi
+      .deleteShowFiles(item.id)
+      .then(() => {
+        invalidateMediaItemDetail(itemId);
+        return fetchMediaItemDetail(itemId, profileId ?? "dev");
+      })
+      .then((detail) => { if (detail) setItem(detail); })
+      .catch(() => alert("failed to delete files"));
+  };
+
+  const handleDeleteShow = () => {
+    if (!item) return;
+    if (!confirm(`Delete "${item.title}" entirely — files and library entry both? This cannot be undone.`)) return;
+    adminApi
+      .deleteShow(item.id)
+      .then(() => navigate(paths.home()))
+      .catch(() => alert("failed to delete show"));
   };
 
   const episodeMenuItems = (ep: EpisodeCard): ContextMenuItem[] => [
@@ -639,6 +663,12 @@ export function DetailView({ itemId }: { itemId: string }) {
             return [
               { label: "Mark title watched", icon: "check" as const, onClick: () => markMass(ids, true) },
               { label: "Unwatch title", icon: "check" as const, onClick: () => markMass(ids, false) },
+              ...(isAdmin
+                ? [
+                    { label: "Delete files (keep folder)", icon: "trash" as const, onClick: handleDeleteShowFiles },
+                    { label: "Delete show entirely", icon: "trash" as const, onClick: handleDeleteShow },
+                  ]
+                : []),
             ];
           })()}
         />

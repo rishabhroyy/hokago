@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AcquireDownloadInfo, AcquireSearchCandidate } from "@hokago/contract/acquire";
+import type { AcquireDownloadInfo, AcquireExistingResponse, AcquireSearchCandidate } from "@hokago/contract/acquire";
 import { api } from "../api-client";
 import { adminApi } from "../admin-api";
 import { useWiiSound } from "../ui/useWiiSound";
@@ -121,6 +121,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
   const [results, setResults] = useState<AcquireSearchCandidate[]>([]);
   const [searching, setSearching] = useState(false);
   const [rows, setRows] = useState<AcquireDownloadInfo[] | null>(null);
+  const [existing, setExisting] = useState<AcquireExistingResponse | null>(null);
 
   const loadLibs = useCallback(async () => {
     const libs = await adminApi.libraries();
@@ -185,6 +186,31 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     }, 3000);
     return () => clearInterval(id);
   }, [loadRows]);
+
+  // Debounced "do we already have this" lookup, keyed on library+query, so
+  // the season/episode inputs can show what's already downloaded before the
+  // admin submits — same 400ms debounce shape as FixMatchPanel's search.
+  useEffect(() => {
+    if (!lib || !query.trim()) {
+      setExisting(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api
+        .GET("/acquire/existing", { params: { query: { libraryId: lib, query: query.trim() } } })
+        .then(({ data }) => {
+          if (!cancelled) setExisting(data ?? null);
+        })
+        .catch(() => {
+          if (!cancelled) setExisting(null);
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [lib, query]);
 
   const search = async () => {
     if (!query.trim() || searching) return;
@@ -308,6 +334,15 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
         </button>
       </div>
 
+      {existing?.matched && (
+        <div className="mt-4 rounded-[16px] bg-wii/8 px-4 py-2.5 font-mono text-kicker font-bold uppercase tracking-[0.08em] text-wii-deep">
+          Already have "{existing.matched.title}"
+          {existing.seasons.length > 0
+            ? ": " + existing.seasons.map((s) => `season ${s.season} (${s.episodeCount} ep)`).join(", ")
+            : " — no episodes on the server yet"}
+        </div>
+      )}
+
       <div className="mt-4 flex flex-wrap items-end gap-x-6 gap-y-3 rounded-[20px] bg-paper/50 px-4 py-3 ring-1 ring-line">
         <label className="flex min-w-[180px] flex-1 flex-col gap-1.5">
           <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">save into library</span>
@@ -343,7 +378,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
             className="h-11 w-[100px] rounded-full border-[1.5px] border-line bg-card px-4 font-mono text-kicker font-bold uppercase tracking-[0.08em] text-ink outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:tracking-[0.08em] placeholder:text-ink-3 focus:border-wii focus:shadow-[0_0_0_3.5px_rgba(79,184,224,0.28)]"
             value={season}
             onChange={(e) => setSeason(e.target.value)}
-            placeholder="1"
+            placeholder={existing?.seasons.length ? String(Math.max(...existing.seasons.map((s) => s.season)) + 1) : "1"}
             title="Set this when a sequel/cour has its own AniList title (e.g. K-On!!) so it files as a season of the existing show instead of a new one"
           />
         </label>

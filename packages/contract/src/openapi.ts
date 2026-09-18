@@ -71,6 +71,8 @@ import {
   AcquireProviderRegisterBody,
   AcquireProviderInfo,
   AcquireOkResponse,
+  AcquireExistingQuery,
+  AcquireExistingResponse,
   ErrorResponse as AcquireErrorResponse,
 } from "./acquire.js";
 import {
@@ -120,6 +122,8 @@ import {
   AdminSummary,
   AdminLibrary,
   AdminLibraryParams,
+  AdminShowParams,
+  AdminShowFilesDeletedResponse,
   AdminLibraryCreateBody,
   AdminLibraryUpdateBody,
   AdminScanResponse,
@@ -704,6 +708,30 @@ export function buildOpenApiDocument(): OpenAPIObject {
     },
   });
   registry.registerPath({
+    method: "delete",
+    path: "/admin-api/shows/{id}",
+    summary: "Delete a show entirely — files and library entry both",
+    request: { params: AdminShowParams },
+    responses: {
+      200: { description: "OK", ...json(AdminDeletedResponse) },
+      400: { description: "Not a show, or resolved path unsafe", ...json(AdminErrorResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+      503: { description: "Library root not mounted — refusing to delete", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/admin-api/shows/{id}/files",
+    summary: "Delete a show's downloaded video files, leaving the folder and everything else in it",
+    request: { params: AdminShowParams },
+    responses: {
+      200: { description: "OK", ...json(AdminShowFilesDeletedResponse) },
+      400: { description: "Not a show", ...json(AdminErrorResponse) },
+      404: { description: "Not found", ...json(AdminErrorResponse) },
+      503: { description: "Library root not mounted — refusing to delete", ...json(AdminErrorResponse) },
+    },
+  });
+  registry.registerPath({
     method: "get",
     path: "/admin-api/accounts",
     summary: "List all accounts",
@@ -992,9 +1020,17 @@ export function buildOpenApiDocument(): OpenAPIObject {
      responses: {
        201: { description: "Created — job queued", ...json(AcquireDownloadInfo) },
        404: { description: "Provider not registered/reachable", ...json(AcquireErrorResponse) },
+       409: { description: "Show already exists on the server (dedup)", ...json(AcquireErrorResponse) },
        502: { description: "Provider responded 2xx but the body didn't match the expected shape", ...json(AcquireErrorResponse) },
        507: { description: "Insufficient disk space on the target library", ...json(AcquireErrorResponse) },
      },
+   });
+   registry.registerPath({
+     method: "get",
+     path: "/acquire/existing",
+     summary: "Look up an existing show's real season/episode breakdown by title (admin only)",
+     request: { query: AcquireExistingQuery },
+     responses: { 200: { description: "OK", ...json(AcquireExistingResponse) } },
    });
    registry.registerPath({
      method: "get",

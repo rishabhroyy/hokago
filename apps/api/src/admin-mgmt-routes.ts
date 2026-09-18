@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { PrismaClient } from "@hokago/db";
 import { getConnection, Queue, QUEUE_NAMES, scanJobId, JOB_FAILURE_THRESHOLD } from "@hokago/queue";
 import {
@@ -13,6 +15,8 @@ import {
   AdminAccountUpdateBody,
   AdminAccountResponse,
   AdminDeletedResponse,
+  AdminShowParams,
+  AdminShowFilesDeletedResponse,
   AdminInvite,
   AdminInviteParams,
   AdminSession,
@@ -24,6 +28,8 @@ import {
 } from "@hokago/contract/admin";
 import { CreateInviteBody, InviteResponse, RevokedResponse } from "@hokago/contract/auth";
 import { getHwaccel, hwaccelStatus } from "@hokago/ffmpeg/hwaccel";
+import { pruneMissingMedia } from "@hokago/scanner/prune";
+import { resolveShowFolderPath } from "@hokago/scanner/show-folder";
 import { hashPassword, generateOpaqueToken } from "./auth.js";
 import type { ZodFastifyInstance } from "./fastify-zod.js";
 import { queueSummaries } from "./admin-routes.js";
@@ -257,6 +263,71 @@ export async function registerAdminMgmtRoutes(app: ZodFastifyInstance): Promise<
       if (!lib) return reply.code(404).send({ error: "library not found" });
       await enqueueScan(lib.id, "light");
       return { enqueued: true };
+    },
+  );
+
+  // ── Shows ────────────────────────────────────────────────────────────────
+  // Deletes a show's video files but leaves its folder (and the SERIES row)
+  // in place, then a show's folder entirely. Both reuse pruneMissingMedia
+  // (packages/scanner/src/prune.ts) — the same DB roll-up the scanner
+  // already runs after every disk walk — instead of reimplementing "what
+  // rows survive a file/folder going away." Disk-first, DB-second in both:
+  // a crash between the two steps leaves a retryable DB row rather than
+  // permanently orphaned files with nothing left to retry against.
+  //
+  // pruneMissingMedia sweeps EVERY file in the library, not just this show's
+  // — same as its one other caller (apps/worker/src/index.ts), which only
+  // ever runs it after a scan walk proved the mount is actually up. A
+  // dropped mount would make every file in the library read as "missing"
+  // and wipe the whole library's rows, not just this show's, so both routes
+  // below require the same existsSync(rootPath) proof first.
+
+  app.delete(
+    "/admin-api/shows/:id/files",
+    { ...gate, schema: { params: AdminShowParams, response: { 200: AdminShowFilesDeletedResponse, 400: ErrorResponse, 404: ErrorResponse, 503: ErrorResponse } } },
+    async (req, reply) => {
+      const show = await db.mediaItem.findUnique({
+        where: { id: req.params.id },
+        select: { id: true, kind: true, libraryId: true, library: { select: { rootPath: true } } },
+      });
+      if (!show) return reply.code(404).send({ error: "show not found" });
+      if (show.kind !== "SERIES") return reply.code(400).send({ error: "only shows can be targeted this way" });
+      if (!existsSync(show.library.rootPath)) return reply.code(503).send({ error: "library root is not mounted — refusing to touch files" });
+
+      // Walk SERIES -> SEASON -> EPISODE/MOVIE, collect tracked video files
+      // only — never touches SubtitleTrack.path or any other sidecar file.
+      const files = await db.mediaFile.findMany({
+        where: { mediaItem: { OR: [{ id: show.id }, { parentId: show.id }, { parent: { parentId: show.id } }] } },
+        select: { path: true },
+      });
+      await Promise.all(files.map((f) => rm(f.path, { force: true }).catch(() => {})));
+
+      // filesRemoved is pruneMissingMedia's library-wide count, not scoped to
+      // this show — harmless in practice (this show's files are the only
+      // ones expected to be freshly missing), but not a precise per-show tally.
+      const summary = await pruneMissingMedia(db, show.libraryId, show.library.rootPath);
+      return { deleted: true, filesRemoved: summary.filesRemoved };
+    },
+  );
+
+  app.delete(
+    "/admin-api/shows/:id",
+    { ...gate, schema: { params: AdminShowParams, response: { 200: AdminDeletedResponse, 400: ErrorResponse, 404: ErrorResponse, 503: ErrorResponse } } },
+    async (req, reply) => {
+      const show = await db.mediaItem.findUnique({
+        where: { id: req.params.id },
+        select: { id: true, kind: true, title: true, libraryId: true, library: { select: { rootPath: true } } },
+      });
+      if (!show) return reply.code(404).send({ error: "show not found" });
+      if (show.kind !== "SERIES") return reply.code(400).send({ error: "only shows can be deleted this way" });
+      if (!existsSync(show.library.rootPath)) return reply.code(503).send({ error: "library root is not mounted — refusing to delete" });
+
+      const folder = resolveShowFolderPath(show.library.rootPath, show.title);
+      if (!folder) return reply.code(400).send({ error: "resolved show path is unsafe — refusing to delete" });
+
+      await rm(folder, { recursive: true, force: true });
+      await pruneMissingMedia(db, show.libraryId, show.library.rootPath);
+      return { deleted: true };
     },
   );
 

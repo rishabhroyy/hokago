@@ -154,6 +154,11 @@ export type AdminAccountUpdateBody = z.infer<typeof AdminAccountUpdateBody>;
 export const AdminAccountResponse = z.object({ id: z.string() });
 export const AdminDeletedResponse = z.object({ deleted: z.boolean() });
 
+// ── Shows ────────────────────────────────────────────────────────────────
+
+export const AdminShowParams = z.object({ id: z.string() });
+export const AdminShowFilesDeletedResponse = z.object({ deleted: z.boolean(), filesRemoved: z.number() });
+
 export const AdminInvite = z.object({
   id: z.string(),
   code: z.string(),

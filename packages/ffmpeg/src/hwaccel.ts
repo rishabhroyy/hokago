@@ -49,6 +49,8 @@ export interface HwaccelState {
   encoders: Set<string>;
   /** filter names this ffmpeg build offers (from `ffmpeg -filters`) — scale_npp gates the nvenc residual path */
   filters: Set<string>;
+  /** decoder names this ffmpeg build offers (from `ffmpeg -decoders`) — hevc_cuvid gates the nvenc 10-bit-HEVC decode workaround (see hls.ts) */
+  decoders: Set<string>;
   /** true when a runtime failure flipped this process to CPU */
   disabledAfterFailure: boolean;
   /** why the resolved method was chosen (surfaced in the admin console) */
@@ -147,6 +149,28 @@ function readFilters(): Promise<Set<string>> {
 }
 
 /**
+ * Decoder names offered by this ffmpeg build — e.g. hevc_cuvid, the explicit
+ * NVIDIA decoder entry point buildFfmpegArgs' 10-bit-HEVC-on-nvenc workaround
+ * needs (see hls.ts). `--enable-cuvid` (decoders) and `--enable-nvenc`
+ * (encoders) are independent ffmpeg configure flags — a build can have nvenc
+ * without cuvid, so this can't be inferred from `encoders` the way the
+ * residual path already correctly doesn't infer scale_npp from nvenc either.
+ */
+function readDecoders(): Promise<Set<string>> {
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", ["-hide_banner", "-decoders"], { maxBuffer: 4 * 1024 * 1024, timeout: 15_000 }, (err, stdout) => {
+      if (err) return reject(err);
+      const decoders = new Set<string>();
+      for (const line of stdout.split("\n")) {
+        const match = /^.{7}\s+(\S+)/.exec(line);
+        if (match && !match[1]!.startsWith("=")) decoders.add(match[1]!);
+      }
+      resolve(decoders);
+    });
+  });
+}
+
+/**
  * Picks the device for a capability: the env override when set (validated to
  * exist for vaapi/qsv), else the detected node. For nvenc an override is a
  * CUDA index; with no override the driver's default device 0 is used — a
@@ -161,9 +185,10 @@ async function deviceFor(cap: HwaccelCapability, override: string | null): Promi
 }
 
 async function detect(): Promise<HwaccelState> {
-  const [encoders, filters, node, nvidia0] = await Promise.all([
+  const [encoders, filters, decoders, node, nvidia0] = await Promise.all([
     readEncoders(),
     readFilters(),
+    readDecoders(),
     renderNode(),
     exists("/dev/nvidia0"),
   ]);
@@ -216,7 +241,7 @@ async function detect(): Promise<HwaccelState> {
     }
   }
 
-  return { requested, method, device, available: capabilities, encoders, filters, disabledAfterFailure: false, note };
+  return { requested, method, device, available: capabilities, encoders, filters, decoders, disabledAfterFailure: false, note };
 }
 
 /** Resolved, process-lifetime-cached acceleration state (first call runs detection). */

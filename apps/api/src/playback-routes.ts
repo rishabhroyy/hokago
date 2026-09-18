@@ -47,7 +47,7 @@ function transcodeDir(sessionId: string): string {
 interface LiveSession {
   transcode: RunningTranscode;
   outDir: string;
-  mediaFile: { path: string; durationMs: number; bitrateKbps: number | null; videoCodec: string | null };
+  mediaFile: { path: string; durationMs: number; bitrateKbps: number | null; videoCodec: string | null; bitDepth: number | null };
   method: "DIRECT_STREAM" | "REMUX" | "TRANSCODE";
   deviceProfile: DeviceProfile;
   currentSegmentFrom: number;
@@ -649,6 +649,14 @@ async function resolveHwaccelForSpawn(
   waitMs: number = GPU_SLOT_WAIT_MS,
 ): Promise<{ hwaccel: HwaccelState; gpuSlot: string | null }> {
   if (hwaccel.method === "none") return { hwaccel, gpuSlot: null };
+  // A 10-bit HEVC source used to corrupt on nvenc (see packages/ffmpeg/src/hls.ts's
+  // nvenc10BitHevcSource/nvencCuvidWorkaround — the real, hardware-verified
+  // fix lives there, in buildFfmpegArgs, which has the codec/tone-map/
+  // subtitle-burn-in context needed to pick the right decode strategy and
+  // encoder fallback together). This function only decides the GPU-slot
+  // budget claim, not whether hw is safe for the source — that's still
+  // "nvenc" here on purpose so pickVideoEncoder keeps choosing nvenc for the
+  // common case buildFfmpegArgs now handles correctly.
   const gpuSlot = await acquireGpuSlot(waitMs);
   // A shallow copy, not the shared getHwaccel()/reportHwFailure() singleton
   // reference — LiveSession.hwaccel gets stored long-term (until this
@@ -905,6 +913,8 @@ async function restartTranscode(
           seekMs: startMs,
           hwaccel: effectiveHwaccel,
           videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, effectiveHwaccel),
+          sourceVideoCodec: live.mediaFile.videoCodec,
+          bitDepth: live.mediaFile.bitDepth,
           audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
           audioStreamIndex: live.audioStreamIndex,
           maxWidth: profile.maxWidth,
@@ -1057,7 +1067,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     // for a real TRANSCODE.
     const { hwaccel, gpuSlot } = isRemux
       ? { hwaccel: await getHwaccel(), gpuSlot: null }
-      : await resolveHwaccelForSpawn(await getHwaccel());
+      : await resolveHwaccelForSpawn(await getHwaccel(), GPU_SLOT_WAIT_MS);
 
     // Bounded ffmpeg concurrency: wait for a slot instead of stacking
     // transcodes on the box. 503 tells the client to retry shortly.
@@ -1100,6 +1110,8 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           seekMs: startMs,
           hwaccel,
           videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, hwaccel),
+          sourceVideoCodec: candidate.input.videoCodec,
+          bitDepth: candidate.input.bitDepth,
           audioCodec: pickAudioEncoder(profile.supportedAudioCodecs),
           audioStreamIndex: audioIndex,
           maxWidth: profile.maxWidth,
@@ -1155,6 +1167,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
         durationMs: candidate.durationMs,
         bitrateKbps: candidate.bitrateKbps,
         videoCodec: candidate.input.videoCodec,
+        bitDepth: candidate.input.bitDepth,
       },
       method: decision.method,
       deviceProfile: profile,
@@ -1738,7 +1751,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           const { hwaccel, gpuSlot } =
             newMethod === "REMUX"
               ? { hwaccel: await getHwaccel(), gpuSlot: null }
-              : await resolveHwaccelForSpawn(await getHwaccel());
+              : await resolveHwaccelForSpawn(await getHwaccel(), GPU_SLOT_WAIT_MS);
           if (!(await acquireTranscodeSlot())) {
             void releaseGpuSlot(gpuSlot);
             return reply.code(503).send({ error: "transcoder busy — too many concurrent transcodes, retry shortly" });
@@ -1783,6 +1796,8 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
                   seekMs: startMs,
                   hwaccel,
                   videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs, hwaccel),
+                  sourceVideoCodec: candidate.input.videoCodec,
+                  bitDepth: candidate.input.bitDepth,
                   audioCodec: pickAudioEncoder(newProfile.supportedAudioCodecs),
                   audioStreamIndex: candidate.relativeAudioIndex,
                   maxWidth: newProfile.maxWidth,
@@ -1852,6 +1867,7 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
               durationMs: candidate.durationMs,
               bitrateKbps: candidate.bitrateKbps,
               videoCodec: candidate.input.videoCodec,
+              bitDepth: candidate.input.bitDepth,
             },
             method: newMethod,
             deviceProfile: newProfile,

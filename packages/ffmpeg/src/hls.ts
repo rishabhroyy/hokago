@@ -19,6 +19,17 @@ function softwarePreset(): string {
   return requested && X264_PRESETS.has(requested) ? requested : DEFAULT_SOFTWARE_PRESET;
 }
 
+// nvenc encoder name -> its software equivalent, for the 10-bit-HEVC-on-nvenc
+// CPU fallback (see isNvenc10BitUnsafeForCpuFallback below) — pickVideoEncoder
+// (the caller) already resolved the encoder to one of these before this
+// function ever saw the toneMap/subtitleBurnIn combination that makes it
+// unsafe here.
+const NVENC_SOFTWARE_FALLBACK: Record<string, string> = {
+  h264_nvenc: "libx264",
+  hevc_nvenc: "libx265",
+  av1_nvenc: "libaom-av1",
+};
+
 /**
  * Full VOD playlist generated upfront — the client sees the whole
  * video as ready-to-seek immediately, even though most segment files don't
@@ -134,6 +145,12 @@ export interface SegmentJobInput {
    * encoder, this only affects flags.
    */
   hwaccel?: HwaccelState;
+  /** Source codec (ffprobe name, e.g. "hevc") — distinct from `videoCodec`
+   *  above, which is the output *encoder*. Only consulted for the nvenc
+   *  10-bit HEVC decode workaround below. */
+  sourceVideoCodec?: string | null;
+  /** Source bit depth — see the nvenc 10-bit HEVC decode workaround below. */
+  bitDepth?: number | null;
 }
 
 // — naive PQ/Rec.2020 -> SDR reads grey and foggy. Convert to
@@ -221,14 +238,69 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     input.hwaccel.filters.has("scale_npp") &&
     !input.toneMap &&
     !input.subtitleBurnIn;
+  // Confirmed on real hardware (2026-09-17, driver 580.178.04): ffmpeg's
+  // generic hwaccel-framework GPU-side P010->NV12 downconversion
+  // (`-hwaccel_output_format nv12`, and likewise `cuda` feeding scale_npp's
+  // own format=nv12) produces visibly corrupted output for a 10-bit HEVC
+  // source on this driver — reproduced identically via both the
+  // gpuResidentNvenc scale_npp path and the plain nv12-download path, and
+  // absent with a pure CPU decode. The NVDEC hardware decoder itself is
+  // NOT at fault: explicit `-c:v hevc_cuvid` decoding (ffmpeg's other, older
+  // NVIDIA decoder entry point, which does its own internal P010->NV12
+  // conversion via a different code path) produces correct frames, and
+  // `-c:v hevc_cuvid` -> `format=nv12,hwupload_cuda` -> nvenc keeps the
+  // entire pipeline GPU-resident (decode AND encode) with no corruption.
+  const nvenc10BitHevcSource =
+    input.hwaccel?.method === "nvenc" && input.sourceVideoCodec === "hevc" && (input.bitDepth ?? 8) >= 10;
+  // Only verified for the gpuResidentNvenc-eligible shape (no tone-map, no
+  // subtitle burn-in — the actually-reported failure). Tone-map/burn-in need
+  // the CPU filter chain, which would need a further hwdownload after this
+  // workaround's hwupload that hasn't been tested against real hardware —
+  // rather than risk an unverified combination silently corrupting output
+  // too, that narrower case still falls through to hwDecodeArgs below, which
+  // the isNvenc10BitUnsafeForCpuFallback gate (right below) forces onto pure
+  // CPU decode instead.
+  //
+  // Also requires hevc_cuvid to actually be compiled into this ffmpeg build:
+  // --enable-cuvid (decoders) and --enable-nvenc (encoders) are independent
+  // configure flags, same reasoning as the scale_npp check gpuResidentNvenc
+  // already does above. Without this, a build that has nvenc but not cuvid
+  // would hard-fail spawning ffmpeg ("Unknown decoder") on the very first
+  // 10-bit HEVC session, and that failure — hwaccel being truthy — trips
+  // attemptHwFallback's reportHwFailure, disabling hardware for every OTHER
+  // session on the process for the retry cooldown too. Missing the decoder
+  // routes to the same safe full-CPU fallback as the tone-map/burn-in case
+  // instead of ever reaching that failure mode.
+  const nvencCuvidWorkaround = gpuResidentNvenc && nvenc10BitHevcSource && (input.hwaccel?.decoders.has("hevc_cuvid") ?? false);
+  // Every OTHER nvenc decode path (hwDecodeArgs, always used for
+  // tone-map/subtitle-burn-in and any non-residual case) also goes through
+  // the same confirmed-broken `-hwaccel_output_format nv12` conversion —
+  // conservatively drop to full CPU there for a 10-bit HEVC source instead
+  // of risking the same corruption in an untested combination.
+  const isNvenc10BitUnsafeForCpuFallback = nvenc10BitHevcSource && !nvencCuvidWorkaround;
+  // Only remap when input.videoCodec is actually one of nvenc's own encoder
+  // names (usingHwEncoder) — pickVideoEncoder can already have fallen back to
+  // a software encoder on its own (e.g. hevc_nvenc missing from this ffmpeg
+  // build), in which case input.videoCodec is already correct and blindly
+  // remapping it here (e.g. an unmapped "libx265" silently becoming
+  // "libx264") would override an already-right choice with the wrong codec.
+  const effectiveVideoCodec = isNvenc10BitUnsafeForCpuFallback && usingHwEncoder
+    ? (NVENC_SOFTWARE_FALLBACK[input.videoCodec ?? ""] ?? "libx264")
+    : input.videoCodec;
+  const effectiveUsingHwEncoder = usingHwEncoder && !isNvenc10BitUnsafeForCpuFallback;
   const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
   // hw init devices first (the named device the upload filters reference),
   // then the hw decode flags that also carry the -i argument. nvenc needs no
   // init device; the residual path keeps decoded frames in GPU memory.
-  if (input.hwaccel) {
-    if (gpuResidentNvenc) {
+  if (input.hwaccel && !isNvenc10BitUnsafeForCpuFallback) {
+    if (nvencCuvidWorkaround) {
+      // No -hwaccel/-hwaccel_output_format at all — that's the mechanism
+      // confirmed broken above. hevc_cuvid manages its own device and its
+      // own (correct) P010->NV12 conversion internally.
+      args.push("-c:v", "hevc_cuvid");
+    } else if (gpuResidentNvenc) {
       args.push("-hwaccel", "cuda", "-hwaccel_output_format", "cuda");
     } else {
       args.push(...(usingHwEncoder ? hwEncodeInitArgs(input.hwaccel) : []), ...hwDecodeArgs(input.hwaccel));
@@ -258,6 +330,15 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
 
   const videoFilters: string[] = [];
   if (input.toneMap) videoFilters.push(...TONE_MAP_FILTERS);
+  if (nvencCuvidWorkaround) {
+    // hevc_cuvid (selected above) downloads decoded frames to system memory
+    // in its own correct NV12 by default — format=nv12 here is a cheap
+    // no-op confirming that, then hwupload_cuda re-uploads to GPU memory so
+    // the rest of the pipeline (scale_npp below, nvenc) stays GPU-resident.
+    // This is what actually avoids the confirmed-broken conversion: it
+    // never runs through -hwaccel_output_format at all.
+    videoFilters.push("format=nv12", "hwupload_cuda");
+  }
   if (gpuResidentNvenc) {
     // Same min() semantics as the CPU scale below, evaluated in the GPU
     // device context instead. format=nv12 makes NPP convert 10-bit sources
@@ -284,7 +365,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // at the end of the chain. nvenc accepts system frames — no tail. Gated on
   // usingHwEncoder, not just input.hwaccel — see the comment at the top of
   // this function.
-  const hwTail = usingHwEncoder && input.hwaccel ? hwEncodeFilterTail(input.hwaccel) : [];
+  const hwTail = effectiveUsingHwEncoder && input.hwaccel ? hwEncodeFilterTail(input.hwaccel) : [];
   if (hwTail.length > 0) videoFilters.push(...hwTail);
 
   if (input.subtitleBurnIn) {
@@ -299,7 +380,7 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     if (videoFilters.length > 0) args.push("-vf", videoFilters.join(","));
   }
 
-  args.push("-c:v", input.videoCodec ?? "libx264");
+  args.push("-c:v", effectiveVideoCodec ?? "libx264");
   // Live transcoding is a realtime-serving path, not a one-off rip —
   // veryfast + CRF 23 keeps the first segment on screen in seconds. The
   // cap below (when provided) bounds the bitrate; without a cap CRF 23 is
@@ -309,7 +390,8 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
   // flags (-qp/-global_quality/nvenc presets) are rejected by a software
   // encoder — gated on usingHwEncoder for the same reason as the filter/init
   // args above.
-  const hwQuality = usingHwEncoder && input.hwaccel ? hwEncodeQualityArgs(input.hwaccel, input.maxVideoBitrateKbps) : null;
+  const hwQuality =
+    effectiveUsingHwEncoder && input.hwaccel ? hwEncodeQualityArgs(input.hwaccel, input.maxVideoBitrateKbps) : null;
   if (hwQuality) args.push(...hwQuality);
   else args.push("-preset", softwarePreset(), "-crf", "23");
   // No B-frames: the B-frame reorder puts a pts/dts skew on every keyframe,

@@ -1,5 +1,7 @@
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
 
@@ -71,6 +73,67 @@ async function subtitleRelativeIndex(mediaFileId: string, absoluteStreamIndex: n
     where: { mediaFileId, type: "SUBTITLE", streamIndex: { lt: absoluteStreamIndex } },
   });
   return preceding;
+}
+
+/**
+ * Extracted-ASS disk cache. Every JASSUB (re)creation fetches the track URL,
+ * and each fetch used to spawn a full `ffmpeg -i <whole file>` demux (2s+ on
+ * a complex MKV, observed live) — slow first-subs on every mount plus
+ * transient 500s under concurrent load (a second ffmpeg wave competing with
+ * live transcodes for CPU), which is exactly the "toggle subs off/on to make
+ * them appear" report: the retry lands after the storm. The cache key binds
+ * the source path + mtime + size + track id + format, so a hit is byte-safe
+ * to serve with a long cache header; a rescan/replace/mutation changes the
+ * key instead of serving stale cues. Files are KBs; no eviction (same call
+ * as the font/artwork stores, which also grow without bound).
+ */
+async function cachedEmbeddedSubtitle(
+  mediaFilePath: string,
+  trackId: string,
+  trackFormat: string,
+  muxer: string,
+  relativeIndex: number,
+): Promise<Buffer | null> {
+  let cacheFile: string | null = null;
+  try {
+    const st = statSync(mediaFilePath);
+    const key = createHash("sha1")
+      .update(`${mediaFilePath}\n${st.mtimeMs}\n${st.size}\n${trackId}\n${trackFormat}`)
+      .digest("hex");
+    cacheFile = path.join(configDir(), "cache", "subtitles", `${key}.ass`);
+    return await readFile(cacheFile);
+  } catch {
+    // Cache miss (or the source vanished — the extract below then fails the
+    // same way it always did, preserving the old 404/500 behavior).
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      "ffmpeg",
+      ["-hide_banner", "-loglevel", "error", "-i", mediaFilePath, "-map", `0:s:${relativeIndex}`, "-f", muxer, "pipe:1"],
+      { encoding: "buffer", maxBuffer: 64 * 1024 * 1024, timeout: SUBTITLE_EXTRACT_TIMEOUT_MS },
+    );
+    const bytes = stdout as Buffer;
+    // Best-effort persist: a failed write still serves this request's bytes.
+    // Tmp name is unique per writer — two simultaneous first-fetches of the
+    // same track share the final name but must never share the tmp: concurrent
+    // writeFile calls to one path interleave and the rename would enshrine a
+    // corrupt file into the cache (every later hit serves garbage).
+    if (cacheFile) {
+      const tmp = `${cacheFile}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await mkdir(path.dirname(cacheFile), { recursive: true });
+        await writeFile(tmp, bytes);
+        await rename(tmp, cacheFile);
+      } catch {
+        await rm(tmp, { force: true }).catch(() => {});
+        // leave uncached — next request just re-extracts
+      }
+    }
+    return bytes;
+  } catch (e) {
+    console.warn(`subtitle extract failed for track ${trackId} (${trackFormat} #${relativeIndex}): ${String(e).slice(0, 200)}`);
+    return null;
+  }
 }
 
 // Trickplay sheets are generated with a fixed 5-wide grid (tile filter
@@ -308,16 +371,13 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
       if (track.streamIndex === null) return reply.code(404).send({ error: "no stream index for embedded track" });
       const mediaFile = await db.mediaFile.findUniqueOrThrow({ where: { id: req.params.id } });
       const relIndex = await subtitleRelativeIndex(req.params.id, track.streamIndex);
-      try {
-        const { stdout } = await execFileAsync(
-          "ffmpeg",
-          ["-hide_banner", "-loglevel", "error", "-i", mediaFile.path, "-map", `0:s:${relIndex}`, "-f", muxer, "pipe:1"],
-          { encoding: "buffer", maxBuffer: 64 * 1024 * 1024, timeout: SUBTITLE_EXTRACT_TIMEOUT_MS },
-        );
-        return reply.send(stdout);
-      } catch {
-        return reply.code(500).send({ error: "subtitle extraction failed" });
-      }
+      const bytes = await cachedEmbeddedSubtitle(mediaFile.path, track.id, track.format, muxer, relIndex);
+      if (!bytes) return reply.code(500).send({ error: "subtitle extraction failed" });
+      // Set only on success: these headers on a 500 would let a browser cache
+      // the failure for a year. Cache-keyed by source identity
+      // (path+mtime+size) so a hit can never serve stale cues after a replace.
+      reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      return reply.send(bytes);
     },
   );
 }

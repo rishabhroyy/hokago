@@ -31,6 +31,33 @@ const NVENC_SOFTWARE_FALLBACK: Record<string, string> = {
 };
 
 /**
+ * How many segments the upfront VOD playlist advertises for a file.
+ * ffmpeg's segment muxer merges sub-`-segment_time_delta` (default 0.2s)
+ * remainders into the previous segment instead of writing a stub file —
+ * a phantom trailing EXTINF would make players fetch a segment that never
+ * exists and wedge the loader queue. Drop ghosts under that same 0.2s.
+ */
+export function segmentCount(durationMs: number, segmentSeconds: number): number {
+  const totalSeconds = durationMs / 1000;
+  let count = Math.max(1, Math.ceil(totalSeconds / segmentSeconds));
+  if (count > 1 && totalSeconds - (count - 1) * segmentSeconds < 0.2) {
+    count--;
+  }
+  return count;
+}
+
+/**
+ * Segment index for a wall-clock position, clamped inside the media's range.
+ * Uses the same count as the advertised playlist (segmentCount, not a plain
+ * floor) so a seek into the merged tail maps to the last real segment
+ * instead of a phantom index that forces a pointless ffmpeg restart.
+ */
+export function segmentForPosition(positionMs: number, durationMs: number, segmentSeconds: number): number {
+  const total = segmentCount(durationMs, segmentSeconds);
+  return Math.min(Math.max(0, Math.floor(positionMs / 1000 / segmentSeconds)), total - 1);
+}
+
+/**
  * Full VOD playlist generated upfront — the client sees the whole
  * video as ready-to-seek immediately, even though most segment files don't
  * exist on disk yet. Segments are produced on request by whatever route
@@ -42,14 +69,7 @@ const NVENC_SOFTWARE_FALLBACK: Record<string, string> = {
  */
 export function buildM3u8(durationMs: number, segmentSeconds: number, startSegment = 0): string {
   const totalSeconds = durationMs / 1000;
-  let segmentCount = Math.max(1, Math.ceil(totalSeconds / segmentSeconds));
-  // ffmpeg's segment muxer merges sub-`-segment_time_delta` (default 0.2s)
-  // remainders into the previous segment instead of writing a stub file —
-  // a phantom trailing EXTINF would make players fetch a segment that never
-  // exists and wedge the loader queue. Drop ghosts under that same 0.2s.
-  if (segmentCount > 1 && totalSeconds - (segmentCount - 1) * segmentSeconds < 0.2) {
-    segmentCount--;
-  }
+  const segmentCounted = segmentCount(durationMs, segmentSeconds);
   const lines = [
     "#EXTM3U",
     "#EXT-X-VERSION:3",
@@ -57,7 +77,7 @@ export function buildM3u8(durationMs: number, segmentSeconds: number, startSegme
     "#EXT-X-PLAYLIST-TYPE:VOD",
     `#EXT-X-MEDIA-SEQUENCE:${startSegment}`,
   ];
-  for (let i = startSegment; i < segmentCount; i++) {
+  for (let i = startSegment; i < segmentCounted; i++) {
     const remaining = totalSeconds - i * segmentSeconds;
     const dur = Math.min(segmentSeconds, remaining);
     lines.push(`#EXTINF:${dur.toFixed(3)},`);
@@ -121,6 +141,18 @@ export interface SegmentJobInput {
    * grid as before.
    */
   seekMs?: number;
+  /**
+   * Explicit input-side (`-ss` before `-i`) seek point in media-absolute ms.
+   * The accurate seek after `-i` is measured from wherever the input seek
+   * actually lands — the nearest seek point at-or-before this value, NOT
+   * this value itself — so callers must pass a probed keyframe here (not
+   * `seekMs - buffer`): only then does `seekMs - fastSeekMs` decode-forward
+   * land exactly on the target. Omit to keep the legacy `seekMs - 30s`
+   * heuristic, whose landing error equals the keyframe gap (seconds on
+   * sparse-keyframe MKVs) while the server still reports the exact target —
+   * that drift is what desyncs subs/clock after every seek/resume.
+   */
+  fastSeekMs?: number;
   videoCodec?: string;
   audioCodec?: string;
  /** Which audio stream to map (track switching) — index among audio-type streams, not absolute container index. Defaults to 0. */
@@ -288,7 +320,6 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     ? (NVENC_SOFTWARE_FALLBACK[input.videoCodec ?? ""] ?? "libx264")
     : input.videoCodec;
   const effectiveUsingHwEncoder = usingHwEncoder && !isNvenc10BitUnsafeForCpuFallback;
-  const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
   const audioMap = `0:a:${input.audioStreamIndex ?? 0}?`;
   const args: string[] = ["-y", "-hide_banner", "-loglevel", "error"];
   // hw init devices first (the named device the upload filters reference),
@@ -307,25 +338,36 @@ export function buildFfmpegArgs(input: SegmentJobInput): string[] {
     }
   }
   // Fast input-side seek: placing -ss BEFORE -i jumps the demuxer straight to
-  // the nearest keyframe at or before (startSeconds - SEEK_FAST_BUFFER_SECONDS)
-  // with no decoding. Without this, a deep seek (e.g. minute 20 of a 24-minute
-  // episode) has only the accurate post--i seek below to rely on, which
-  // decodes and discards every frame from the start of the file up to the
-  // target — a restart-transcode seek's latency scales with the target
-  // timestamp itself, independent of encoder speed (hardware or not). The
-  // buffer covers typical GOP sizes so the accurate seek after -i still lands
-  // frame-exact; ffmpeg treats that second -ss as relative to wherever the
-  // fast seek landed, not absolute, so the two combine to the same target.
+  // the target seek point with no decoding. With an explicit fastSeekMs the
+  // caller passed a probed keyframe, so the demuxer lands exactly there and
+  // the accurate seek below (seekMs - fastSeekMs, usually seconds) decodes
+  // forward to the frame-exact target — latency scales with the keyframe gap,
+  // not the target timestamp. Without it (legacy heuristic), the input seek
+  // lands on whatever keyframe precedes (startSeconds - 30s) and the fixed
+  // 30s accurate seek measures from THERE, landing up to a full keyframe gap
+  // early while the reported origin still claims the exact target.
   const SEEK_FAST_BUFFER_SECONDS = 30;
-  const fastSeekSeconds = Math.max(0, startSeconds - SEEK_FAST_BUFFER_SECONDS);
+  const startSeconds = input.seekMs !== undefined ? input.seekMs / 1000 : input.startSegment * input.segmentSeconds;
+  // Rounded to whole ms: ms/1000 division leaves float dust (60050ms ->
+  // 60.05 vs 60.049999...) that would otherwise leak into -ss verbatim.
+  const fastSeekSeconds =
+    Math.round(
+      (input.fastSeekMs !== undefined ? Math.max(0, input.fastSeekMs / 1000) : Math.max(0, startSeconds - SEEK_FAST_BUFFER_SECONDS)) *
+        1000,
+    ) / 1000;
   if (fastSeekSeconds > 0) args.push("-ss", String(fastSeekSeconds));
   args.push("-i", input.inputPath);
   // Accurate seek. A 100ms trim on a fresh start (seekMs absent → segment
   // grid ~0) drops the source pre-roll (leading keyframe lands ~1.4s in
   // while audio starts at 0) without the garbage frames reaching the player;
-  // every seeked start lands on the exact target instead.
-  const accurateSeekSeconds = startSeconds - fastSeekSeconds;
-  if (accurateSeekSeconds <= 0.1) args.push("-ss", "0.1");
+  // every seeked start lands on the exact target instead. Skipped when the
+  // caller already anchored on a probed keyframe: the remainder is exact by
+  // construction, and trimming it would reintroduce the very drift this
+  // split exists to kill (plus a pointless re-trim on every restart).
+  const accurateSeekSeconds = Math.round((startSeconds - fastSeekSeconds) * 1000) / 1000;
+  if (accurateSeekSeconds <= 0 && input.fastSeekMs !== undefined) {
+    // Already on the target (exact-keyframe seek) — no post-input seek.
+  } else if (accurateSeekSeconds <= 0.1 && input.fastSeekMs === undefined) args.push("-ss", "0.1");
   else args.push("-ss", String(accurateSeekSeconds));
 
   const videoFilters: string[] = [];

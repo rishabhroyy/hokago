@@ -18,7 +18,7 @@ import {
   needsToneMap,
   HLS_SEGMENT_SECONDS,
 } from "@hokago/ffmpeg/device-profile";
-import { buildM3u8, buildTruncatedM3u8, buildFfmpegArgs } from "@hokago/ffmpeg/hls";
+import { buildM3u8, buildTruncatedM3u8, buildFfmpegArgs, segmentForPosition } from "@hokago/ffmpeg/hls";
 import { buildRemuxArgs, buildResumeInput, patchRemuxMehd } from "@hokago/ffmpeg/remux";
 import { spawnFfmpeg, type RunningTranscode } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
@@ -229,10 +229,9 @@ function remuxAudioCodec(input: Pick<PlaybackCandidateInput, "audioCodec" | "aud
   return input.audioKnownBroken ? null : input.audioCodec;
 }
 
-/** Segment index for a wall-clock position, clamped inside the media's range. */
+/** Segment index for a wall-clock position — same count as the advertised playlist. */
 function segmentFor(positionMs: number, durationMs: number): number {
-  const total = Math.max(1, Math.floor(durationMs / 1000 / HLS_SEGMENT_SECONDS));
-  return Math.min(Math.max(0, Math.floor(positionMs / 1000 / HLS_SEGMENT_SECONDS)), total - 1);
+  return segmentForPosition(positionMs, durationMs, HLS_SEGMENT_SECONDS);
 }
 
 /** Resume position from PlaybackState — only when genuinely mid-way (not finished, not just-started). */
@@ -262,15 +261,15 @@ async function resumePositionMs(profileId: string, mediaItemId: string, duration
  * a keyframe packet, and the mp4 muxer normalizes the output timeline to 0,
  * so REMUX streams start at exactly this keyframe's media time and the
  * reported startMs equals the browser's actual timeline origin. TRANSCODE no
- * longer probes: it uses an accurate seek (`-ss` after `-i`) whose origin is
- * the exact requested timestamp by construction, so its startMs is the raw
- * resume/target — no keyframe round-trip, no container-seek-table ambiguity
- * (sparse indexes can land at a different keyframe than the bitstream probe
- * reports, which is what drifted sub/clock sync chronically). Bounded read
- * keeps the scan to the resume position. Async: an ffprobe of a long file can
- * take seconds, and a synchronous spawn would freeze the whole API.
+ * longer uses the value as its origin — it accurate-seeks to the exact
+ * target (see probeTranscodeSeek) — but still needs it as the input-seek
+ * anchor (see below). Bounded read keeps the scan to the resume position.
+ * Async: an ffprobe of a long file can take seconds, and a synchronous spawn
+ * would freeze the whole API. Null on any probe failure (or an empty
+ * keyframe list, e.g. a target before the file's first keyframe) — callers
+ * fall back to their legacy paths.
  */
-async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<number> {
+async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<number | null> {
   if (positionMs <= 0) return 0;
   try {
     const out = await new Promise<string>((resolve, reject) => {
@@ -295,16 +294,45 @@ async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<n
         (err, stdout) => (err ? reject(err) : resolve(stdout)),
       );
     });
-    let last = 0;
+    let last: number | null = null;
     for (const line of out.trim().split("\n")) {
       const t = Number(line);
-      if (!Number.isNaN(t) && t > last) last = t;
+      if (!Number.isNaN(t) && (last === null || t > last)) last = t;
     }
-    return Math.round(last * 1000);
+    return last === null ? null : Math.round(last * 1000);
   } catch {
-    // Probe failure — fall back to the requested position (current behavior).
-    return positionMs;
+    // Probe failure — caller falls back (REMUX: requested position with a
+    // legacy -ss remux; TRANSCODE: legacy seek split).
+    return null;
   }
+}
+
+/**
+ * Input-seek anchor for a TRANSCODE start/restart at an exact media target.
+ *
+ * buildFfmpegArgs' legacy split (`-ss (target-30s)` before `-i`, `-ss 30s`
+ * after) measures the accurate seek from wherever the input seek *actually
+ * lands — the nearest seek point at-or-before (target-30s), not that value
+ * itself — so the stream starts up to a full keyframe gap early while the
+ * server still reports the exact target (verified live: dual-seek content
+ * differs from single-seek content on a sparse-keyframe MKV). Subs, clock,
+ * and heartbeats all drift by the gap, and the segment grid misaligns with
+ * the content (the "tiny forward skip" + sub desync on complex MKVs).
+ *
+ * Instead, anchor the input seek on the probed keyframe at-or-before the
+ * target itself: the demuxer lands exactly there, and the remainder
+ * (target - keyframe, usually seconds) decodes forward to the frame-exact
+ * target — faster than the legacy 30s decode-forward AND exact. Returns
+ * undefined when exactness isn't available (probe failure, or a pathological
+ * >30s keyframe gap where bounded latency wins over exactness) so callers
+ * keep the legacy split.
+ */
+async function probeTranscodeSeek(path: string, targetMs: number): Promise<number | undefined> {
+  if (targetMs <= 0) return undefined;
+  const keyframeMs = await keyframeAtOrBeforeMs(path, targetMs);
+  if (keyframeMs === null) return undefined;
+  if (targetMs - keyframeMs > 30_000) return undefined;
+  return keyframeMs;
 }
 
 /**
@@ -818,7 +846,9 @@ async function restartTranscode(
     // The stream origin must equal the client's reported offset exactly, or
     // sub/clock sync drifts. REMUX fast-seeks and can only start at the probed
     // keyframe (up to KEYFRAME_PROBE_TIMEOUT_MS on a slow disk); TRANSCODE
-    // accurate-seeks, so its origin is the raw target. Run alongside the
+    // accurate-seeks to the raw target, anchored on its own probed keyframe
+    // (see probeTranscodeSeek) so the input seek lands exactly and the
+    // remainder decodes forward frame-exact. Run alongside the
     // session lookup below — neither depends on the other's result, and the
     // lookup is needed regardless of isRemux, so serializing them just adds
     // the probe's latency onto every restart for no reason.
@@ -826,13 +856,20 @@ async function restartTranscode(
     // to run on a REMUX restart, but the session row itself is needed either
     // way, so pulling the flag along via `include` costs nothing extra on
     // the TRANSCODE/non-decide paths that used to skip the separate lookup.
-    const [startMs, playbackSessionRow] = await Promise.all([
-      isRemux ? keyframeAtOrBeforeMs(live.mediaFile.path, targetMs) : Promise.resolve(targetMs),
+    const [seekAnchor, playbackSessionRow] = await Promise.all([
+      isRemux
+        ? keyframeAtOrBeforeMs(live.mediaFile.path, targetMs)
+        : probeTranscodeSeek(live.mediaFile.path, targetMs),
       db.playbackSession.findUniqueOrThrow({
         where: { id: sessionId },
         include: { mediaFile: { select: { audioDecodeBroken: true } } },
       }),
     ]);
+    // REMUX origin is the probed keyframe (legacy -ss when the probe failed);
+    // TRANSCODE origin is always the raw target — exact by construction once
+    // the input seek is anchored (fastSeekMs), legacy-split otherwise.
+    const startMs = isRemux ? (seekAnchor ?? targetMs) : targetMs;
+    const fastSeekMs = isRemux ? undefined : (seekAnchor ?? undefined);
     const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
     // A concurrent session on the same file (watch-party) can flip
     // audioDecodeBroken after this session last spawned — re-check on every
@@ -908,9 +945,12 @@ async function restartTranscode(
           outputDir: live.outDir,
           startSegment: segmentFrom,
           segmentSeconds: HLS_SEGMENT_SECONDS,
-          // -ss targets the stream origin exactly — the reported startMs — so
-          // the browser timeline origin matches the client offset.
+          // -ss targets the stream origin exactly — the reported startMs —
+          // so the browser timeline origin matches the client offset.
+          // fastSeekMs anchors the input seek on the probed keyframe so the
+          // accurate remainder lands frame-exact (see probeTranscodeSeek).
           seekMs: startMs,
+          fastSeekMs,
           hwaccel: effectiveHwaccel,
           videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, effectiveHwaccel),
           sourceVideoCodec: live.mediaFile.videoCodec,
@@ -1031,10 +1071,12 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     // The stream origin must equal the client's reported offset exactly, or
     // sub/clock sync drifts. REMUX fast-seeks and can only start at the
     // probed keyframe; TRANSCODE accurate-seeks (`-ss` after `-i`), so its
-    // origin is the raw resume position — frame-exact, no keyframe
-    // round-trip.
+    // origin is the raw resume position — frame-exact once the input seek is
+    // anchored on its own probed keyframe (see probeTranscodeSeek), no
+    // container-seek-table ambiguity.
     const isRemux = decision.method === "REMUX";
-    const startMs = isRemux ? await keyframeAtOrBeforeMs(candidate.path, resumeMs) : resumeMs;
+    const startMs = isRemux ? ((await keyframeAtOrBeforeMs(candidate.path, resumeMs)) ?? resumeMs) : resumeMs;
+    const fastSeekMs = isRemux ? undefined : await probeTranscodeSeek(candidate.path, resumeMs);
 
     const session = await db.playbackSession.create({
       data: {
@@ -1107,7 +1149,10 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           segmentSeconds: HLS_SEGMENT_SECONDS,
           // -ss targets the stream origin exactly — the reported startMs —
           // so the browser timeline origin matches the client offset.
+          // fastSeekMs anchors the input seek on the probed keyframe so the
+          // accurate remainder lands frame-exact (see probeTranscodeSeek).
           seekMs: startMs,
+          fastSeekMs,
           hwaccel,
           videoCodec: pickVideoEncoder(profile.supportedVideoCodecs, hwaccel),
           sourceVideoCodec: candidate.input.videoCodec,
@@ -1765,8 +1810,11 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
           await mkdir(newOutDir, { recursive: true });
 
           // REMUX fast-seeks and must start at the probed keyframe; TRANSCODE
-          // accurate-seeks, so its origin is the raw target position.
-          const startMs = newMethod === "REMUX" ? await keyframeAtOrBeforeMs(candidate.path, targetMs) : targetMs;
+          // accurate-seeks, so its origin is the raw target position —
+          // frame-exact once the input seek is anchored (probeTranscodeSeek).
+          const startMs =
+            newMethod === "REMUX" ? ((await keyframeAtOrBeforeMs(candidate.path, targetMs)) ?? targetMs) : targetMs;
+          const fastSeekMs = newMethod === "REMUX" ? undefined : await probeTranscodeSeek(candidate.path, targetMs);
           const segmentFrom = Math.floor(startMs / 1000 / HLS_SEGMENT_SECONDS);
           const toneMap = needsToneMap(candidate.input.isHdr, newProfile.supportsHdr);
           // REMUX resume via a piped stub — the mkv Cue table can point at a
@@ -1792,8 +1840,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
                   startSegment: segmentFrom,
                   segmentSeconds: HLS_SEGMENT_SECONDS,
                   // -ss targets the stream origin exactly — the reported
-                  // startMs.
+                  // startMs (anchored via fastSeekMs, see probeTranscodeSeek).
                   seekMs: startMs,
+                  fastSeekMs,
                   hwaccel,
                   videoCodec: pickVideoEncoder(newProfile.supportedVideoCodecs, hwaccel),
                   sourceVideoCodec: candidate.input.videoCodec,

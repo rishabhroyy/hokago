@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildFfmpegArgs, buildM3u8, type SegmentJobInput } from "./hls.js";
+import { buildFfmpegArgs, buildM3u8, segmentCount, segmentForPosition, type SegmentJobInput } from "./hls.js";
 import type { HwaccelState } from "./hwaccel.js";
 
 const nvencHwaccel: HwaccelState = {
@@ -115,4 +115,63 @@ test("10-bit-flagged h264 source (not HEVC) is unaffected by the hevc_cuvid work
 test("buildM3u8 still produces a sane playlist (sanity check, unrelated to this fix)", () => {
   const playlist = buildM3u8(12_000, 4);
   assert.match(playlist, /#EXTM3U/);
+});
+
+// The seek-exactness fix: the legacy split (-ss target-30s before -i, -ss
+// 30s after) measures the accurate seek from wherever the input seek lands,
+// not the requested value — landing up to a keyframe gap early on
+// sparse-keyframe MKVs while the server reports the exact target. An
+// explicit fastSeekMs (a probed keyframe) anchors the input seek so the
+// remainder lands frame-exact.
+function seekArgs(input: SegmentJobInput): { before: string | null; after: string | null } {
+  const args = buildFfmpegArgs(input);
+  const iIndex = args.indexOf("-i");
+  let before: string | null = null;
+  let after: string | null = null;
+  for (let k = 0; k < args.length - 1; k++) {
+    if (args[k] === "-ss") {
+      if (k < iIndex) before = args[k + 1]!;
+      else after = args[k + 1]!;
+    }
+  }
+  return { before, after };
+}
+
+test("explicit fastSeekMs anchors the input seek and the remainder goes after -i", () => {
+  const { before, after } = seekArgs({ ...baseInput, seekMs: 120_000, fastSeekMs: 118_000 });
+  assert.equal(before, "118");
+  assert.equal(after, "2");
+});
+
+test("exact-keyframe seek (fastSeekMs == seekMs) emits no post-input seek", () => {
+  const { before, after } = seekArgs({ ...baseInput, seekMs: 60_000, fastSeekMs: 60_000 });
+  assert.equal(before, "60");
+  assert.equal(after, null);
+});
+
+test("anchored sub-0.1s remainder stays exact (no pre-roll trim)", () => {
+  const { before, after } = seekArgs({ ...baseInput, seekMs: 60_050, fastSeekMs: 60_000 });
+  assert.equal(before, "60");
+  assert.equal(after, "0.05");
+});
+
+test("legacy split without fastSeekMs is unchanged (target-30s / 30s)", () => {
+  const { before, after } = seekArgs({ ...baseInput, seekMs: 120_000 });
+  assert.equal(before, "90");
+  assert.equal(after, "30");
+});
+
+test("fresh start keeps the 0.1s pre-roll trim and no input seek", () => {
+  const { before, after } = seekArgs({ ...baseInput, seekMs: undefined, startSegment: 0 });
+  assert.equal(before, null);
+  assert.equal(after, "0.1");
+});
+
+test("segmentCount drops sub-0.2s phantom tails, segmentForPosition clamps to it", () => {
+  assert.equal(segmentCount(12_000, 4), 3);
+  // 8.1s at 4s segments: ceil is 3 but the tail is 0.1s — merged, so 2.
+  assert.equal(segmentCount(8_100, 4), 2);
+  assert.equal(segmentForPosition(8_050, 8_100, 4), 1);
+  assert.equal(segmentForPosition(999_999, 8_100, 4), 1);
+  assert.equal(segmentForPosition(0, 8_100, 4), 0);
 });

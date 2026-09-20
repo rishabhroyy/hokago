@@ -45,13 +45,17 @@ const ACQUIRE_QUALITY_TOKEN =
 
 /** Trailing per-episode suffixes live in the episodeRange/filename, never the series folder. */
 function stripTrailingEpisodeMarker(body: string): string {
+  // 1-4 digits (not 1-3): long-runners cross 1000 episodes ("One Piece
+  // 1071"), and 4-digit 1900-2099 values are years, skipped by the guard
+  // below rather than by the digit cap. Bare stays 2+ digits so sequel
+  // numbers ("Spice and Wolf 2") survive.
   const patterns = [
-    /\s+(?:episode|ep)\s*0*(\d{1,3})\s*$/i,
-    /\s*-\s*(?:episode|ep)\s*0*(\d{1,3})\s*$/i,
-    /\s*-\s*e\s*0*(\d{1,3})\s*$/i,
-    /\s+e\s*0*(\d{1,3})\s*$/i,
-    /\s*-\s*0*(\d{1,3})(?:v\d+)?\s*$/i,
-    /\s+0*(\d{2,3})(?:v\d+)?\s*$/i,
+    /\s+(?:episode|ep)\s*0*(\d{1,4})\s*$/i,
+    /\s*-\s*(?:episode|ep)\s*0*(\d{1,4})\s*$/i,
+    /\s*-\s*e\s*0*(\d{1,4})\s*$/i,
+    /\s+e\s*0*(\d{1,4})\s*$/i,
+    /\s*-\s*0*(\d{1,4})(?:v\d+)?\s*$/i,
+    /\s+0*(\d{2,4})(?:v\d+)?\s*$/i,
   ];
   for (const re of patterns) {
     const m = re.exec(body);
@@ -96,10 +100,30 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
 
   let year: number | null = null;
   let body = pre;
-  const yearM = /\(\s*(?:19|20)\d{2}\s*\)\s*$/.exec(pre);
-  if (yearM) {
-    year = Number(yearM[0].replace(/\D/g, ""));
-    body = pre.slice(0, yearM.index).trim();
+  const trailingParenYear = /\(\s*((?:19|20)\d{2})\s*\)\s*$/.exec(pre);
+  if (trailingParenYear) {
+    year = Number(trailingParenYear[1]);
+    body = pre.slice(0, trailingParenYear.index).trim();
+  } else {
+    // Bare trailing year ("Anohana 2011 BD 1080p" → pre already lost the
+    // quality tail, leaving "Anohana 2011"). Four digits 1900-2099 at the
+    // end are never an episode number (episodes are ≤100, long-runners
+    // stay <1900), so this cannot misfire on "Show 12" or "One Piece 1071".
+    const trailingBareYear = /(?:^|\s)((?:19|20)\d{2})\s*$/.exec(pre);
+    if (trailingBareYear) {
+      year = Number(trailingBareYear[1]);
+      body = pre.slice(0, trailingBareYear.index).trim();
+    } else {
+      // Year mid-string with a season after it ("Anohana (2011) Season 1"
+      // → quality tail already gone). Trailing-only extraction would drop
+      // the year entirely here; the folder would lose its "(2011)" suffix
+      // and a bare-year request would poison matching with "Anohana 2011".
+      const anywhereParenYear = /\(\s*((?:19|20)\d{2})\s*\)/.exec(pre);
+      if (anywhereParenYear) {
+        year = Number(anywhereParenYear[1]);
+        body = (pre.slice(0, anywhereParenYear.index) + " " + pre.slice(anywhereParenYear.index + anywhereParenYear[0].length)).replace(/\s+/g, " ").trim();
+      }
+    }
   }
   body = body.replace(/\([^)]*\)\s*$/g, "").trim();
   // Year is already extracted, so any remaining parens are junk ("(TV)").
@@ -107,6 +131,15 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
   // Per-episode suffixes must go before season detection: "S2 - 05" only
   // reads as Season 2 once " - 05" is gone.
   body = stripTrailingEpisodeMarker(body);
+  // A bare year revealed by episode removal ("Anohana 2011 - 01" → "Anohana
+  // 2011"): the first pass saw only the episode suffix, so try once more.
+  if (year === null) {
+    const revealedBareYear = /(?:^|\s)((?:19|20)\d{2})\s*$/.exec(body);
+    if (revealedBareYear) {
+      year = Number(revealedBareYear[1]);
+      body = body.slice(0, revealedBareYear.index).trim();
+    }
+  }
 
   // Specials family → "Specials" (scanner reads it as season 0).
   let m = /^(.*?)\s*(?:specials?|ovas?|onas?|extras?)\s*$/i.exec(body);

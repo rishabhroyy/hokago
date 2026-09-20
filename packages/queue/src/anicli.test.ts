@@ -52,3 +52,18 @@ test("parseAnicliQuery never returns release junk as a series title", () => {
   assert.notEqual(parsed.title.includes("BD"), true);
   assert.notEqual(parsed.title.includes("1080p"), true);
 });
+
+test("parseAnicliQuery extracts bare and mid-string years so they never poison matching", () => {
+  assert.deepEqual(parseAnicliQuery("Anohana 2011"), { title: "Anohana", year: 2011, sub: null, season: null });
+  assert.deepEqual(parseAnicliQuery("Anohana 2011 BD 1080p"), { title: "Anohana", year: 2011, sub: null, season: null });
+  const mid = parseAnicliQuery("Anohana (2011) Season 1 BD 1080p");
+  assert.equal(mid.title, "Anohana");
+  assert.equal(mid.year, 2011);
+  assert.equal(mid.sub, "Season 1");
+  // Year revealed only after an episode suffix is stripped.
+  assert.deepEqual(parseAnicliQuery("Anohana 2011 - 01"), { title: "Anohana", year: 2011, sub: null, season: null });
+  // Not years: sequel numbers survive, long-runner episodes strip to the series.
+  assert.equal(parseAnicliQuery("Spice and Wolf 2").year, null);
+  assert.equal(parseAnicliQuery("One Piece 1071").title, "One Piece");
+  assert.equal(parseAnicliQuery("One Piece - 1071").title, "One Piece");
+});

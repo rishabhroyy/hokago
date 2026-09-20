@@ -218,12 +218,12 @@ test("processAcquireImport reuses an existing similar-sounding series instead of
 });
 
 test("processAcquireImport keeps sibling files distinct even when the title alone consumes sanitizeFolder's whole 80-char budget", async () => {
-  // The exact title length from a real production failure: exactly 80
-  // characters, leaving zero room for " - Episode NN" once appended --
-  // every sibling job truncated to the identical filename despite
-  // genuinely different episodeRange values, and only the first ever
-  // landed. This is that title, verbatim.
-  const longTitle = "Judas Sewayaki Kitsune no Senko-san The Helpful Fox Senko-san Season 1 BD 1080pH";
+  // Pure truncation case (no release junk): a genuinely 80-char clean title
+  // leaves zero room for " - Episode NN" once appended — every sibling job
+  // truncated to the identical filename despite genuinely different
+  // episodeRange values without the suffix-first reservation. Kept clean on
+  // purpose so release-junk cleaning cannot shorten it and hide the edge.
+  const longTitle = "L".repeat(80);
   assert.equal(longTitle.length, 80, "test fixture must reproduce the exact failure length");
 
   const payload1 = Buffer.from("episode one bytes");
@@ -260,6 +260,127 @@ test("processAcquireImport keeps sibling files distinct even when the title alon
     assert.equal(files.length, 2, "both sibling files must land, not just the first one");
     const contents = await Promise.all(files.map((f) => readFile(path.join(finalDir, f))));
     assert.deepEqual(new Set(contents.map(String)), new Set([payload1.toString(), payload2.toString()]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport cleans release junk and honors the season signal hidden behind it", async () => {
+  // The real production shape that motivated the junk-tolerant parser: an
+  // external provider title carrying both a season token and a quality tail.
+  // Pre-fix this parsed flat with the junk in the folder name; now it must
+  // land under the clean title in the Season 1 subfolder.
+  const noisyTitle = "Judas Sewayaki Kitsune no Senko-san The Helpful Fox Senko-san Season 1 BD 1080pH";
+  assert.equal(noisyTitle.length, 80, "fixture keeps the original production length");
+  const cleanTitle = "Judas Sewayaki Kitsune no Senko-san The Helpful Fox Senko-san";
+
+  const payload = Buffer.from("cleaned placement bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-9", baseUrl, libraryId: "lib-1", query: noisyTitle, title: noisyTitle, episodeRange: "Episode 01" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: { findMany: async () => [] },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, cleanTitle, null, "Season 1");
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "file must land under the cleaned title + season subfolder");
+    assert.deepEqual(await readFile(path.join(finalDir, files[0]!)), payload);
+    assert.equal(await existsDir(seasonTargetDir(root, noisyTitle, null, null)), false, "must not create a junk-named folder from the raw provider title");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport reuses the existing show when the provider title carries BD/1080p junk (Anohana regression)", async () => {
+  // Exact reported bug: /acquire/existing matched the real show ("already
+  // have ... no files yet") but the import forked into a "... BD 1080p"
+  // duplicate because findExistingSeries missed the noisy provider title.
+  const payload = Buffer.from("anohana bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({
+        providerId: "ext1",
+        downloadId: "dl-10",
+        baseUrl,
+        libraryId: "lib-1",
+        query: "anohana",
+        title: "Anohana BD 1080p",
+      }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: {
+            findMany: async () => [{ id: "series-1", title: "Anohana The Flower We Saw That Day", originalTitle: null, year: 2011 }],
+          },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Anohana The Flower We Saw That Day", 2011, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "noisy provider title must still land in the existing show's folder");
+    assert.deepEqual(await readFile(path.join(finalDir, files[0]!)), payload);
+    assert.equal(await existsDir(path.join(root, "Anohana BD 1080p")), false, "must not fork a junk-named duplicate show");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport falls back to the request query season when the provider title has none", async () => {
+  const payload = Buffer.from("season fallback bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({
+        providerId: "ext1",
+        downloadId: "dl-11",
+        baseUrl,
+        libraryId: "lib-1",
+        query: "Frieren Season 2",
+        title: "Frieren BD 1080p",
+      }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: { findMany: async () => [{ id: "series-1", title: "Frieren Beyond Journey s End", originalTitle: null, year: 2023 }] },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Frieren Beyond Journey s End", 2023, "Season 2");
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "must land in the requested season even when the provider title carries no season signal");
   } finally {
     await rm(root, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));

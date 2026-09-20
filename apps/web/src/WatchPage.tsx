@@ -407,6 +407,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   const [subtitleError, setSubtitleError] = useState(false);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleTrackInfo[]>([]);
+  // Which file the subtitle/audio/font/trickplay state above belongs to.
+  // A title change reuses this WatchPage instance without remounting it, so
+  // between navigation and the new tracks fetch the lists still describe the
+  // PREVIOUS episode — JASSUB built from those would fetch
+  // /media-files/{newId}/subtitle-tracks/{oldTrackId}, 404, and surface the
+  // failure banner while showing no subs until the fetch lands. Null until
+  // the current file's tracks arrive; renderable/subtitleId stay empty/null
+  // while stale instead of pointing at the wrong title.
+  const [tracksForFile, setTracksForFile] = useState<string | null>(null);
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
   // Cache-buster appended to the stream/playlist URL, and the MediaPlayer
@@ -524,7 +533,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
 
   // Bitmap subs (PGS/VOBSUB) are burned in server-side, so only text subs
   // become selectable menu entries here; the first one is the default.
-  const renderable = useMemo(() => subtitles.filter((t) => !t.requiresBurnIn), [subtitles]);
+  // Gated on tracksForFile: while a new title's tracks are still loading,
+  // the list still describes the previous episode (see tracksForFile).
+  const renderable = useMemo(
+    () => (tracksForFile === mediaFileId ? subtitles.filter((t) => !t.requiresBurnIn) : []),
+    [subtitles, tracksForFile, mediaFileId],
+  );
 
   // Remembered subtitle preference drives the caption-menu default: null pref
   // means subs off (no default track), a matching track gets selected, and
@@ -634,11 +648,15 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
     return () => cancelAnimationFrame(raf);
   }, [keyNonce, start?.method]);
 
- // Track list ('s audio/subtitle switcher, Step 8) — text formats only;
+  // Track list ('s audio/subtitle switcher, Step 8) — text formats only;
   // PGS/VOBSUB never show up here since /tracks still lists them but the
   // subtitle-text route 422s for bitmap formats (server forces burn-in instead).
   useEffect(() => {
     if (!mediaFileId) return;
+    // Invalidate first: until this file's own tracks arrive, renderable (and
+    // therefore JASSUB) must resolve to nothing, not to the previous title's
+    // tracks (see tracksForFile).
+    setTracksForFile(null);
     let cancelled = false;
     api
       .GET("/media-files/{id}/tracks", { params: { path: { id: mediaFileId } } })
@@ -661,6 +679,7 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
             : ((matchSubtitlePref(renderableSubs, prefs.subtitle) ?? renderableSubs[0])?.id ?? null);
         setSubtitleSelection(subtitleDefault);
         setMountDefaultId(subtitleDefault);
+        setTracksForFile(mediaFileId);
       })
       .catch(() => {});
     api
@@ -684,9 +703,12 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
   // <video>, independent of DIRECT_PLAY/REMUX/TRANSCODE, since libass just
   // needs the video element's clock, not its source. Lifecycle (creation,
   // offset lockstep, seek force-renders, failure surfacing) lives in the hook.
+  // subtitleId stays null until this file's own tracks arrive (tracksForFile):
+  // creating the renderer earlier would fetch the previous title's track id
+  // under the new file id and fail.
   useJassubRenderer({
     videoEl,
-    subtitleId: subtitleSelection ?? null,
+    subtitleId: tracksForFile === mediaFileId ? (subtitleSelection ?? null) : null,
     subtitles: renderable,
     mediaFileId,
     fonts,

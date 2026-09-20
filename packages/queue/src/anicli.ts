@@ -21,6 +21,50 @@ const ORDINAL: Record<string, number> = {
   sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
 };
 
+/**
+ * Release junk external acquire-providers glue onto an otherwise clean
+ * series title: quality/codec/audio tokens ("BD", "1080p", "BluRay",
+ * "x264", "FLAC", ...), bracketed groups ("[SubsPlease]", "[abc123]"),
+ * "-GROUP" suffixes, dot/underscore separators, and per-episode suffixes
+ * (" - 01", " Episode 12", " E05"). ani-cli queries never carry any of
+ * this (they are already "Frieren S2"-clean), so stripping here is a no-op
+ * for the built-in path and a fork-preventer for every external one.
+ *
+ * Without this, two failures compound into exactly the reported bug:
+ * a quality suffix after a season token hides the season ("Season 1 BD
+ * 1080p" no longer ends with "Season 1"), and the leftover junk poisons
+ * findExistingSeries so the import misses the library's canonical show
+ * and forks a near-duplicate folder ("... BD 1080p") instead. Kept in
+ * step with packages/scanner/src/parsers/scene.ts's own QUALITY_TOKEN
+ * (same unambiguous allowlist — never bare "web"/"dvd"/"multi", which are
+ * real title words) but extended for acquire titles: a lone "BD" and
+ * resolutions with glued suffixes ("1080pH") both occur in the wild.
+ */
+const ACQUIRE_QUALITY_TOKEN =
+  /\b(?:\d{3,4}p[a-z0-9]*|\d{3,4}i|4k|uhd|hdr10\+?|hdr|dv|dolbyvision|blu-?ray|bd(?:rip|remux)?|dvd(?:rip)?|web-?dl|webrip|hdtv|hdrip|remux|bdremux|x264|x265|h\.?264|h\.?265|hevc|avc|av1|xvid|divx|10-?bit|8-?bit|hi10p|aac|e?ac-?3|dts(?:-?hd|-?ma)?|truehd|atmos|flac|opus|mp3|5\.1|7\.1|dual[- ]?audio|proper|repack|rerip)\b/gi;
+
+/** Trailing per-episode suffixes live in the episodeRange/filename, never the series folder. */
+function stripTrailingEpisodeMarker(body: string): string {
+  const patterns = [
+    /\s+(?:episode|ep)\s*0*(\d{1,3})\s*$/i,
+    /\s*-\s*(?:episode|ep)\s*0*(\d{1,3})\s*$/i,
+    /\s*-\s*e\s*0*(\d{1,3})\s*$/i,
+    /\s+e\s*0*(\d{1,3})\s*$/i,
+    /\s*-\s*0*(\d{1,3})(?:v\d+)?\s*$/i,
+    /\s+0*(\d{2,3})(?:v\d+)?\s*$/i,
+  ];
+  for (const re of patterns) {
+    const m = re.exec(body);
+    if (!m) continue;
+    const num = Number(m[1]);
+    // A trailing 4-digit year ("Show - 2019") is not an episode.
+    if (num >= 1900 && num <= 2099) continue;
+    const candidate = body.slice(0, m.index).trim();
+    if (candidate) return candidate;
+  }
+  return body;
+}
+
 export interface ParsedAnicliQuery {
   /** Clean series title — no season token, no trailing year. */
   title: string;
@@ -35,14 +79,34 @@ export interface ParsedAnicliQuery {
 export function parseAnicliQuery(query: string): ParsedAnicliQuery {
   const s = query.trim();
 
+  // Pre-clean release junk before any season/year parse so a quality tail
+  // can neither hide a season token nor poison the title used for
+  // findExistingSeries. Clean titles pass through unchanged.
+  let pre = s.replace(/[._]/g, " ");
+  ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
+  const hadQuality = ACQUIRE_QUALITY_TOKEN.test(pre);
+  ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
+  pre = pre.replace(ACQUIRE_QUALITY_TOKEN, " ");
+  pre = pre.replace(/\[[^\]]*\]/g, " ");
+  // "-GROUP rides the quality tail" (same guard as the scanner's own
+  // stripSceneJunk): only strip when quality was present, otherwise a
+  // legitimate " - Alicization"-style title tail would be eaten.
+  if (hadQuality) pre = pre.replace(/-[A-Za-z][A-Za-z0-9]*\s*$/, " ");
+  pre = pre.replace(/\s+/g, " ").trim();
+
   let year: number | null = null;
-  let body = s;
-  const yearM = /\(\s*(?:19|20)\d{2}\s*\)\s*$/.exec(s);
+  let body = pre;
+  const yearM = /\(\s*(?:19|20)\d{2}\s*\)\s*$/.exec(pre);
   if (yearM) {
     year = Number(yearM[0].replace(/\D/g, ""));
-    body = s.slice(0, yearM.index).trim();
+    body = pre.slice(0, yearM.index).trim();
   }
   body = body.replace(/\([^)]*\)\s*$/g, "").trim();
+  // Year is already extracted, so any remaining parens are junk ("(TV)").
+  body = body.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  // Per-episode suffixes must go before season detection: "S2 - 05" only
+  // reads as Season 2 once " - 05" is gone.
+  body = stripTrailingEpisodeMarker(body);
 
   // Specials family → "Specials" (scanner reads it as season 0).
   let m = /^(.*?)\s*(?:specials?|ovas?|onas?|extras?)\s*$/i.exec(body);
@@ -67,12 +131,25 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
     const n = Number(m[2]);
     return { title: m[1]!.trim(), year, sub: `Season ${n}`, season: n };
   }
+  // Scene-style "S02E05" trailing in a provider title (episode belongs in
+  // episodeRange, season belongs in the folder). ani-cli queries never look
+  // like this, so this is external-only and cannot regress the built-in path.
+  m = /^(.*?)\s*s0*(\d{1,3})\s*e0*(\d{1,3})\s*$/i.exec(body);
+  if (m && m[1]!.trim()) {
+    const n = Number(m[2]);
+    if (Number.isInteger(n) && n >= 1 && n <= 100) {
+      return { title: m[1]!.trim(), year, sub: `Season ${n}`, season: n };
+    }
+  }
 
   // No season signal — flat show. Return the cleaned body (trailing year and
   // parens already peeled) so the series folder doesn't end up doubled
   // ("Demon Slayer (2019) (2019)") when the year is re-attached below.
+  // Fall back to the cleaned pre-parse text, never the raw junk: an input
+  // that was only release groups/quality ("[X] BD 1080p") must not become a
+  // folder literally named after that junk.
   const flatTitle = body.trim();
-  return { title: flatTitle || s.trim(), year, sub: null, season: null };
+  return { title: flatTitle || pre.trim() || "anicli", year, sub: null, season: null };
 }
 
 /**

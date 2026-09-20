@@ -199,6 +199,10 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       // by flat title equality across every item kind the way this used to.
       // Blocks an already-fully-downloaded season; allows a new season, an
       // episode range not yet fully present, and specials (season 0) always.
+      // The picked display title (body.title) is tried as a second match
+      // candidate with the *requested* season from the query: the query
+      // carries "Season 2", the title does not, but either naming can be
+      // the one that matches the library's canonical row.
       const parsed = parseAnicliQuery(body.query);
       const dedup = await checkSeasonDedup(
         { db },
@@ -209,6 +213,20 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
         body.episodeRange,
       );
       if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
+      if (body.title) {
+        const titleParsed = parseAnicliQuery(body.title);
+        if (titleParsed.title !== parsed.title || titleParsed.year !== parsed.year) {
+          const dedupByTitle = await checkSeasonDedup(
+            { db },
+            body.libraryId,
+            titleParsed.title,
+            titleParsed.year,
+            parsed.season,
+            body.episodeRange,
+          );
+          if (!dedupByTitle.ok) return reply.code(409).send({ error: dedupByTitle.reason });
+        }
+      }
 
       let job;
       try {
@@ -499,6 +517,10 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       // providers had no protection against re-downloading an already-
       // complete season at all. Only meaningful once there's both a library
       // to check against and a query to parse a title/season out of.
+      // Like the built-in route above, the picked title is a second match
+      // candidate (same requested season): provider search candidates can
+      // carry the fuller title ("... Beyond Journey's End") while the query
+      // is the short form, or vice versa after release-junk cleaning.
       if (req.body.libraryId && req.body.query) {
         const parsed = parseAnicliQuery(req.body.query);
         const dedup = await checkSeasonDedup(
@@ -510,6 +532,20 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
           req.body.episodeRange,
         );
         if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
+        if (req.body.title) {
+          const titleParsed = parseAnicliQuery(req.body.title);
+          if (titleParsed.title !== parsed.title || titleParsed.year !== parsed.year) {
+            const dedupByTitle = await checkSeasonDedup(
+              { db },
+              req.body.libraryId,
+              titleParsed.title,
+              titleParsed.year,
+              parsed.season,
+              req.body.episodeRange,
+            );
+            if (!dedupByTitle.ok) return reply.code(409).send({ error: dedupByTitle.reason });
+          }
+        }
       }
       return relayProxy(
         reply,

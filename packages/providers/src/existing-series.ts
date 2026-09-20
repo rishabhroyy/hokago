@@ -42,7 +42,23 @@ export async function findExistingSeries(
       year: item.year ?? undefined,
       titles: item.originalTitle ? [{ type: "SYNONYM", value: item.originalTitle }] : undefined,
     };
-    return acceptMatch(query, candidate);
+    if (acceptMatch(query, candidate)) return true;
+    // Bidirectional: acceptMatch only checks "query in candidate" (short
+    // folder in fuller provider title). Library-vs-request has no such
+    // direction — the stored row can be the short form ("Anohana") while
+    // the request carries the fuller one ("Anohana The Flower We Saw That
+    // Day BD 1080p" → cleaned to the full title), or vice versa. Without
+    // the reverse check the longer side never matches the shorter and the
+    // import forks a duplicate folder for the same show.
+    const reverseQueryBase = { kind: "SERIES" as const, year: item.year ?? undefined };
+    const reverseCandidate: MetadataMatch = {
+      providerId: "local",
+      title,
+      year: year ?? undefined,
+    };
+    if (acceptMatch({ ...reverseQueryBase, title: item.title }, reverseCandidate)) return true;
+    if (item.originalTitle && acceptMatch({ ...reverseQueryBase, title: item.originalTitle }, reverseCandidate)) return true;
+    return false;
   });
   return match ? { id: match.id, title: match.title, year: match.year } : undefined;
 }

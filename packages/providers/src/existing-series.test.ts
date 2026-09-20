@@ -45,6 +45,32 @@ test("findExistingSeries: fuzzy/AKA title still matches", async () => {
   assert.equal(match?.id, "s1");
 });
 
+test("findExistingSeries: short stored row matches a fuller request (bidirectional)", async () => {
+  // The Anohana fork shape: the library holds the short canonical folder
+  // while the acquire request carries the fuller provider title (already
+  // cleaned of "BD 1080p" by parseAnicliQuery upstream). One-directional
+  // "query in candidate" matching misses this every time.
+  const deps = fakeDeps([{ id: "s1", title: "Anohana", originalTitle: null, year: 2011 }], []);
+  const match = await findExistingSeries(deps, "lib-1", "Anohana The Flower We Saw That Day", 2011);
+  assert.equal(match?.id, "s1");
+});
+
+test("findExistingSeries: fuller stored row still matches a short request", async () => {
+  const deps = fakeDeps([{ id: "s1", title: "Anohana The Flower We Saw That Day", originalTitle: null, year: 2011 }], []);
+  const match = await findExistingSeries(deps, "lib-1", "Anohana", 2011);
+  assert.equal(match?.id, "s1");
+});
+
+test("findExistingSeries: originalTitle matches in either direction", async () => {
+  const deps = fakeDeps([{ id: "s1", title: "Frieren: Beyond Journey's End", originalTitle: "Sousou no Frieren", year: 2023 }], []);
+  const viaOriginal = await findExistingSeries(deps, "lib-1", "Sousou no Frieren", 2023);
+  assert.equal(viaOriginal?.id, "s1");
+  // Stored short AKA against a fuller request is the same bidirectional case.
+  const deps2 = fakeDeps([{ id: "s1", title: "Sousou no Frieren", originalTitle: null, year: 2023 }], []);
+  const reverse = await findExistingSeries(deps2, "lib-1", "Frieren Beyond Journey s End", 2023);
+  assert.equal(reverse, undefined, "unrelated fuller titles must not carpet-match a short row");
+});
+
 test("checkSeasonDedup: season 0 always passes, even with existing specials", async () => {
   const deps = fakeDeps(
     [{ id: "s1", title: "Frieren", originalTitle: null, year: 2023 }],

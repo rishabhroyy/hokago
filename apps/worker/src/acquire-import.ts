@@ -123,21 +123,34 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   const library = await deps.db.library.findUnique({ where: { id: libraryId } });
   if (!library) return; // deleted between enqueue and run -- nothing to place this into
 
-  // Same preference the filename's own `base` computation below already
-  // uses: a provider's `title` is a resolved, human result, `query` is
-  // just whatever the caller searched for -- an external provider's own
-  // search conventions (tags, quality/group markers) can differ a lot
-  // from ani-cli's, and parseAnicliQuery was only ever built for the
-  // latter. Placement should follow the same source the filename does,
-  // not fall back to the rawer, noisier string on its own.
+  // Provider-resolved `title` first (human result), caller `query` second.
+  // parseAnicliQuery now strips release junk ("BD 1080p", groups, episode
+  // suffixes) internally, so both sides parse clean — but they can still
+  // disagree: /acquire/existing + dedup gate on the API side only ever see
+  // the clean user query, while this step prefers the provider's noisier
+  // title. Trying both against findExistingSeries (provider first, query as
+  // fallback) is what keeps "already have X with no files" and "where the
+  // bytes actually land" from diverging into a duplicate folder.
   const parsed = parseAnicliQuery(title?.trim() || query);
+  const queryParsed = parseAnicliQuery(query);
   // Best-effort only: a lookup hiccup here degrades to "no match found",
   // not a failed import -- this only ever improves on parsed.title/year,
   // never gates whether the transfer itself can proceed.
-  const existing = await findExistingSeries(deps, libraryId, parsed.title, parsed.year).catch(() => undefined);
-  const effectiveTitle = existing?.title ?? parsed.title;
-  const effectiveYear = existing?.year ?? parsed.year;
-  const finalDir = seasonTargetDir(library.rootPath, effectiveTitle, effectiveYear, parsed.sub);
+  let existing = await findExistingSeries(deps, libraryId, parsed.title, parsed.year).catch(() => undefined);
+  if (!existing && (queryParsed.title !== parsed.title || queryParsed.year !== parsed.year)) {
+    existing = await findExistingSeries(deps, libraryId, queryParsed.title, queryParsed.year).catch(() => undefined);
+  }
+  // A junk-only provider title parses to the "anicli" sentinel — never let
+  // that become a real folder when the caller's own query parsed clean.
+  const useQueryParse = parsed.title === "anicli" && queryParsed.title !== "anicli";
+  const baseParsed = useQueryParse ? queryParsed : parsed;
+  const effectiveTitle = existing?.title ?? baseParsed.title;
+  const effectiveYear = existing?.year ?? baseParsed.year ?? queryParsed.year;
+  // Season lives only in the folder: prefer the provider's own signal, fall
+  // back to the request's ("Season 1 BD 1080p" hid it pre-clean; a provider
+  // title with no season at all still lands in the requested season).
+  const effectiveSub = parsed.sub ?? queryParsed.sub;
+  const finalDir = seasonTargetDir(library.rootPath, effectiveTitle, effectiveYear, effectiveSub);
   const stagingDir = acquireImportStagingDir(library.rootPath, providerId, downloadId);
   const tmpPath = path.join(stagingDir, "download.tmp");
   const cleanup = () => rm(stagingDir, { recursive: true, force: true }).catch(() => {});

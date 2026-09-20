@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
 
@@ -114,13 +114,18 @@ async function cachedEmbeddedSubtitle(
     );
     const bytes = stdout as Buffer;
     // Best-effort persist: a failed write still serves this request's bytes.
+    // Tmp name is unique per writer — two simultaneous first-fetches of the
+    // same track share the final name but must never share the tmp: concurrent
+    // writeFile calls to one path interleave and the rename would enshrine a
+    // corrupt file into the cache (every later hit serves garbage).
     if (cacheFile) {
+      const tmp = `${cacheFile}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await mkdir(path.dirname(cacheFile), { recursive: true });
-        const tmp = `${cacheFile}.tmp`;
         await writeFile(tmp, bytes);
         await rename(tmp, cacheFile);
       } catch {
+        await rm(tmp, { force: true }).catch(() => {});
         // leave uncached — next request just re-extracts
       }
     }
@@ -366,11 +371,12 @@ export async function registerStaticRoutes(app: ZodFastifyInstance): Promise<voi
       if (track.streamIndex === null) return reply.code(404).send({ error: "no stream index for embedded track" });
       const mediaFile = await db.mediaFile.findUniqueOrThrow({ where: { id: req.params.id } });
       const relIndex = await subtitleRelativeIndex(req.params.id, track.streamIndex);
-      // Cache-keyed by source identity (path+mtime+size) so the long-lived
-      // browser cache below can never serve stale cues after a replace.
-      reply.header("Cache-Control", "public, max-age=31536000, immutable");
       const bytes = await cachedEmbeddedSubtitle(mediaFile.path, track.id, track.format, muxer, relIndex);
       if (!bytes) return reply.code(500).send({ error: "subtitle extraction failed" });
+      // Set only on success: these headers on a 500 would let a browser cache
+      // the failure for a year. Cache-keyed by source identity
+      // (path+mtime+size) so a hit can never serve stale cues after a replace.
+      reply.header("Cache-Control", "public, max-age=31536000, immutable");
       return reply.send(bytes);
     },
   );

@@ -299,7 +299,10 @@ async function keyframeAtOrBeforeMs(path: string, positionMs: number): Promise<n
       const t = Number(line);
       if (!Number.isNaN(t) && (last === null || t > last)) last = t;
     }
-    return last === null ? null : Math.round(last * 1000);
+    // Floor, never round: a rounded-up anchor (59.9996 → 60000) combined with
+    // an omitted post-input seek would start the stream early while reporting
+    // the exact target — the same drift class probeTranscodeSeek exists to kill.
+    return last === null ? null : Math.floor(last * 1000);
   } catch {
     // Probe failure — caller falls back (REMUX: requested position with a
     // legacy -ss remux; TRANSCODE: legacy seek split).
@@ -1075,8 +1078,16 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     // anchored on its own probed keyframe (see probeTranscodeSeek), no
     // container-seek-table ambiguity.
     const isRemux = decision.method === "REMUX";
+    // TRANSCODE input-seek anchor, kicked off before the session create so
+    // its ffprobe overlaps the db write + hwaccel/slot acquisition below
+    // (awaited where the ffmpeg args are built). Never rejects (probe
+    // failures resolve to undefined), so early returns below can't leave an
+    // unhandled rejection. Skipped for DIRECT_PLAY (no ffmpeg) and REMUX
+    // (different anchor path); fresh starts resolve immediately with no
+    // ffprobe via probeTranscodeSeek's targetMs <= 0 early-out.
+    const transcodeSeekProbe =
+      decision.method === "TRANSCODE" ? probeTranscodeSeek(candidate.path, resumeMs) : null;
     const startMs = isRemux ? ((await keyframeAtOrBeforeMs(candidate.path, resumeMs)) ?? resumeMs) : resumeMs;
-    const fastSeekMs = isRemux ? undefined : await probeTranscodeSeek(candidate.path, resumeMs);
 
     const session = await db.playbackSession.create({
       data: {
@@ -1131,6 +1142,9 @@ export async function registerPlaybackRoutes(app: ZodFastifyInstance): Promise<v
     // bitstream probe, so -ss would start elsewhere than the reported startMs
     // and subs drift. Falls back to the legacy -ss remux when probing fails.
     const resumeInput = isRemux ? await buildResumeInput(candidate.path, startMs) : null;
+    // Awaited here (not at kick-off above) so the probe overlapped everything
+    // since: session create, hwaccel resolve, slot acquisition, mkdir.
+    const fastSeekMs = transcodeSeekProbe ? await transcodeSeekProbe : undefined;
     const args = isRemux
       ? buildRemuxArgs({
           inputPath: candidate.path,

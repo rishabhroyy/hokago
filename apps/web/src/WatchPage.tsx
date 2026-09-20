@@ -681,7 +681,16 @@ export function WatchPage({ mediaFileId }: { mediaFileId: string }) {
         setMountDefaultId(subtitleDefault);
         setTracksForFile(mediaFileId);
       })
-      .catch(() => {});
+      .catch(() => {
+        // Tracks fetch failed (effectively unreachable against a live API,
+        // but a cancelled-then-failed race or a dead server gets here): fall
+        // back to best-effort with whatever lists are held instead of leaving
+        // subs/menus permanently empty for this title. Stale lists resolve to
+        // the old title's tracks — the same as pre-gate behavior — and a
+        // wrong-URL JASSUB fetch then surfaces the visible failure banner
+        // instead of failing silently.
+        if (!cancelled) setTracksForFile(mediaFileId);
+      });
     api
       .GET("/media-files/{id}/fonts", { params: { path: { id: mediaFileId } } })
       .then(({ data }) => {

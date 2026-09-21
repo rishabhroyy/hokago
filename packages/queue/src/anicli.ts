@@ -91,6 +91,11 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
   const hadQuality = ACQUIRE_QUALITY_TOKEN.test(pre);
   ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
   pre = pre.replace(ACQUIRE_QUALITY_TOKEN, " ");
+  // Bracketed year captured before brackets are stripped below — "[2011]"
+  // would otherwise vanish with the release groups and the folder would lose
+  // its year suffix (same loss the anywhere-paren branch below prevents).
+  const bracketYearM = /\[\s*((?:19|20)\d{2})\s*\]/.exec(pre);
+  const bracketYear = bracketYearM ? Number(bracketYearM[1]) : null;
   pre = pre.replace(/\[[^\]]*\]/g, " ");
   // "-GROUP rides the quality tail" (same guard as the scanner's own
   // stripSceneJunk): only strip when quality was present, otherwise a
@@ -122,6 +127,8 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
       if (anywhereParenYear) {
         year = Number(anywhereParenYear[1]);
         body = (pre.slice(0, anywhereParenYear.index) + " " + pre.slice(anywhereParenYear.index + anywhereParenYear[0].length)).replace(/\s+/g, " ").trim();
+      } else if (bracketYear !== null) {
+        year = bracketYear;
       }
     }
   }

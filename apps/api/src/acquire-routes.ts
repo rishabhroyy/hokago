@@ -5,6 +5,7 @@ import {
   QUEUE_NAMES,
   anicliJobId,
   acquireImportJobId,
+  isSeriesLikeTitle,
   parseAnicliQuery,
   type AnicliDownloadJobData,
   type AcquireImportJobData,
@@ -128,19 +129,30 @@ async function findLibraryMatch(
     if (uniq.some((u) => u.title === c.title && u.year === c.year)) continue;
     uniq.push(c);
   }
+  // Collect every hit, then prefer series-like-titled rows — same rule the
+  // worker's placement uses, so preview/gate never pick a legacy junk row
+  // ("01") the import step would deprioritize.
+  const hits: { id: string; title: string; year: number | null }[] = [];
   for (const c of uniq) {
     const m = await findExistingSeries({ db }, libraryId, c.title, c.year);
-    if (m) return m;
+    if (m && !hits.some((h) => h.id === m.id)) hits.push(m);
   }
-  const resolved = await Promise.all(
-    uniq.map((c) => resolveQueryExternalIds(c.title, c.year).catch(() => undefined)),
-  );
-  for (const ids of resolved) {
-    if (!ids || ids.length === 0) continue;
-    const hit = await findSeriesByExternalIds({ db }, libraryId, ids);
-    if (hit) return hit;
+  const pick = () => hits.find((h) => isSeriesLikeTitle(h.title)) ?? hits[0];
+  let match = pick();
+  if (!match || !isSeriesLikeTitle(match.title)) {
+    // No hit, or only junk-titled hits (legacy fork rows): the alias graph
+    // may still know the real show, so try it before settling.
+    const resolved = await Promise.all(
+      uniq.map((c) => resolveQueryExternalIds(c.title, c.year).catch(() => undefined)),
+    );
+    for (const ids of resolved) {
+      if (!ids || ids.length === 0) continue;
+      const hit = await findSeriesByExternalIds({ db }, libraryId, ids);
+      if (hit && !hits.some((h) => h.id === hit.id)) hits.push(hit);
+    }
+    match = pick();
   }
-  return undefined;
+  return match;
 }
 
 /** Free bytes the process can actually write (respects reserved blocks). Fail-closed. */

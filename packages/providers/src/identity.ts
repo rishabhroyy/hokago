@@ -12,6 +12,33 @@ type IdentitySearchFn = (
   opts?: { signal?: AbortSignal },
 ) => Promise<{ matches: MetadataMatch[] }>;
 
+// Process-local budget shared by every resolveQueryExternalIds caller in
+// this process (API preview/dedup, worker imports): AniList is ~90/min
+// nominal and the metadata queue already budgets 45/min, but these are
+// direct fetches outside that limiter. Exhaustion degrades to string
+// matching (the pre-existing behavior), never an error — worst case on an
+// empty-library typing burst is a few unmatched previews, not 429s.
+const IDENTITY_BUDGET_MAX = 20;
+const IDENTITY_BUDGET_WINDOW_MS = 10_000;
+let identityBudgetTokens = IDENTITY_BUDGET_MAX;
+let identityBudgetWindowStart = 0;
+
+function takeIdentityBudget(now: number = Date.now()): boolean {
+  if (now - identityBudgetWindowStart >= IDENTITY_BUDGET_WINDOW_MS) {
+    identityBudgetWindowStart = now;
+    identityBudgetTokens = IDENTITY_BUDGET_MAX;
+  }
+  if (identityBudgetTokens <= 0) return false;
+  identityBudgetTokens -= 1;
+  return true;
+}
+
+/** Test-only reset for the process-local budget above. */
+export function __resetIdentityBudgetForTests(): void {
+  identityBudgetTokens = IDENTITY_BUDGET_MAX;
+  identityBudgetWindowStart = 0;
+}
+
 /**
  * Best-effort query → provider-identity resolution over the same AniList +
  * acceptMatch machinery scanner resolution trusts — the alias graph
@@ -33,6 +60,7 @@ export async function resolveQueryExternalIds(
   try {
     const q = title.trim();
     if (!q) return undefined;
+    if (!takeIdentityBudget()) return undefined;
     const search: IdentitySearchFn =
       opts?.search ?? ((query, o) => new AniListProvider().search(query, o));
     const { matches } = await search(

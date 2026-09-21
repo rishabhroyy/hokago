@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { findSeriesByExternalIds, resolveQueryExternalIds } from "./identity.js";
+import { __resetIdentityBudgetForTests, findSeriesByExternalIds, resolveQueryExternalIds } from "./identity.js";
 
 function fakeIdentityDb(
   externalRows: { mediaItemId: string | null; provider: string; providerId: string }[],
@@ -103,4 +103,32 @@ test("resolveQueryExternalIds: no accepted match, empty title, and search faults
     }),
     undefined,
   );
+});
+
+test("resolveQueryExternalIds: exhausted budget degrades to undefined without searching", async () => {
+  __resetIdentityBudgetForTests();
+  try {
+    let calls = 0;
+    const search = async () => {
+      calls += 1;
+      return {
+        matches: [
+          {
+            providerId: "139585",
+            title: "Frieren: Beyond Journey's End",
+            year: 2023,
+            titles: [],
+          },
+        ],
+      };
+    };
+    for (let i = 0; i < 20; i++) {
+      assert.ok(await resolveQueryExternalIds("Frieren", 2023, { search }));
+    }
+    assert.equal(calls, 20);
+    assert.equal(await resolveQueryExternalIds("Frieren", 2023, { search }), undefined);
+    assert.equal(calls, 20, "exhausted budget must not reach the network");
+  } finally {
+    __resetIdentityBudgetForTests();
+  }
 });

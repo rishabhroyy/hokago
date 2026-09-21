@@ -181,9 +181,10 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   }
   let existing = stringHits.find((h) => isSeriesLikeTitle(h.title)) ?? stringHits[0];
   // Provider-identity fallback (AniList alias graph) after string misses —
-  // the same machinery scanner resolution trusts. Skipped entirely when no
-  // resolver is injected; resolve swallows network faults.
-  if (!existing && deps.resolveIdentity) {
+  // or junk-only string hits (legacy fork rows the alias graph can see
+  // past). Same machinery scanner resolution trusts. Skipped entirely when
+  // no resolver is injected; resolve swallows network faults.
+  if ((!existing || !isSeriesLikeTitle(existing.title)) && deps.resolveIdentity) {
     const idb = deps.db as unknown as Partial<SeriesIdentityDeps["db"]>;
     if (idb.externalId && idb.mediaItem) {
       const identityDeps = { db: { externalId: idb.externalId, mediaItem: idb.mediaItem } } as SeriesIdentityDeps;

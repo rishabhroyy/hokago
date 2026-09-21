@@ -429,6 +429,46 @@ test("processAcquireImport prefers the request title over an episode-number prov
   }
 });
 
+test("processAcquireImport prefers the real show over a legacy junk row shadowing it", async () => {
+  // A pre-existing "01" SERIES row (from before the fail-closed guard)
+  // exact-matches an episode-number provider title — but the request-level
+  // query still matches the real show, which must win for both lookup and
+  // folder naming.
+  const payload = Buffer.from("shadow bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-15", baseUrl, libraryId: "lib-1", query: "anohana", title: "01" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: {
+            findMany: async () => [
+              { id: "junk-1", title: "01", originalTitle: null, year: null },
+              { id: "series-1", title: "Anohana The Flower We Saw That Day", originalTitle: null, year: 2011 },
+            ],
+          },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Anohana The Flower We Saw That Day", 2011, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "must land in the real show folder, not the shadowing junk row");
+    assert.equal(await existsDir(path.join(root, "01")), false, "must not reuse the junk folder");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("processAcquireImport fails closed when no candidate carries series identity", async () => {
   const payload = Buffer.from("junk bytes");
   const { baseUrl, server } = await startServer((req, res) => {

@@ -68,6 +68,15 @@ test("parseAnicliQuery extracts bare and mid-string years so they never poison m
   assert.equal(parseAnicliQuery("One Piece - 1071").title, "One Piece");
 });
 
+test("parseAnicliQuery extracts bracketed years instead of dropping them with the groups", () => {
+  assert.deepEqual(parseAnicliQuery("Anohana [2011]"), { title: "Anohana", year: 2011, sub: null, season: null });
+  assert.deepEqual(parseAnicliQuery("Anohana [2011] BD 1080p"), { title: "Anohana", year: 2011, sub: null, season: null });
+  const mid = parseAnicliQuery("Anohana [2011] Season 1");
+  assert.equal(mid.title, "Anohana");
+  assert.equal(mid.year, 2011);
+  assert.equal(mid.sub, "Season 1");
+});
+
 test("isSeriesLikeTitle rejects episode identity so it can never name a folder", () => {
   assert.equal(isSeriesLikeTitle("Frieren"), true);
   assert.equal(isSeriesLikeTitle("Frieren: Beyond Journey's End"), true);

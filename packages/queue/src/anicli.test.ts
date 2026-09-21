@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseAnicliQuery } from "./anicli.js";
+import { isSeriesLikeTitle, parseAnicliQuery } from "./anicli.js";
 
 test("parseAnicliQuery leaves clean ani-cli queries untouched", () => {
   assert.deepEqual(parseAnicliQuery("Frieren"), { title: "Frieren", year: null, sub: null, season: null });
@@ -66,4 +66,25 @@ test("parseAnicliQuery extracts bare and mid-string years so they never poison m
   assert.equal(parseAnicliQuery("Spice and Wolf 2").year, null);
   assert.equal(parseAnicliQuery("One Piece 1071").title, "One Piece");
   assert.equal(parseAnicliQuery("One Piece - 1071").title, "One Piece");
+});
+
+test("parseAnicliQuery extracts bracketed years instead of dropping them with the groups", () => {
+  assert.deepEqual(parseAnicliQuery("Anohana [2011]"), { title: "Anohana", year: 2011, sub: null, season: null });
+  assert.deepEqual(parseAnicliQuery("Anohana [2011] BD 1080p"), { title: "Anohana", year: 2011, sub: null, season: null });
+  const mid = parseAnicliQuery("Anohana [2011] Season 1");
+  assert.equal(mid.title, "Anohana");
+  assert.equal(mid.year, 2011);
+  assert.equal(mid.sub, "Season 1");
+});
+
+test("isSeriesLikeTitle rejects episode identity so it can never name a folder", () => {
+  assert.equal(isSeriesLikeTitle("Frieren"), true);
+  assert.equal(isSeriesLikeTitle("Frieren: Beyond Journey's End"), true);
+  assert.equal(isSeriesLikeTitle("01"), false);
+  assert.equal(isSeriesLikeTitle("01-28"), false);
+  assert.equal(isSeriesLikeTitle("Episode 5"), false);
+  assert.equal(isSeriesLikeTitle("EP12"), false);
+  assert.equal(isSeriesLikeTitle("S02E05"), false);
+  assert.equal(isSeriesLikeTitle("anicli"), false);
+  assert.equal(isSeriesLikeTitle(""), false);
 });

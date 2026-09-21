@@ -91,6 +91,11 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
   const hadQuality = ACQUIRE_QUALITY_TOKEN.test(pre);
   ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
   pre = pre.replace(ACQUIRE_QUALITY_TOKEN, " ");
+  // Bracketed year captured before brackets are stripped below — "[2011]"
+  // would otherwise vanish with the release groups and the folder would lose
+  // its year suffix (same loss the anywhere-paren branch below prevents).
+  const bracketYearM = /\[\s*((?:19|20)\d{2})\s*\]/.exec(pre);
+  const bracketYear = bracketYearM ? Number(bracketYearM[1]) : null;
   pre = pre.replace(/\[[^\]]*\]/g, " ");
   // "-GROUP rides the quality tail" (same guard as the scanner's own
   // stripSceneJunk): only strip when quality was present, otherwise a
@@ -122,6 +127,8 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
       if (anywhereParenYear) {
         year = Number(anywhereParenYear[1]);
         body = (pre.slice(0, anywhereParenYear.index) + " " + pre.slice(anywhereParenYear.index + anywhereParenYear[0].length)).replace(/\s+/g, " ").trim();
+      } else if (bracketYear !== null) {
+        year = bracketYear;
       }
     }
   }
@@ -196,6 +203,24 @@ export function anicliQuerySeason(query: string): number | null {
 
 /** Filesystem-safe folder name — same allowlist for any caller placing a file under a library root. */
 export const sanitizeFolder = (q: string): string => (q.replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 80) || "anicli").trim();
+
+/**
+ * False for strings that are episode identity, not series identity:
+ * numeric-only/range-only ("01", "01-28"), episode-word-only ("Episode 5",
+ * "EP12", "E01"), bare scene codes ("S02E05"), the junk-only sentinel.
+ * A series folder must never be derived from one of these — a provider
+ * per-item title like "01" names an episode, and "01" as a SERIES folder
+ * is exactly the fork this guards against. Callers fall back to the
+ * request-level title (user intent) and fail closed when nothing is left.
+ */
+export function isSeriesLikeTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t || t === "anicli") return false;
+  if (/^(?:episode|ep|e)\s*\d{1,4}(?:\s*-\s*\d{1,4})?\s*(?:v\d+)?$/i.test(t)) return false;
+  if (/^\d{1,4}(?:\s*-\s*\d{1,4})?\s*(?:v\d+)?$/.test(t)) return false;
+  if (/^s0*\d{1,3}\s*e0*\d{1,3}$/i.test(t)) return false;
+  return true;
+}
 
 /**
  * Target folder for a download. The season signal lives only here (ani-cli

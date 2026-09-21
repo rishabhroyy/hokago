@@ -107,7 +107,15 @@ export const AcquireOkResponse = z.object({ ok: z.boolean() });
 // user picks what to grab instead of it only ever being enforced silently
 // at submit time.
 
-export const AcquireExistingQuery = z.object({ libraryId: z.string().uuid(), query: z.string().min(1).max(200) });
+export const AcquireExistingQuery = z.object({
+  libraryId: z.string().uuid(),
+  query: z.string().min(1).max(200),
+  // Picked search-result title, when the admin tapped one. Preview must use
+  // the same dual-candidate matching as the submit-time dedup gate (query +
+  // picked): after a pick the box holds the candidate's noisier title and a
+  // query-only preview flips from matched to unmatched on the same show.
+  title: z.string().min(1).max(200).optional(),
+});
 export type AcquireExistingQuery = z.infer<typeof AcquireExistingQuery>;
 
 export const AcquireExistingSeason = z.object({

@@ -41,7 +41,7 @@ import { buildDownloadArgs } from "@hokago/ffmpeg/download";
 import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
 import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, hwActive, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
-import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge } from "@hokago/providers";
+import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge, resolveQueryExternalIds } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
@@ -1189,7 +1189,15 @@ const anicliWorker = new Worker<AnicliDownloadJobData>(QUEUE_NAMES.ANICLI, proce
 // the rest of the acquire-provider work has stayed.
 const acquireImportWorker = new Worker<AcquireImportJobData>(
   QUEUE_NAMES.ACQUIRE_IMPORT,
-  (job) => processAcquireImport(job, { db, enqueueScan, scanSettleMs: anicliScanSettleMs }),
+  (job) =>
+    processAcquireImport(job, {
+      db,
+      enqueueScan,
+      scanSettleMs: anicliScanSettleMs,
+      // Best-effort alias-graph fallback for string misses only; the import
+      // itself never depends on it (local-first inside processAcquireImport).
+      resolveIdentity: (title, year) => resolveQueryExternalIds(title, year),
+    }),
   { connection, concurrency: 2 },
 );
 

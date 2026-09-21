@@ -386,3 +386,163 @@ test("processAcquireImport falls back to the request query season when the provi
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("processAcquireImport prefers the request title over an episode-number provider title for new shows", async () => {
+  // The "01" folder regression: a per-item provider title carrying only
+  // episode identity must never name a new series folder when the request
+  // itself parsed clean.
+  const payload = Buffer.from("request-title bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({
+        providerId: "ext1",
+        downloadId: "dl-12",
+        baseUrl,
+        libraryId: "lib-1",
+        query: "anohana",
+        title: "01",
+        requestTitle: "Anohana The Flower We Saw That Day",
+      }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: { findMany: async () => [] },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Anohana The Flower We Saw That Day", null, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "new folder must come from the request title, not the episode-number provider title");
+    assert.equal(await existsDir(path.join(root, "01")), false, "must not create a numeric junk folder");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport prefers the real show over a legacy junk row shadowing it", async () => {
+  // A pre-existing "01" SERIES row (from before the fail-closed guard)
+  // exact-matches an episode-number provider title — but the request-level
+  // query still matches the real show, which must win for both lookup and
+  // folder naming.
+  const payload = Buffer.from("shadow bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-15", baseUrl, libraryId: "lib-1", query: "anohana", title: "01" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: {
+            findMany: async () => [
+              { id: "junk-1", title: "01", originalTitle: null, year: null },
+              { id: "series-1", title: "Anohana The Flower We Saw That Day", originalTitle: null, year: 2011 },
+            ],
+          },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Anohana The Flower We Saw That Day", 2011, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "must land in the real show folder, not the shadowing junk row");
+    assert.equal(await existsDir(path.join(root, "01")), false, "must not reuse the junk folder");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport fails closed when no candidate carries series identity", async () => {
+  const payload = Buffer.from("junk bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await assert.rejects(
+      processAcquireImport(
+        fakeJob({ providerId: "ext1", downloadId: "dl-13", baseUrl, libraryId: "lib-1", query: "01", title: "Episode 5" }),
+        {
+          db: {
+            library: { findUnique: async () => ({ rootPath: root }) },
+            mediaItem: { findMany: async () => [] },
+          },
+          enqueueScan: async () => {},
+          scanSettleMs: 0,
+        },
+      ),
+      /could not determine series title/,
+    );
+    assert.equal(await existsDir(path.join(root, "01")), false, "a refused import must not leave a junk folder behind");
+    assert.equal(await existsDir(path.join(root, "Episode 5")), false, "a refused import must not leave a junk folder behind");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport reuses the ExternalId-matched show when strings cannot bridge the alias gap", async () => {
+  const payload = Buffer.from("identity bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-14", baseUrl, libraryId: "lib-1", query: "Sousou no Frieren", title: "Sousou no Frieren" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          // An unresolved-style row: no stored AKA for the request to match
+          // against, so string matching misses on purpose here.
+          mediaItem: {
+            findMany: async (args: unknown) => {
+              const where = (args as { where: Record<string, unknown> }).where;
+              if (where.kind === "SERIES" && !("id" in where)) {
+                return [{ id: "series-9", title: "Frieren Beyond Journey s End", originalTitle: null, year: 2023 }];
+              }
+              if ("id" in (where as Record<string, unknown>)) {
+                return [{ id: "series-9", title: "Frieren Beyond Journey s End", originalTitle: null, year: 2023 }];
+              }
+              return [];
+            },
+          },
+          externalId: {
+            findMany: async () => [{ mediaItemId: "series-9" }],
+          },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+        resolveIdentity: async () => [{ provider: "ANILIST", providerId: "139585" }],
+      },
+    );
+
+    const finalDir = seasonTargetDir(root, "Frieren Beyond Journey s End", 2023, null);
+    const files = await readdir(finalDir);
+    assert.equal(files.length, 1, "identity hit must land in the canonical folder despite the string gap");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

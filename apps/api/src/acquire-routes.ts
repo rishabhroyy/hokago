@@ -5,11 +5,19 @@ import {
   QUEUE_NAMES,
   anicliJobId,
   acquireImportJobId,
+  isSeriesLikeTitle,
   parseAnicliQuery,
   type AnicliDownloadJobData,
   type AcquireImportJobData,
 } from "@hokago/queue";
-import { AniListProvider, checkSeasonDedup, findExistingSeries, seasonsForSeries } from "@hokago/providers";
+import {
+  AniListProvider,
+  checkSeasonDedup,
+  findExistingSeries,
+  findSeriesByExternalIds,
+  resolveQueryExternalIds,
+  seasonsForSeries,
+} from "@hokago/providers";
 import type { MetadataQuery } from "@hokago/metadata";
 import { statfs } from "node:fs/promises";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -101,6 +109,51 @@ async function requireLiveAdmin(req: FastifyRequest, reply: FastifyReply): Promi
   if (!(await requireAdmin(req))) reply.code(403).send({ error: "admin only" });
 }
 
+
+/**
+ * Library match with metadata-as-king ordering, shared by the preview and
+ * both dedup gates so all three answer "is this the same show" identically.
+ * Local string matching first (fast, offline, zero extra requests), then —
+ * only when nothing matched — best-effort provider-identity resolution
+ * (AniList + acceptMatch alias graph) mapped back through the library's own
+ * ExternalIds. Network never fails the lookup: resolve swallows, DB errors
+ * propagate so gates stay fail-closed exactly as before.
+ */
+async function findLibraryMatch(
+  libraryId: string,
+  candidates: { title: string; year: number | null }[],
+): Promise<{ id: string; title: string; year: number | null } | undefined> {
+  const uniq: { title: string; year: number | null }[] = [];
+  for (const c of candidates) {
+    if (!c.title.trim()) continue;
+    if (uniq.some((u) => u.title === c.title && u.year === c.year)) continue;
+    uniq.push(c);
+  }
+  // Collect every hit, then prefer series-like-titled rows — same rule the
+  // worker's placement uses, so preview/gate never pick a legacy junk row
+  // ("01") the import step would deprioritize.
+  const hits: { id: string; title: string; year: number | null }[] = [];
+  for (const c of uniq) {
+    const m = await findExistingSeries({ db }, libraryId, c.title, c.year);
+    if (m && !hits.some((h) => h.id === m.id)) hits.push(m);
+  }
+  const pick = () => hits.find((h) => isSeriesLikeTitle(h.title)) ?? hits[0];
+  let match = pick();
+  if (!match || !isSeriesLikeTitle(match.title)) {
+    // No hit, or only junk-titled hits (legacy fork rows): the alias graph
+    // may still know the real show, so try it before settling.
+    const resolved = await Promise.all(
+      uniq.map((c) => resolveQueryExternalIds(c.title, c.year).catch(() => undefined)),
+    );
+    for (const ids of resolved) {
+      if (!ids || ids.length === 0) continue;
+      const hit = await findSeriesByExternalIds({ db }, libraryId, ids);
+      if (hit && !hits.some((h) => h.id === hit.id)) hits.push(hit);
+    }
+    match = pick();
+  }
+  return match;
+}
 
 /** Free bytes the process can actually write (respects reserved blocks). Fail-closed. */
 async function hasFreeSpace(dir: string): Promise<boolean> {
@@ -199,33 +252,30 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       // by flat title equality across every item kind the way this used to.
       // Blocks an already-fully-downloaded season; allows a new season, an
       // episode range not yet fully present, and specials (season 0) always.
-      // The picked display title (body.title) is tried as a second match
-      // candidate with the *requested* season from the query: the query
+      // Match once through the shared matcher (query + picked title, then
+      // provider identity), then run the season/episode gate against the
+      // canonical row with the *requested* season from the query: the query
       // carries "Season 2", the title does not, but either naming can be
       // the one that matches the library's canonical row.
       const parsed = parseAnicliQuery(body.query);
-      const dedup = await checkSeasonDedup(
-        { db },
-        body.libraryId,
-        parsed.title,
-        parsed.year,
-        parsed.season,
-        body.episodeRange,
-      );
-      if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
+      const candidates = [{ title: parsed.title, year: parsed.year }];
       if (body.title) {
         const titleParsed = parseAnicliQuery(body.title);
         if (titleParsed.title !== parsed.title || titleParsed.year !== parsed.year) {
-          const dedupByTitle = await checkSeasonDedup(
-            { db },
-            body.libraryId,
-            titleParsed.title,
-            titleParsed.year,
-            parsed.season,
-            body.episodeRange,
-          );
-          if (!dedupByTitle.ok) return reply.code(409).send({ error: dedupByTitle.reason });
+          candidates.push({ title: titleParsed.title, year: titleParsed.year });
         }
+      }
+      const match = await findLibraryMatch(body.libraryId, candidates);
+      if (match) {
+        const dedup = await checkSeasonDedup(
+          { db },
+          body.libraryId,
+          match.title,
+          match.year,
+          parsed.season,
+          body.episodeRange,
+        );
+        if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
       }
 
       let job;
@@ -369,15 +419,24 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
   );
 
   // ── What the library already has ────────────────────────────────────
-  // Same matching + hierarchy walk checkSeasonDedup uses, exposed as a read
-  // so the UI can show "already have Season 1 (12 ep)..." while the user is
-  // still typing, instead of only ever finding out at submit time.
+  // Same matcher the dedup gates use (query + picked title, then provider
+  // identity), exposed as a read so the UI can show "already have Season 1
+  // (12 ep)..." while the user is still typing — and keep showing it after
+  // a pick replaces the box with the candidate's noisier title — instead of
+  // only ever finding out at submit time.
   app.get(
     "/acquire/existing",
     { ...adminOnly, schema: { querystring: AcquireExistingQuery, response: { 200: AcquireExistingResponse } } },
     async (req) => {
       const parsed = parseAnicliQuery(req.query.query);
-      const match = await findExistingSeries({ db }, req.query.libraryId, parsed.title, parsed.year);
+      const candidates = [{ title: parsed.title, year: parsed.year }];
+      if (req.query.title) {
+        const titleParsed = parseAnicliQuery(req.query.title);
+        if (titleParsed.title !== parsed.title || titleParsed.year !== parsed.year) {
+          candidates.push({ title: titleParsed.title, year: titleParsed.year });
+        }
+      }
+      const match = await findLibraryMatch(req.query.libraryId, candidates);
       if (!match) return { matched: null, seasons: [] };
       const breakdown = await seasonsForSeries({ db }, match.id);
       return {
@@ -474,6 +533,12 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       title: info.title ?? body.title,
       episodeRange: info.episodeRange ?? body.episodeRange,
       dub: body.dub,
+      // Request-level picked title, preserved apart from the per-item value
+      // above: series identity prefers this (user intent + library
+      // canonical) over provider per-item text (which can be episode-level
+      // junk like "01"). The worker falls back to it whenever the item
+      // title is not series-like.
+      requestTitle: body.title ?? null,
     };
     acquireImportQueue
       .add(QUEUE_NAMES.ACQUIRE_IMPORT, data, { jobId: acquireImportJobId(providerId, info.id) })
@@ -523,28 +588,24 @@ export async function registerAcquireRoutes(app: ZodFastifyInstance): Promise<vo
       // is the short form, or vice versa after release-junk cleaning.
       if (req.body.libraryId && req.body.query) {
         const parsed = parseAnicliQuery(req.body.query);
-        const dedup = await checkSeasonDedup(
-          { db },
-          req.body.libraryId,
-          parsed.title,
-          parsed.year,
-          parsed.season,
-          req.body.episodeRange,
-        );
-        if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
+        const candidates = [{ title: parsed.title, year: parsed.year }];
         if (req.body.title) {
           const titleParsed = parseAnicliQuery(req.body.title);
           if (titleParsed.title !== parsed.title || titleParsed.year !== parsed.year) {
-            const dedupByTitle = await checkSeasonDedup(
-              { db },
-              req.body.libraryId,
-              titleParsed.title,
-              titleParsed.year,
-              parsed.season,
-              req.body.episodeRange,
-            );
-            if (!dedupByTitle.ok) return reply.code(409).send({ error: dedupByTitle.reason });
+            candidates.push({ title: titleParsed.title, year: titleParsed.year });
           }
+        }
+        const match = await findLibraryMatch(req.body.libraryId, candidates);
+        if (match) {
+          const dedup = await checkSeasonDedup(
+            { db },
+            req.body.libraryId,
+            match.title,
+            match.year,
+            parsed.season,
+            req.body.episodeRange,
+          );
+          if (!dedup.ok) return reply.code(409).send({ error: dedup.reason });
         }
       }
       return relayProxy(

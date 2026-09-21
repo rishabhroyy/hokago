@@ -5,7 +5,7 @@ import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { processAcquireImport, acquireImportStagingDir } from "./acquire-import.js";
+import { processAcquireImport, acquireImportStagingDir, resolveSeriesDirOnDisk } from "./acquire-import.js";
 import { seasonTargetDir, type AcquireImportJobData, type Job } from "@hokago/queue";
 
 async function startServer(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void): Promise<{ baseUrl: string; server: Server }> {
@@ -541,6 +541,91 @@ test("processAcquireImport reuses the ExternalId-matched show when strings canno
     const finalDir = seasonTargetDir(root, "Frieren Beyond Journey s End", 2023, null);
     const files = await readdir(finalDir);
     assert.equal(files.length, 1, "identity hit must land in the canonical folder despite the string gap");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("resolveSeriesDirOnDisk: reuses the on-disk spelling despite sanitize loss", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-dirdup-test-"));
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(root, "Frieren Beyond Journey's End"), { recursive: true });
+  try {
+    assert.equal(
+      await resolveSeriesDirOnDisk(root, "Frieren Beyond Journeys End", null),
+      path.join(root, "Frieren Beyond Journey's End"),
+    );
+    assert.equal(await resolveSeriesDirOnDisk(root, "Some New Show", 2024), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("processAcquireImport reuses the existing on-disk folder instead of forking a sanitized duplicate", async () => {
+  // Exact reported bug: library holds "Frieren Beyond Journey's End" but the
+  // import derived "Frieren Beyond Journeys End" (sanitizeFolder drops the
+  // apostrophe) and forked a second show folder.
+  const payload = Buffer.from("apostrophe bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(root, "Frieren Beyond Journey's End"), { recursive: true });
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-16", baseUrl, libraryId: "lib-1", query: "Frieren", title: "Frieren Beyond Journeys End" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: {
+            findMany: async () => [{ id: "series-1", title: "Frieren Beyond Journey's End", originalTitle: null, year: 2023 }],
+          },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const files = await readdir(path.join(root, "Frieren Beyond Journey's End"));
+    assert.equal(files.length, 1, "file must land in the existing on-disk folder");
+    assert.deepEqual(await readFile(path.join(root, "Frieren Beyond Journey's End", files[0]!)), payload);
+    assert.equal(await existsDir(path.join(root, "Frieren Beyond Journeys End")), false, "must not fork a sanitized duplicate folder");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport reuses the on-disk folder with no DB row at all", async () => {
+  const payload = Buffer.from("disk-only bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(root, "Frieren Beyond Journey's End"), { recursive: true });
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-17", baseUrl, libraryId: "lib-1", query: "Frieren", title: "Frieren Beyond Journeys End" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: { findMany: async () => [] },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+      },
+    );
+
+    const files = await readdir(path.join(root, "Frieren Beyond Journey's End"));
+    assert.equal(files.length, 1, "on-disk match alone must prevent the fork");
+    assert.equal(await existsDir(path.join(root, "Frieren Beyond Journeys End")), false, "must not fork a sanitized duplicate folder");
   } finally {
     await rm(root, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));

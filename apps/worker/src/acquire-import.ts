@@ -30,7 +30,7 @@
 
 import path from "node:path";
 import { existsSync, createWriteStream } from "node:fs";
-import { mkdir, rm, stat, rename } from "node:fs/promises";
+import { mkdir, rm, stat, rename, readdir } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
@@ -63,6 +63,7 @@ import {
   type Job,
 } from "@hokago/queue";
 import {
+  acceptMatch,
   findExistingSeries,
   findSeriesByExternalIds,
   type ExistingSeriesDeps,
@@ -133,6 +134,57 @@ export function acquireFilenameFromContentDisposition(header: string | null): st
 
 export const acquireImportStagingDir = (libraryRoot: string, providerId: string, downloadId: string): string =>
   path.join(libraryRoot, ".acquire-staging", `${providerId}-${downloadId}`);
+
+/** Split a trailing year off an on-disk series dirname ("Show (2011)" / "Show [2011]" / "Show 2011"). */
+function splitDirnameYear(name: string): { title: string; year: number | null } {
+  const m = /^(.*?)\s*[\(\[]?\s*((?:19|20)\d{2})\s*[\)\]]?\s*$/.exec(name);
+  // Bare trailing digits that are not a 19/20xx year ("Show 12", Tucci-style
+  // catalogue numbers) are part of the title, not a year.
+  if (!m || m[1]!.trim() === "") return { title: name, year: null };
+  return { title: m[1]!.trim(), year: Number(m[2]) };
+}
+
+/**
+ * On-disk series folder for a title, or null when the library has no
+ * directory for it. `sanitizeFolder` is lossy (drops `'`, `:`, `.` …), so a
+ * folder derived from a canonical title need not equal the folder already
+ * on disk ("Frieren Beyond Journeys End" vs "Frieren Beyond Journey's
+ * End") — deriving blindly forks a near-duplicate show even when matching
+ * itself succeeded. Reusing the actual directory keeps placement,
+ * preview, and dedup pointed at the same show. Dotfiles (`.acquire-staging`)
+ * and non-directories never match; best-effort (readdir faults → null).
+ */
+export async function resolveSeriesDirOnDisk(
+  libraryRoot: string,
+  title: string,
+  year: number | null,
+): Promise<string | null> {
+  let entries;
+  try {
+    entries = await readdir(libraryRoot, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const dirs = entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b));
+  for (const name of dirs) {
+    const split = splitDirnameYear(name);
+    const query = { title: split.title, year: split.year ?? undefined, kind: "SERIES" as const };
+    const candidate = { providerId: "local", title, year: year ?? undefined };
+    if (acceptMatch(query, candidate)) return path.join(libraryRoot, name);
+    if (
+      acceptMatch(
+        { title, year: year ?? undefined, kind: "SERIES" },
+        { providerId: "local", title: split.title, year: split.year ?? undefined },
+      )
+    ) {
+      return path.join(libraryRoot, name);
+    }
+  }
+  return null;
+}
 
 /**
  * The provider's side of the contract: an ordinary streamed HTTP response,
@@ -217,7 +269,17 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   // back to the request's ("Season 1 BD 1080p" hid it pre-clean; a provider
   // title with no season at all still lands in the requested season).
   const effectiveSub = parsed.sub ?? requestParsed?.sub ?? queryParsed.sub;
-  const finalDir = seasonTargetDir(library.rootPath, effectiveTitle, effectiveYear, effectiveSub);
+  // Reuse the on-disk spelling when the library already has a directory for
+  // this show: sanitizeFolder is lossy, so a derived folder need not equal
+  // the real one ("Frieren Beyond Journeys End" vs "Frieren Beyond Journey's
+  // End") — deriving blindly forks a duplicate show even when matching
+  // itself succeeded. Best-effort; falls back to the derived convention.
+  const existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
+  const finalDir = existingDir
+    ? effectiveSub
+      ? path.join(existingDir, effectiveSub)
+      : existingDir
+    : seasonTargetDir(library.rootPath, effectiveTitle, effectiveYear, effectiveSub);
   const stagingDir = acquireImportStagingDir(library.rootPath, providerId, downloadId);
   const tmpPath = path.join(stagingDir, "download.tmp");
   const cleanup = () => rm(stagingDir, { recursive: true, force: true }).catch(() => {});

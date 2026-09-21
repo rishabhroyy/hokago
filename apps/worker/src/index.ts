@@ -27,7 +27,7 @@ import {
   type AcquireImportJobData,
   type Job,
 } from "@hokago/queue";
-import { processAcquireImport } from "./acquire-import.js";
+import { processAcquireImport, resolveSeriesDirOnDisk } from "./acquire-import.js";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { pruneMissingMedia } from "@hokago/scanner/prune";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
@@ -41,7 +41,7 @@ import { buildDownloadArgs } from "@hokago/ffmpeg/download";
 import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
 import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, hwActive, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
-import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge, resolveQueryExternalIds } from "@hokago/providers";
+import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge, findExistingSeries, resolveQueryExternalIds } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
@@ -949,7 +949,24 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
   // single-season show (no season token) keeps the folder = title, implicit
   // Season 1. A trailing year re-attaches to the series folder for metadata.
   const parsed = parseAnicliQuery(rec.query);
-  const finalDir = seasonTargetDir(rec.library.rootPath, parsed.title, parsed.year, parsed.sub);
+  // Reuse the library's canonical title and on-disk folder when known —
+  // otherwise a sanitized re-derivation forks a duplicate next to the real
+  // show ("Frieren Beyond Journeys End" vs "Frieren Beyond Journey's End").
+  // Best-effort lookups: miss/degrade to the derived convention, as before.
+  const anicliExisting = await findExistingSeries(
+    { db },
+    rec.libraryId,
+    parsed.title,
+    parsed.year,
+  ).catch(() => undefined);
+  const anicliTitle = anicliExisting?.title ?? parsed.title;
+  const anicliYear = anicliExisting?.year ?? parsed.year;
+  const anicliDir = await resolveSeriesDirOnDisk(rec.library.rootPath, anicliTitle, anicliYear).catch(() => null);
+  const finalDir = anicliDir
+    ? parsed.sub
+      ? path.join(anicliDir, parsed.sub)
+      : anicliDir
+    : seasonTargetDir(rec.library.rootPath, anicliTitle, anicliYear, parsed.sub);
   const cleanup = () => rm(staging, { recursive: true, force: true }).catch(() => {});
   const markFailed = async (err: unknown) => {
     await cleanup();

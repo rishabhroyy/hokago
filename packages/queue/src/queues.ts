@@ -69,6 +69,15 @@ export interface AcquireImportJobData {
   episodeRange?: string;
   /** Carried through for symmetry with AcquireDownloadBody; not used by placement. */
   dub?: boolean;
+  /**
+   * Request-level picked title (body.title: the clean search-result choice),
+   * preserved separately from `title` (the provider's per-item resolved
+   * value, which can be episode-level junk like "01"). Series identity
+   * prefers this over `title` — metadata (user intent + library canonical)
+   * outranks provider per-item text. Optional so jobs enqueued before this
+   * existed still run.
+   */
+  requestTitle?: string | null;
 }
 
 /** Deterministic BullMQ jobIds so re-enqueueing already-queued work is a no-op (/). */

@@ -187,9 +187,13 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     return () => clearInterval(id);
   }, [loadRows]);
 
-  // Debounced "do we already have this" lookup, keyed on library+query, so
-  // the season/episode inputs can show what's already downloaded before the
-  // admin submits — same 400ms debounce shape as FixMatchPanel's search.
+  // Debounced "do we already have this" lookup, keyed on library+query+
+  // picked, so the season/episode inputs can show what's already downloaded
+  // before the admin submits — same 400ms debounce shape as FixMatchPanel's
+  // search. The picked title travels too (same dual-candidate matching as
+  // the submit gate): after a pick the box holds the candidate's noisier
+  // title, and a query-only preview would flip from matched to unmatched on
+  // the same show.
   useEffect(() => {
     if (!lib || !query.trim()) {
       setExisting(null);
@@ -198,7 +202,9 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
     let cancelled = false;
     const t = setTimeout(() => {
       api
-        .GET("/acquire/existing", { params: { query: { libraryId: lib, query: query.trim() } } })
+        .GET("/acquire/existing", {
+          params: { query: { libraryId: lib, query: query.trim(), ...(picked ? { title: picked } : {}) } },
+        })
         .then(({ data }) => {
           if (!cancelled) setExisting(data ?? null);
         })
@@ -210,7 +216,7 @@ export function AcquireSection({ toast }: { toast: (msg: string, err?: boolean) 
       cancelled = true;
       clearTimeout(t);
     };
-  }, [lib, query]);
+  }, [lib, query, picked]);
 
   const search = async () => {
     if (!query.trim() || searching) return;

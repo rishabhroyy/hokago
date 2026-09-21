@@ -54,15 +54,41 @@ class StallTracker extends Transform {
   }
 }
 
-import { parseAnicliQuery, seasonTargetDir, sanitizeFolder, type AcquireImportJobData, type Job } from "@hokago/queue";
-import { findExistingSeries, type ExistingSeriesDeps } from "@hokago/providers";
+import {
+  parseAnicliQuery,
+  isSeriesLikeTitle,
+  seasonTargetDir,
+  sanitizeFolder,
+  type AcquireImportJobData,
+  type Job,
+} from "@hokago/queue";
+import {
+  findExistingSeries,
+  findSeriesByExternalIds,
+  type ExistingSeriesDeps,
+  type ExternalIdRef,
+  type SeriesIdentityDeps,
+} from "@hokago/providers";
 
 export interface AcquireImportDeps extends ExistingSeriesDeps {
   db: ExistingSeriesDeps["db"] & {
     library: { findUnique: (args: { where: { id: string } }) => Promise<{ rootPath: string } | null> };
+    /**
+     * ExternalId store for the provider-identity fallback. Optional so
+     * lightweight fakes (and jobs from before it existed) omit it — absent
+     * means skip that path, never fail.
+     */
+    externalId?: SeriesIdentityDeps["db"]["externalId"];
   };
   enqueueScan: (libraryId: string, mode: "light" | "heavy", delayMs?: number) => Promise<void>;
   scanSettleMs: number;
+  /**
+   * Best-effort query → provider-identity resolution (AniList alias graph).
+   * Injected (production wires the real one in apps/worker/src/index.ts)
+   * so tests stay deterministic and offline — absent means skip the
+   * identity fallback entirely and rely on string matching alone.
+   */
+  resolveIdentity?: (title: string, year: number | null) => Promise<ExternalIdRef[] | undefined>;
   /** No bytes at all for this long (initial connect included) -- something's
    * actually stuck, not just slow -- aborts the transfer. Injectable so a
    * test can prove the behavior without a real 5-minute wait. Deliberately
@@ -120,36 +146,76 @@ export const acquireImportStagingDir = (libraryRoot: string, providerId: string,
  */
 export async function processAcquireImport(job: Job<AcquireImportJobData>, deps: AcquireImportDeps): Promise<void> {
   const { providerId, downloadId, baseUrl, token, libraryId, query, title, episodeRange } = job.data;
+  // Request-level picked title, preserved apart from the per-item `title`
+  // above (see AcquireImportJobData.requestTitle) — user intent outranks
+  // provider per-item text for series identity.
+  const requestTitle = job.data.requestTitle?.trim() || null;
   const library = await deps.db.library.findUnique({ where: { id: libraryId } });
   if (!library) return; // deleted between enqueue and run -- nothing to place this into
 
-  // Provider-resolved `title` first (human result), caller `query` second.
-  // parseAnicliQuery now strips release junk ("BD 1080p", groups, episode
-  // suffixes) internally, so both sides parse clean — but they can still
-  // disagree: /acquire/existing + dedup gate on the API side only ever see
-  // the clean user query, while this step prefers the provider's noisier
-  // title. Trying both against findExistingSeries (provider first, query as
-  // fallback) is what keeps "already have X with no files" and "where the
-  // bytes actually land" from diverging into a duplicate folder.
+  // Series identity is metadata-first: request-level parses (picked title,
+  // then query) before the provider per-item title, which can be
+  // episode-level junk ("01"). parseAnicliQuery strips release junk
+  // internally, so clean inputs parse identically whichever side they come
+  // from; the order only matters when they disagree.
   const parsed = parseAnicliQuery(title?.trim() || query);
   const queryParsed = parseAnicliQuery(query);
-  // Best-effort only: a lookup hiccup here degrades to "no match found",
-  // not a failed import -- this only ever improves on parsed.title/year,
-  // never gates whether the transfer itself can proceed.
-  let existing = await findExistingSeries(deps, libraryId, parsed.title, parsed.year).catch(() => undefined);
-  if (!existing && (queryParsed.title !== parsed.title || queryParsed.year !== parsed.year)) {
-    existing = await findExistingSeries(deps, libraryId, queryParsed.title, queryParsed.year).catch(() => undefined);
+  const requestParsed = requestTitle ? parseAnicliQuery(requestTitle) : null;
+  const ordered = [requestParsed, queryParsed, parsed].filter(
+    (p): p is typeof queryParsed => p !== null,
+  );
+  const stringCands: typeof ordered = [];
+  for (const p of ordered) {
+    if (stringCands.some((q) => q.title === p.title && q.year === p.year)) continue;
+    stringCands.push(p);
   }
-  // A junk-only provider title parses to the "anicli" sentinel — never let
-  // that become a real folder when the caller's own query parsed clean.
-  const useQueryParse = parsed.title === "anicli" && queryParsed.title !== "anicli";
-  const baseParsed = useQueryParse ? queryParsed : parsed;
-  const effectiveTitle = existing?.title ?? baseParsed.title;
-  const effectiveYear = existing?.year ?? baseParsed.year ?? queryParsed.year;
+  // Best-effort only: a lookup hiccup here degrades to "no match found",
+  // not a failed import -- this only ever improves placement, never gates
+  // whether the transfer itself can proceed. Series-like-titled hits win
+  // over junk-titled ones so a legacy "01" row never shadows the real show
+  // when both match different candidates.
+  const stringHits: { id: string; title: string; year: number | null }[] = [];
+  for (const c of stringCands) {
+    const m = await findExistingSeries(deps, libraryId, c.title, c.year).catch(() => undefined);
+    if (m && !stringHits.some((h) => h.id === m.id)) stringHits.push(m);
+  }
+  let existing = stringHits.find((h) => isSeriesLikeTitle(h.title)) ?? stringHits[0];
+  // Provider-identity fallback (AniList alias graph) after string misses —
+  // the same machinery scanner resolution trusts. Skipped entirely when no
+  // resolver is injected; resolve swallows network faults.
+  if (!existing && deps.resolveIdentity) {
+    const idb = deps.db as unknown as Partial<SeriesIdentityDeps["db"]>;
+    if (idb.externalId && idb.mediaItem) {
+      const identityDeps = { db: { externalId: idb.externalId, mediaItem: idb.mediaItem } } as SeriesIdentityDeps;
+      const resolved = await Promise.all(
+        stringCands.map((c) => deps.resolveIdentity!(c.title, c.year).catch(() => undefined)),
+      );
+      for (const ids of resolved) {
+        if (!ids || ids.length === 0) continue;
+        const hit = await findSeriesByExternalIds(identityDeps, libraryId, ids).catch(() => undefined);
+        if (hit && !stringHits.some((h) => h.id === hit.id)) stringHits.push(hit);
+      }
+      existing = stringHits.find((h) => isSeriesLikeTitle(h.title)) ?? stringHits[0];
+    }
+  }
+  // New-folder naming is request-first: the first series-like request-level
+  // parse wins; the provider per-item parse is the last resort. Nothing
+  // series-like and no existing row means the identity is unresolvable —
+  // fail closed (terminal, attempts:1, staging cleaned by the catch below)
+  // rather than forking a junk folder ("01", "Episode 5") into the library.
+  const named =
+    ([requestParsed, queryParsed, parsed].find((p) => p && isSeriesLikeTitle(p.title)) ?? null);
+  if (!existing && !named) {
+    throw new Error(
+      `acquire import (${providerId}/${downloadId}): could not determine series title from provider title/query — refusing to create a junk folder`,
+    );
+  }
+  const effectiveTitle = existing?.title ?? (named as typeof queryParsed).title;
+  const effectiveYear = existing?.year ?? named?.year ?? queryParsed.year ?? parsed.year;
   // Season lives only in the folder: prefer the provider's own signal, fall
   // back to the request's ("Season 1 BD 1080p" hid it pre-clean; a provider
   // title with no season at all still lands in the requested season).
-  const effectiveSub = parsed.sub ?? queryParsed.sub;
+  const effectiveSub = parsed.sub ?? requestParsed?.sub ?? queryParsed.sub;
   const finalDir = seasonTargetDir(library.rootPath, effectiveTitle, effectiveYear, effectiveSub);
   const stagingDir = acquireImportStagingDir(library.rootPath, providerId, downloadId);
   const tmpPath = path.join(stagingDir, "download.tmp");

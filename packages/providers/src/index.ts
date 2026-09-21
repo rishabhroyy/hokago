@@ -13,3 +13,9 @@ export {
   type SeasonDedupDeps,
   type SeasonBreakdown,
 } from "./existing-series.js";
+export {
+  resolveQueryExternalIds,
+  findSeriesByExternalIds,
+  type ExternalIdRef,
+  type SeriesIdentityDeps,
+} from "./identity.js";

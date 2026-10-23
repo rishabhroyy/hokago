@@ -90,6 +90,13 @@ export interface AcquireImportDeps extends ExistingSeriesDeps {
    * identity fallback entirely and rely on string matching alone.
    */
   resolveIdentity?: (title: string, year: number | null) => Promise<ExternalIdRef[] | undefined>;
+  /**
+   * Best-effort canonical name for a show the library doesn't hold yet,
+   * from the library's first-choice metadata provider. Consulted only
+   * before creating a NEW series folder; absent or undefined keeps the
+   * parsed title (offline is a non-event).
+   */
+  canonicalTitle?: (libraryId: string, title: string, year: number | null) => Promise<{ title: string; year: number | null } | undefined>;
   /** No bytes at all for this long (initial connect included) -- something's
    * actually stuck, not just slow -- aborts the transfer. Injectable so a
    * test can prove the behavior without a real 5-minute wait. Deliberately
@@ -187,6 +194,32 @@ export async function resolveSeriesDirOnDisk(
 }
 
 /**
+ * About to create a new series folder: name it after what metadata calls
+ * the show, so the folder carries the canonical spelling + year and the
+ * scanner's later lookup is exact. Callers only reach this for a show they
+ * found no row or folder for; the canonical name gets the same row + folder
+ * checks again (a stored AKA/originalTitle can bridge a name the request
+ * string couldn't), so an existing show is reused, never forked or renamed.
+ * Undefined = no canonical name, keep the parse.
+ */
+export async function adoptCanonicalSeries(
+  deps: Pick<AcquireImportDeps, "db" | "canonicalTitle">,
+  libraryId: string,
+  libraryRoot: string,
+  title: string,
+  year: number | null,
+): Promise<{ title: string; year: number | null; dir: string | null } | undefined> {
+  if (!deps.canonicalTitle) return undefined;
+  const canon = await deps.canonicalTitle(libraryId, title, year).catch(() => undefined);
+  if (!canon || !isSeriesLikeTitle(canon.title)) return undefined;
+  const hit = await findExistingSeries(deps, libraryId, canon.title, canon.year).catch(() => undefined);
+  const t = hit?.title ?? canon.title;
+  const y = hit?.year ?? canon.year ?? year;
+  const dir = await resolveSeriesDirOnDisk(libraryRoot, t, y).catch(() => null);
+  return { title: t, year: y, dir };
+}
+
+/**
  * The provider's side of the contract: an ordinary streamed HTTP response,
  * Content-Length set to the final size, connection stays open until
  * complete, ends normally on success or is destroyed/truncated on failure
@@ -263,8 +296,8 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
       `acquire import (${providerId}/${downloadId}): could not determine series title from provider title/query — refusing to create a junk folder`,
     );
   }
-  const effectiveTitle = existing?.title ?? (named as typeof queryParsed).title;
-  const effectiveYear = existing?.year ?? named?.year ?? queryParsed.year ?? parsed.year;
+  let effectiveTitle = existing?.title ?? (named as typeof queryParsed).title;
+  let effectiveYear = existing?.year ?? named?.year ?? queryParsed.year ?? parsed.year;
   // Season lives only in the folder: prefer the provider's own signal, fall
   // back to the request's ("Season 1 BD 1080p" hid it pre-clean; a provider
   // title with no season at all still lands in the requested season).
@@ -274,7 +307,11 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   // the real one ("Frieren Beyond Journeys End" vs "Frieren Beyond Journey's
   // End") — deriving blindly forks a duplicate show even when matching
   // itself succeeded. Best-effort; falls back to the derived convention.
-  const existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
+  let existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
+  if (!existing && !existingDir) {
+    const canon = await adoptCanonicalSeries(deps, libraryId, library.rootPath, effectiveTitle, effectiveYear);
+    if (canon) ({ title: effectiveTitle, year: effectiveYear, dir: existingDir } = canon);
+  }
   const finalDir = existingDir
     ? effectiveSub
       ? path.join(existingDir, effectiveSub)

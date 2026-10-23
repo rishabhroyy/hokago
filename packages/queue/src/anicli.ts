@@ -39,9 +39,32 @@ const ORDINAL: Record<string, number> = {
  * (same unambiguous allowlist — never bare "web"/"dvd"/"multi", which are
  * real title words) but extended for acquire titles: a lone "BD" and
  * resolutions with glued suffixes ("1080pH") both occur in the wild.
+ * Matched BEFORE dots become spaces, or dotted tokens ("H.264", "DDP2.0")
+ * could never match; the space forms ("H 264", "DDP2 0") are listed too.
  */
 const ACQUIRE_QUALITY_TOKEN =
-  /\b(?:\d{3,4}p[a-z0-9]*|\d{3,4}i|4k|uhd|hdr10\+?|hdr|dv|dolbyvision|blu-?ray|bd(?:rip|remux)?|dvd(?:rip)?|web-?dl|webrip|hdtv|hdrip|remux|bdremux|x264|x265|h\.?264|h\.?265|hevc|avc|av1|xvid|divx|10-?bit|8-?bit|hi10p|aac|e?ac-?3|dts(?:-?hd|-?ma)?|truehd|atmos|flac|opus|mp3|5\.1|7\.1|dual[- ]?audio|proper|repack|rerip)\b/gi;
+  /\b(?:\d{3,4}p[a-z0-9]*|\d{3,4}i|4k|uhd|hdr10\+?|hdr|dv|dolbyvision|blu-?ray|bd(?:rip|remux)?|dvd(?:rip)?|web-?dl|webrip|hdtv|hdrip|remux|bdremux|x264|x265|h[. ]?264|h[. ]?265|hevc|avc|av1|xvid|divx|10-?bit|8-?bit|hi10p|(?:dd[p+]?|aac)\s?[1-7][. ][01]|aac|e?ac-?3|dts(?:-?hd|-?ma)?|truehd|atmos|flac|opus|mp3|5\.1|7\.1|dual[- ]?audio|proper|repack|rerip)\b/gi;
+
+/**
+ * Streaming WEB-DL release tags (service, "COMPLETE", bare DD/DDP) that are
+ * short enough to be real title words. All-upper or all-lower only
+ * (releases write them one way or the other, "iT" excepted, never
+ * title-case) and only stripped once a quality token proved the name is a
+ * release, so "The Complete Works" / "It" survive. Kept in
+ * step with scene.ts's RELEASE_TAG.
+ */
+const ACQUIRE_RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|WEB|COMPLETE|DDP|DD\+?|nf|amzn|dsnp|hmax|atvp|hulu|pcok|pmtp|cr|web|complete|ddp|dd\+?|iT)(?![A-Za-z0-9])/g;
+
+/**
+ * Where a release name's tail starts: the first year, season code or
+ * quality token. Release tags only ever follow the title, so stripping
+ * them from here on leaves a title word alone even in an all-lower-case
+ * name ("the.web.2019.1080p" keeps "the web"). Kept in step with scene.ts.
+ */
+function releaseTailStart(s: string, qualityAt: number): number {
+  const markerAt = s.search(/(?<![A-Za-z0-9])(?:(?:19|20)\d{2}|s\d{1,3}(?:e\d{1,4})?)(?![A-Za-z0-9])/i);
+  return markerAt >= 0 && markerAt < qualityAt ? markerAt : qualityAt;
+}
 
 /** Trailing per-episode suffixes live in the episodeRange/filename, never the series folder. */
 function stripTrailingEpisodeMarker(body: string): string {
@@ -86,11 +109,16 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
   // Pre-clean release junk before any season/year parse so a quality tail
   // can neither hide a season token nor poison the title used for
   // findExistingSeries. Clean titles pass through unchanged.
-  let pre = s.replace(/[._]/g, " ");
-  ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
-  const hadQuality = ACQUIRE_QUALITY_TOKEN.test(pre);
-  ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
-  pre = pre.replace(ACQUIRE_QUALITY_TOKEN, " ");
+  // Dots survive until after token stripping ("H.264"); underscores are
+  // word chars to \b, so they go first.
+  let pre = s.replace(/_/g, " ");
+  const qualityAt = pre.search(ACQUIRE_QUALITY_TOKEN);
+  const hadQuality = qualityAt >= 0;
+  const tailAt = releaseTailStart(pre, qualityAt);
+  // Same-length blanking keeps tailAt valid for the tag strip below.
+  pre = pre.replace(ACQUIRE_QUALITY_TOKEN, (m) => " ".repeat(m.length));
+  if (hadQuality) pre = pre.slice(0, tailAt) + pre.slice(tailAt).replace(ACQUIRE_RELEASE_TAG, " ");
+  pre = pre.replace(/\./g, " ");
   // Bracketed year captured before brackets are stripped below — "[2011]"
   // would otherwise vanish with the release groups and the folder would lose
   // its year suffix (same loss the anywhere-paren branch below prevents).
@@ -114,10 +142,12 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
     // quality tail, leaving "Anohana 2011"). Four digits 1900-2099 at the
     // end are never an episode number (episodes are ≤100, long-runners
     // stay <1900), so this cannot misfire on "Show 12" or "One Piece 1071".
-    const trailingBareYear = /(?:^|\s)((?:19|20)\d{2})\s*$/.exec(pre);
+    // Release names put the year before the season ("Show 2019 S02"), so a
+    // trailing SxxEyy may ride along; it stays in body for the season parse.
+    const trailingBareYear = /(?:^|\s)((?:19|20)\d{2})(\s+s\d{1,3}(?:\s*e\d{1,4})?)?\s*$/i.exec(pre);
     if (trailingBareYear) {
       year = Number(trailingBareYear[1]);
-      body = pre.slice(0, trailingBareYear.index).trim();
+      body = (pre.slice(0, trailingBareYear.index) + (trailingBareYear[2] ?? "")).trim();
     } else {
       // Year mid-string with a season after it ("Anohana (2011) Season 1"
       // → quality tail already gone). Trailing-only extraction would drop

@@ -19,9 +19,24 @@ const YEAR_BRACKETED = /[([]\s*((?:19|20)\d{2})\s*[\])]/;
 const YEAR_BARE = /\b((?:19|20)\d{2})\b/;
 
 // Scene-release tail junk. Kept deliberately unambiguous — no bare "web",
-// "dvd", "multi" etc., which are real words in real titles.
+// "dvd", "multi" etc., which are real words in real titles. Matched before
+// dots become spaces so dotted tokens ("H.264", "DDP2.0") can match.
 const QUALITY_TOKEN =
-  /\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10\+?|hdr|dv|blu-?ray|bdrip|bdremux|remux|web-?dl|webrip|hdtv|hdrip|dvdrip|x264|x265|h\.?264|h\.?265|hevc|avc|av1|xvid|divx|10-?bit|8-?bit|aac|e?ac-?3|dts(-?hd|-?ma)?|truehd|atmos|flac|opus|mp3|5\.1|7\.1|proper|repack|rerip)\b/gi;
+  /\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10\+?|hdr|dv|blu-?ray|bdrip|bdremux|remux|web-?dl|webrip|hdtv|hdrip|dvdrip|x264|x265|h[. ]?264|h[. ]?265|hevc|avc|av1|xvid|divx|10-?bit|8-?bit|(?:dd[p+]?|aac)\s?[1-7][. ][01]|aac|e?ac-?3|dts(-?hd|-?ma)?|truehd|atmos|flac|opus|mp3|5\.1|7\.1|proper|repack|rerip)\b/gi;
+
+// Streaming WEB-DL release tags short enough to be real title words —
+// all-upper or all-lower only (never title-case, so "Complete"/"It" in a
+// title survive), and only stripped once QUALITY_TOKEN proved the name is a
+// release. Kept in step with packages/queue/src/anicli.ts's ACQUIRE_RELEASE_TAG.
+const RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|WEB|COMPLETE|DDP|DD\+?|nf|amzn|dsnp|hmax|atvp|hulu|pcok|pmtp|cr|web|complete|ddp|dd\+?|iT)(?![A-Za-z0-9])/g;
+
+// Release tags only ever follow the title: their tail starts at the first
+// year, season code or quality token, so "the.web.2019.1080p" keeps "web".
+// Kept in step with packages/queue/src/anicli.ts's releaseTailStart.
+function releaseTailStart(s: string, qualityAt: number): number {
+  const markerAt = s.search(/(?<![A-Za-z0-9])(?:(?:19|20)\d{2}|s\d{1,3}(?:e\d{1,4})?)(?![A-Za-z0-9])/i);
+  return markerAt >= 0 && markerAt < qualityAt ? markerAt : qualityAt;
+}
 
 function cleanTitle(raw: string): string | null {
   const cleaned = raw
@@ -46,13 +61,17 @@ function yearOf(base: string): number | null {
  * and the match gate can never accept anything.
  */
 function stripSceneJunk(raw: string, year: number | null): string {
-  let s = ` ${raw} `.replace(/[._]/g, " "); // padded so \b tokens match at the edges
-  const hadQuality = QUALITY_TOKEN.test(s);
-  QUALITY_TOKEN.lastIndex = 0;
-  s = s.replace(QUALITY_TOKEN, " ");
+  let s = ` ${raw} `.replace(/_/g, " "); // padded so \b tokens match at the edges; dots kept for "H.264"
+  const qualityAt = s.search(QUALITY_TOKEN);
+  const hadQuality = qualityAt >= 0;
+  const tailAt = releaseTailStart(s, qualityAt);
+  s = s.replace(QUALITY_TOKEN, (m) => " ".repeat(m.length)); // same length keeps tailAt valid
+  if (hadQuality) s = s.slice(0, tailAt) + s.slice(tailAt).replace(RELEASE_TAG, " ");
+  s = s.replace(/\./g, " ");
   if (year !== null) s = s.replace(new RegExp(`[([]?\\s*${year}\\s*[)\\]]?`), " ");
   s = s.replace(/[\[(][^\])]*[\])]/g, " ");
   if (hadQuality) s = s.replace(/-[A-Za-z0-9]+(?=\s*$)/, " "); // -GROUP rides the quality tail
+  if (hadQuality) s = s.replace(/\ss\d{1,2}\s*$/i, " "); // season-pack "S01" belongs to the season, not the title
   return s.replace(/\s+/g, " ").trim().replace(/[-\s]+$/, "").replace(/^[-\s]+/, "");
 }
 

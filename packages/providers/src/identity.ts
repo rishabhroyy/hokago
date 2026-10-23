@@ -84,6 +84,41 @@ export async function resolveQueryExternalIds(
   }
 }
 
+/**
+ * Best-effort query → canonical series name ({title, year}) from the
+ * library's own first-choice provider, for naming a NEW series folder
+ * after what metadata will call the show rather than after the request
+ * string ("crash landing on you" → "Crash Landing on You" (2019)). Same
+ * acceptance gate and process budget as resolveQueryExternalIds; the
+ * English variant wins over a romaji primary so the folder reads the way
+ * most requests are typed. Never throws: undefined means keep the parse.
+ */
+export async function resolveQueryCanonical(
+  title: string,
+  year: number | null,
+  search: IdentitySearchFn,
+  opts?: { timeoutMs?: number },
+): Promise<{ title: string; year: number | null } | undefined> {
+  try {
+    const q = title.trim();
+    if (!q) return undefined;
+    if (!takeIdentityBudget()) return undefined;
+    const query: MetadataQuery = { title: q, year: year ?? undefined, kind: "SERIES" };
+    const timeoutMs = opts?.timeoutMs ?? 2500;
+    // Raced as well as signalled: not every provider's search honours the signal.
+    const { matches } = await Promise.race([
+      search(query, { signal: AbortSignal.timeout(timeoutMs) }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs).unref()),
+    ]);
+    const accepted = findAcceptedMatch(query, matches);
+    if (!accepted) return undefined;
+    const name = accepted.titles?.find((t) => t.type === "ENGLISH")?.value ?? accepted.title;
+    return name.trim() ? { title: name.trim(), year: accepted.year ?? year } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface SeriesIdentityDeps {
   db: {
     externalId: {

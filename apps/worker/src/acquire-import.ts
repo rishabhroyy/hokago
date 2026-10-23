@@ -90,6 +90,13 @@ export interface AcquireImportDeps extends ExistingSeriesDeps {
    * identity fallback entirely and rely on string matching alone.
    */
   resolveIdentity?: (title: string, year: number | null) => Promise<ExternalIdRef[] | undefined>;
+  /**
+   * Best-effort canonical name for a show the library doesn't hold yet,
+   * from the library's first-choice metadata provider. Consulted only
+   * before creating a NEW series folder; absent or undefined keeps the
+   * parsed title (offline is a non-event).
+   */
+  canonicalTitle?: (libraryId: string, title: string, year: number | null) => Promise<{ title: string; year: number | null } | undefined>;
   /** No bytes at all for this long (initial connect included) -- something's
    * actually stuck, not just slow -- aborts the transfer. Injectable so a
    * test can prove the behavior without a real 5-minute wait. Deliberately
@@ -263,8 +270,8 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
       `acquire import (${providerId}/${downloadId}): could not determine series title from provider title/query — refusing to create a junk folder`,
     );
   }
-  const effectiveTitle = existing?.title ?? (named as typeof queryParsed).title;
-  const effectiveYear = existing?.year ?? named?.year ?? queryParsed.year ?? parsed.year;
+  let effectiveTitle = existing?.title ?? (named as typeof queryParsed).title;
+  let effectiveYear = existing?.year ?? named?.year ?? queryParsed.year ?? parsed.year;
   // Season lives only in the folder: prefer the provider's own signal, fall
   // back to the request's ("Season 1 BD 1080p" hid it pre-clean; a provider
   // title with no season at all still lands in the requested season).
@@ -274,7 +281,19 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   // the real one ("Frieren Beyond Journeys End" vs "Frieren Beyond Journey's
   // End") — deriving blindly forks a duplicate show even when matching
   // itself succeeded. Best-effort; falls back to the derived convention.
-  const existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
+  let existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
+  // About to create a new series folder: name it after what metadata calls
+  // the show, so the folder carries the canonical spelling + year and the
+  // scanner's later lookup is exact. Only for genuinely new shows (no row,
+  // no folder) — an existing identity is never renamed out from under it.
+  if (!existing && !existingDir && deps.canonicalTitle) {
+    const canon = await deps.canonicalTitle(libraryId, effectiveTitle, effectiveYear).catch(() => undefined);
+    if (canon && isSeriesLikeTitle(canon.title)) {
+      effectiveTitle = canon.title;
+      effectiveYear = canon.year ?? effectiveYear;
+      existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
+    }
+  }
   const finalDir = existingDir
     ? effectiveSub
       ? path.join(existingDir, effectiveSub)

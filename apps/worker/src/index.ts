@@ -41,7 +41,7 @@ import { buildDownloadArgs } from "@hokago/ffmpeg/download";
 import { pickVideoEncoder } from "@hokago/ffmpeg/device-profile";
 import { spawnFfmpeg } from "@hokago/ffmpeg/spawn";
 import { getHwaccel, hwActive, reportHwFailure, type HwaccelState } from "@hokago/ffmpeg/hwaccel";
-import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge, findExistingSeries, resolveQueryExternalIds } from "@hokago/providers";
+import { AniListProvider, JikanProvider, TvMazeProvider, WikipediaProvider, WikidataBridge, findExistingSeries, resolveQueryCanonical, resolveQueryExternalIds } from "@hokago/providers";
 import type { MetadataProvider } from "@hokago/metadata";
 
 const db = new PrismaClient();
@@ -1214,6 +1214,15 @@ const acquireImportWorker = new Worker<AcquireImportJobData>(
       // Best-effort alias-graph fallback for string misses only; the import
       // itself never depends on it (local-first inside processAcquireImport).
       resolveIdentity: (title, year) => resolveQueryExternalIds(title, year),
+      // Same provider the scanner will resolve this library's series with,
+      // so the new folder already carries the name that lookup accepts.
+      canonicalTitle: async (libraryId, title, year) => {
+        const library = await db.library.findUnique({ where: { id: libraryId }, select: { contentProfile: true, providerOrder: true } });
+        const first = library ? buildProviderChain("SERIES", library.contentProfile, library.providerOrder)[0] : undefined;
+        const provider = first ? METADATA_PROVIDERS[first] : undefined;
+        if (!provider) return undefined;
+        return resolveQueryCanonical(title, year, (q, o) => provider.search(q, o));
+      },
     }),
   { connection, concurrency: 2 },
 );

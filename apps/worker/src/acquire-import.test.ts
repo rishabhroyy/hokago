@@ -631,3 +631,79 @@ test("processAcquireImport reuses the on-disk folder with no DB row at all", asy
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("processAcquireImport names a new show's folder after its canonical metadata name", async () => {
+  const payload = Buffer.from("canonical bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  const looked: string[] = [];
+  try {
+    const raw = "Crash.Landing.on.You.S01.1080p.NF.WEB-DL.DDP2.0.H.264-NTb";
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-c1", baseUrl, libraryId: "lib-1", query: raw, title: raw }),
+      {
+        db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+        canonicalTitle: async (_lib, title) => {
+          looked.push(title);
+          return { title: "Crash Landing on You", year: 2019 };
+        },
+      },
+    );
+    assert.deepEqual(looked, ["Crash Landing on You"], "lookup gets the cleaned parse, not the release name");
+    const files = await readdir(seasonTargetDir(root, "Crash Landing on You", 2019, "Season 1"));
+    assert.equal(files.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("processAcquireImport skips the canonical lookup for a show already in the library, and survives a miss", async () => {
+  const payload = Buffer.from("existing bytes");
+  const { baseUrl, server } = await startServer((req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length) });
+    res.end(payload);
+  });
+
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-import-test-"));
+  let calls = 0;
+  try {
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-c2", baseUrl, libraryId: "lib-1", query: "Frieren", title: "Frieren" }),
+      {
+        db: {
+          library: { findUnique: async () => ({ rootPath: root }) },
+          mediaItem: { findMany: async () => [{ id: "s1", title: "Frieren", originalTitle: null, year: null }] },
+        },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+        canonicalTitle: async () => {
+          calls++;
+          return { title: "Something Else", year: 2000 };
+        },
+      },
+    );
+    assert.equal(calls, 0, "an existing identity is never renamed");
+    assert.equal((await readdir(path.join(root, "Frieren"))).length, 1);
+
+    await processAcquireImport(
+      fakeJob({ providerId: "ext1", downloadId: "dl-c3", baseUrl, libraryId: "lib-1", query: "Some New Show", title: "Some New Show" }),
+      {
+        db: { library: { findUnique: async () => ({ rootPath: root }) }, mediaItem: { findMany: async () => [] } },
+        enqueueScan: async () => {},
+        scanSettleMs: 0,
+        canonicalTitle: async () => undefined,
+      },
+    );
+    assert.equal((await readdir(path.join(root, "Some New Show"))).length, 1, "a lookup miss keeps the parsed name");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

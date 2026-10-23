@@ -15,6 +15,7 @@ export {
 } from "./existing-series.js";
 export {
   resolveQueryExternalIds,
+  resolveQueryCanonical,
   findSeriesByExternalIds,
   type ExternalIdRef,
   type SeriesIdentityDeps,

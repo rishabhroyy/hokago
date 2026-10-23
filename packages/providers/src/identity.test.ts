@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { __resetIdentityBudgetForTests, findSeriesByExternalIds, resolveQueryExternalIds } from "./identity.js";
+import { __resetIdentityBudgetForTests, findSeriesByExternalIds, resolveQueryCanonical, resolveQueryExternalIds } from "./identity.js";
 
 function fakeIdentityDb(
   externalRows: { mediaItemId: string | null; provider: string; providerId: string }[],
@@ -131,4 +131,26 @@ test("resolveQueryExternalIds: exhausted budget degrades to undefined without se
   } finally {
     __resetIdentityBudgetForTests();
   }
+});
+
+test("resolveQueryCanonical: accepted match yields its English name and year", async () => {
+  __resetIdentityBudgetForTests();
+  const canon = await resolveQueryCanonical("Frieren", null, async () => ({
+    matches: [
+      {
+        providerId: "139585",
+        title: "Sousou no Frieren",
+        year: 2023,
+        titles: [{ type: "ENGLISH", value: "Frieren: Beyond Journey's End" }],
+      },
+    ],
+  }));
+  assert.deepEqual(canon, { title: "Frieren: Beyond Journey's End", year: 2023 });
+});
+
+test("resolveQueryCanonical: no accepted match, faults and hangs all yield undefined", async () => {
+  __resetIdentityBudgetForTests();
+  assert.equal(await resolveQueryCanonical("Frieren", null, async () => ({ matches: [{ providerId: "1", title: "Something Else" }] })), undefined);
+  assert.equal(await resolveQueryCanonical("Frieren", null, async () => { throw new Error("boom"); }), undefined);
+  assert.equal(await resolveQueryCanonical("Frieren", null, () => new Promise(() => {}), { timeoutMs: 10 }), undefined);
 });

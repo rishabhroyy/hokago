@@ -27,3 +27,7 @@ test("parseScene strips dotted codec/audio tokens from movie filenames", () => {
   assert.equal(p.title, "Your Name");
   assert.equal(p.year, 2016);
 });
+
+test("cleanFolderTitle strips lower-case scene release tags", () => {
+  assert.deepEqual(cleanFolderTitle("show.name.s01.1080p.web.h264-grp"), { title: "show name", year: null });
+});

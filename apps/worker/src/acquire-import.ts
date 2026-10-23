@@ -194,6 +194,32 @@ export async function resolveSeriesDirOnDisk(
 }
 
 /**
+ * About to create a new series folder: name it after what metadata calls
+ * the show, so the folder carries the canonical spelling + year and the
+ * scanner's later lookup is exact. Callers only reach this for a show they
+ * found no row or folder for; the canonical name gets the same row + folder
+ * checks again (a stored AKA/originalTitle can bridge a name the request
+ * string couldn't), so an existing show is reused, never forked or renamed.
+ * Undefined = no canonical name, keep the parse.
+ */
+export async function adoptCanonicalSeries(
+  deps: Pick<AcquireImportDeps, "db" | "canonicalTitle">,
+  libraryId: string,
+  libraryRoot: string,
+  title: string,
+  year: number | null,
+): Promise<{ title: string; year: number | null; dir: string | null } | undefined> {
+  if (!deps.canonicalTitle) return undefined;
+  const canon = await deps.canonicalTitle(libraryId, title, year).catch(() => undefined);
+  if (!canon || !isSeriesLikeTitle(canon.title)) return undefined;
+  const hit = await findExistingSeries(deps, libraryId, canon.title, canon.year).catch(() => undefined);
+  const t = hit?.title ?? canon.title;
+  const y = hit?.year ?? canon.year ?? year;
+  const dir = await resolveSeriesDirOnDisk(libraryRoot, t, y).catch(() => null);
+  return { title: t, year: y, dir };
+}
+
+/**
  * The provider's side of the contract: an ordinary streamed HTTP response,
  * Content-Length set to the final size, connection stays open until
  * complete, ends normally on success or is destroyed/truncated on failure
@@ -282,17 +308,9 @@ export async function processAcquireImport(job: Job<AcquireImportJobData>, deps:
   // End") — deriving blindly forks a duplicate show even when matching
   // itself succeeded. Best-effort; falls back to the derived convention.
   let existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
-  // About to create a new series folder: name it after what metadata calls
-  // the show, so the folder carries the canonical spelling + year and the
-  // scanner's later lookup is exact. Only for genuinely new shows (no row,
-  // no folder) — an existing identity is never renamed out from under it.
-  if (!existing && !existingDir && deps.canonicalTitle) {
-    const canon = await deps.canonicalTitle(libraryId, effectiveTitle, effectiveYear).catch(() => undefined);
-    if (canon && isSeriesLikeTitle(canon.title)) {
-      effectiveTitle = canon.title;
-      effectiveYear = canon.year ?? effectiveYear;
-      existingDir = await resolveSeriesDirOnDisk(library.rootPath, effectiveTitle, effectiveYear).catch(() => null);
-    }
+  if (!existing && !existingDir) {
+    const canon = await adoptCanonicalSeries(deps, libraryId, library.rootPath, effectiveTitle, effectiveYear);
+    if (canon) ({ title: effectiveTitle, year: effectiveYear, dir: existingDir } = canon);
   }
   const finalDir = existingDir
     ? effectiveSub

@@ -25,9 +25,10 @@ const QUALITY_TOKEN =
   /\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10\+?|hdr|dv|blu-?ray|bdrip|bdremux|remux|web-?dl|webrip|hdtv|hdrip|dvdrip|x264|x265|h[. ]?264|h[. ]?265|hevc|avc|av1|xvid|divx|10-?bit|8-?bit|(?:dd[p+]?|aac)\s?[1-7][. ][01]|aac|e?ac-?3|dts(-?hd|-?ma)?|truehd|atmos|flac|opus|mp3|5\.1|7\.1|proper|repack|rerip)\b/gi;
 
 // Streaming WEB-DL release tags short enough to be real title words —
-// case-sensitive, and only stripped once QUALITY_TOKEN proved the name is a
+// all-upper or all-lower only (never title-case, so "Complete"/"It" in a
+// title survive), and only stripped once QUALITY_TOKEN proved the name is a
 // release. Kept in step with packages/queue/src/anicli.ts's ACQUIRE_RELEASE_TAG.
-const RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|iT|WEB|COMPLETE|DDP|DD\+?)(?![A-Za-z0-9])/g;
+const RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|WEB|COMPLETE|DDP|DD\+?|nf|amzn|dsnp|hmax|atvp|hulu|pcok|pmtp|cr|web|complete|ddp|dd\+?|iT)(?![A-Za-z0-9])/g;
 
 function cleanTitle(raw: string): string | null {
   const cleaned = raw

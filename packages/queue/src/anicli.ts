@@ -47,12 +47,13 @@ const ACQUIRE_QUALITY_TOKEN =
 
 /**
  * Streaming WEB-DL release tags (service, "COMPLETE", bare DD/DDP) that are
- * short enough to be real title words. Case-sensitive (releases write them
- * upper-case, "iT" excepted) and only stripped once a quality token proved
- * the name is a release, so a clean "The Complete Works" survives. Kept in
+ * short enough to be real title words. All-upper or all-lower only
+ * (releases write them one way or the other, "iT" excepted, never
+ * title-case) and only stripped once a quality token proved the name is a
+ * release, so "The Complete Works" / "It" survive. Kept in
  * step with scene.ts's RELEASE_TAG.
  */
-const ACQUIRE_RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|iT|WEB|COMPLETE|DDP|DD\+?)(?![A-Za-z0-9])/g;
+const ACQUIRE_RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|WEB|COMPLETE|DDP|DD\+?|nf|amzn|dsnp|hmax|atvp|hulu|pcok|pmtp|cr|web|complete|ddp|dd\+?|iT)(?![A-Za-z0-9])/g;
 
 /** Trailing per-episode suffixes live in the episodeRange/filename, never the series folder. */
 function stripTrailingEpisodeMarker(body: string): string {

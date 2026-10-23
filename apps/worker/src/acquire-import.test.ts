@@ -5,7 +5,7 @@ import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { processAcquireImport, acquireImportStagingDir, resolveSeriesDirOnDisk } from "./acquire-import.js";
+import { adoptCanonicalSeries, processAcquireImport, acquireImportStagingDir, resolveSeriesDirOnDisk } from "./acquire-import.js";
 import { seasonTargetDir, type AcquireImportJobData, type Job } from "@hokago/queue";
 
 async function startServer(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void): Promise<{ baseUrl: string; server: Server }> {
@@ -705,5 +705,26 @@ test("processAcquireImport skips the canonical lookup for a show already in the 
   } finally {
     await rm(root, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("adoptCanonicalSeries re-checks the library under the canonical name before naming a new folder", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "acquire-canon-test-"));
+  try {
+    // Only the canonical name bridges to the stored row (via its originalTitle).
+    const db = {
+      library: { findUnique: async () => ({ rootPath: root }) },
+      mediaItem: {
+        findMany: async () => [{ id: "s1", title: "CLOY", originalTitle: "Crash Landing on You", year: 2019 }],
+      },
+    };
+    const canon = await adoptCanonicalSeries(
+      { db, canonicalTitle: async () => ({ title: "Crash Landing on You", year: 2019 }) },
+      "lib-1", root, "crash landing", null,
+    );
+    assert.deepEqual(canon, { title: "CLOY", year: 2019, dir: null });
+    assert.equal(await adoptCanonicalSeries({ db }, "lib-1", root, "x", null), undefined, "no lookup wired = keep the parse");
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

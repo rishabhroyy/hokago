@@ -111,3 +111,9 @@ test("parseAnicliQuery keeps release-tag-looking title words in clean queries", 
   assert.equal(parseAnicliQuery("It").title, "It");
   assert.equal(parseAnicliQuery("NF").title, "NF");
 });
+
+test("parseAnicliQuery strips lower-case scene release tags but not title-case words", () => {
+  assert.deepEqual(parseAnicliQuery("show.name.s01.1080p.web.h264-grp"), { title: "show name", year: null, sub: "Season 1", season: 1 });
+  assert.equal(parseAnicliQuery("It 2017 1080p").title, "It");
+  assert.equal(parseAnicliQuery("The Complete Works 1080p").title, "The Complete Works");
+});

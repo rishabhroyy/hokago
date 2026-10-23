@@ -27,7 +27,7 @@ import {
   type AcquireImportJobData,
   type Job,
 } from "@hokago/queue";
-import { processAcquireImport, resolveSeriesDirOnDisk } from "./acquire-import.js";
+import { adoptCanonicalSeries, processAcquireImport, resolveSeriesDirOnDisk } from "./acquire-import.js";
 import { ingestLibrary, storeArtwork } from "@hokago/scanner/ingest";
 import { pruneMissingMedia } from "@hokago/scanner/prune";
 import { resolveMetadataStep, buildProviderChain } from "@hokago/scanner/metadata";
@@ -132,6 +132,17 @@ const METADATA_PROVIDERS: Record<string, MetadataProvider> = {
 } as const;
 
 const wikidataBridge = new WikidataBridge();
+
+// Canonical name for a show about to get a new folder (acquire + ani-cli):
+// same provider the scanner will resolve this library's series with, so the
+// new folder already carries the name that lookup accepts.
+async function canonicalSeriesTitle(libraryId: string, title: string, year: number | null) {
+  const library = await db.library.findUnique({ where: { id: libraryId }, select: { contentProfile: true, providerOrder: true } });
+  const first = library ? buildProviderChain("SERIES", library.contentProfile, library.providerOrder)[0] : undefined;
+  const provider = first ? METADATA_PROVIDERS[first] : undefined;
+  if (!provider) return undefined;
+  return resolveQueryCanonical(title, year, (q, o) => provider.search(q, o));
+}
 
 const METADATA_QUEUE_NAME: Record<string, string> = {
   TVMAZE: QUEUE_NAMES.METADATA_TVMAZE,
@@ -959,9 +970,13 @@ async function processAnicli(job: Job<AnicliDownloadJobData>): Promise<void> {
     parsed.title,
     parsed.year,
   ).catch(() => undefined);
-  const anicliTitle = anicliExisting?.title ?? parsed.title;
-  const anicliYear = anicliExisting?.year ?? parsed.year;
-  const anicliDir = await resolveSeriesDirOnDisk(rec.library.rootPath, anicliTitle, anicliYear).catch(() => null);
+  let anicliTitle = anicliExisting?.title ?? parsed.title;
+  let anicliYear = anicliExisting?.year ?? parsed.year;
+  let anicliDir = await resolveSeriesDirOnDisk(rec.library.rootPath, anicliTitle, anicliYear).catch(() => null);
+  if (!anicliExisting && !anicliDir) {
+    const canon = await adoptCanonicalSeries({ db, canonicalTitle: canonicalSeriesTitle }, rec.libraryId, rec.library.rootPath, anicliTitle, anicliYear);
+    if (canon) ({ title: anicliTitle, year: anicliYear, dir: anicliDir } = canon);
+  }
   const finalDir = anicliDir
     ? parsed.sub
       ? path.join(anicliDir, parsed.sub)
@@ -1214,15 +1229,7 @@ const acquireImportWorker = new Worker<AcquireImportJobData>(
       // Best-effort alias-graph fallback for string misses only; the import
       // itself never depends on it (local-first inside processAcquireImport).
       resolveIdentity: (title, year) => resolveQueryExternalIds(title, year),
-      // Same provider the scanner will resolve this library's series with,
-      // so the new folder already carries the name that lookup accepts.
-      canonicalTitle: async (libraryId, title, year) => {
-        const library = await db.library.findUnique({ where: { id: libraryId }, select: { contentProfile: true, providerOrder: true } });
-        const first = library ? buildProviderChain("SERIES", library.contentProfile, library.providerOrder)[0] : undefined;
-        const provider = first ? METADATA_PROVIDERS[first] : undefined;
-        if (!provider) return undefined;
-        return resolveQueryCanonical(title, year, (q, o) => provider.search(q, o));
-      },
+      canonicalTitle: canonicalSeriesTitle,
     }),
   { connection, concurrency: 2 },
 );

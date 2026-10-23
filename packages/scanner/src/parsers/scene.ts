@@ -30,6 +30,14 @@ const QUALITY_TOKEN =
 // release. Kept in step with packages/queue/src/anicli.ts's ACQUIRE_RELEASE_TAG.
 const RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|WEB|COMPLETE|DDP|DD\+?|nf|amzn|dsnp|hmax|atvp|hulu|pcok|pmtp|cr|web|complete|ddp|dd\+?|iT)(?![A-Za-z0-9])/g;
 
+// Release tags only ever follow the title: their tail starts at the first
+// year, season code or quality token, so "the.web.2019.1080p" keeps "web".
+// Kept in step with packages/queue/src/anicli.ts's releaseTailStart.
+function releaseTailStart(s: string, qualityAt: number): number {
+  const markerAt = s.search(/(?<![A-Za-z0-9])(?:(?:19|20)\d{2}|s\d{1,3}(?:e\d{1,4})?)(?![A-Za-z0-9])/i);
+  return markerAt >= 0 && markerAt < qualityAt ? markerAt : qualityAt;
+}
+
 function cleanTitle(raw: string): string | null {
   const cleaned = raw
     .replace(/^[\[(][^\])]*[\])]\s*/, "") // leading [ReleaseGroup]
@@ -54,10 +62,11 @@ function yearOf(base: string): number | null {
  */
 function stripSceneJunk(raw: string, year: number | null): string {
   let s = ` ${raw} `.replace(/_/g, " "); // padded so \b tokens match at the edges; dots kept for "H.264"
-  const hadQuality = QUALITY_TOKEN.test(s);
-  QUALITY_TOKEN.lastIndex = 0;
-  s = s.replace(QUALITY_TOKEN, " ");
-  if (hadQuality) s = s.replace(RELEASE_TAG, " ");
+  const qualityAt = s.search(QUALITY_TOKEN);
+  const hadQuality = qualityAt >= 0;
+  const tailAt = releaseTailStart(s, qualityAt);
+  s = s.replace(QUALITY_TOKEN, (m) => " ".repeat(m.length)); // same length keeps tailAt valid
+  if (hadQuality) s = s.slice(0, tailAt) + s.slice(tailAt).replace(RELEASE_TAG, " ");
   s = s.replace(/\./g, " ");
   if (year !== null) s = s.replace(new RegExp(`[([]?\\s*${year}\\s*[)\\]]?`), " ");
   s = s.replace(/[\[(][^\])]*[\])]/g, " ");

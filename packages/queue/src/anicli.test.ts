@@ -117,3 +117,10 @@ test("parseAnicliQuery strips lower-case scene release tags but not title-case w
   assert.equal(parseAnicliQuery("It 2017 1080p").title, "It");
   assert.equal(parseAnicliQuery("The Complete Works 1080p").title, "The Complete Works");
 });
+
+test("parseAnicliQuery keeps a release-tag word that sits in the title, before the release tail", () => {
+  assert.deepEqual(parseAnicliQuery("the.web.2019.1080p.web.h264-grp"), { title: "the web", year: 2019, sub: null, season: null });
+  assert.deepEqual(parseAnicliQuery("complete.strangers.s01.1080p.nf.web-dl.ddp5.1.h.264-grp"), {
+    title: "complete strangers", year: null, sub: "Season 1", season: 1,
+  });
+});

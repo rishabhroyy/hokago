@@ -55,6 +55,17 @@ const ACQUIRE_QUALITY_TOKEN =
  */
 const ACQUIRE_RELEASE_TAG = /(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|HMAX|ATVP|HULU|PCOK|PMTP|CR|WEB|COMPLETE|DDP|DD\+?|nf|amzn|dsnp|hmax|atvp|hulu|pcok|pmtp|cr|web|complete|ddp|dd\+?|iT)(?![A-Za-z0-9])/g;
 
+/**
+ * Where a release name's tail starts: the first year, season code or
+ * quality token. Release tags only ever follow the title, so stripping
+ * them from here on leaves a title word alone even in an all-lower-case
+ * name ("the.web.2019.1080p" keeps "the web"). Kept in step with scene.ts.
+ */
+function releaseTailStart(s: string, qualityAt: number): number {
+  const markerAt = s.search(/(?<![A-Za-z0-9])(?:(?:19|20)\d{2}|s\d{1,3}(?:e\d{1,4})?)(?![A-Za-z0-9])/i);
+  return markerAt >= 0 && markerAt < qualityAt ? markerAt : qualityAt;
+}
+
 /** Trailing per-episode suffixes live in the episodeRange/filename, never the series folder. */
 function stripTrailingEpisodeMarker(body: string): string {
   // 1-4 digits (not 1-3): long-runners cross 1000 episodes ("One Piece
@@ -101,11 +112,12 @@ export function parseAnicliQuery(query: string): ParsedAnicliQuery {
   // Dots survive until after token stripping ("H.264"); underscores are
   // word chars to \b, so they go first.
   let pre = s.replace(/_/g, " ");
-  ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
-  const hadQuality = ACQUIRE_QUALITY_TOKEN.test(pre);
-  ACQUIRE_QUALITY_TOKEN.lastIndex = 0;
-  pre = pre.replace(ACQUIRE_QUALITY_TOKEN, " ");
-  if (hadQuality) pre = pre.replace(ACQUIRE_RELEASE_TAG, " ");
+  const qualityAt = pre.search(ACQUIRE_QUALITY_TOKEN);
+  const hadQuality = qualityAt >= 0;
+  const tailAt = releaseTailStart(pre, qualityAt);
+  // Same-length blanking keeps tailAt valid for the tag strip below.
+  pre = pre.replace(ACQUIRE_QUALITY_TOKEN, (m) => " ".repeat(m.length));
+  if (hadQuality) pre = pre.slice(0, tailAt) + pre.slice(tailAt).replace(ACQUIRE_RELEASE_TAG, " ");
   pre = pre.replace(/\./g, " ");
   // Bracketed year captured before brackets are stripped below — "[2011]"
   // would otherwise vanish with the release groups and the folder would lose

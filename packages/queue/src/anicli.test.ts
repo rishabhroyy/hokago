@@ -88,3 +88,26 @@ test("isSeriesLikeTitle rejects episode identity so it can never name a folder",
   assert.equal(isSeriesLikeTitle("anicli"), false);
   assert.equal(isSeriesLikeTitle(""), false);
 });
+
+test("parseAnicliQuery strips streaming WEB-DL release names down to title + season", () => {
+  assert.deepEqual(parseAnicliQuery("Crash.Landing.on.You.S01.1080p.NF.WEB-DL.DDP2.0.H.264-NTb"), {
+    title: "Crash Landing on You", year: null, sub: "Season 1", season: 1,
+  });
+  assert.deepEqual(parseAnicliQuery("My.Demon.S01.COMPLETE.1080p.NF.WEB-DL.DDP2.0.x264-GRP"), {
+    title: "My Demon", year: null, sub: "Season 1", season: 1,
+  });
+  assert.deepEqual(parseAnicliQuery("Show.Name.2019.S02.1080p.AMZN.WEB-DL.DDP5.1.H.264-GRP"), {
+    title: "Show Name", year: 2019, sub: "Season 2", season: 2,
+  });
+  assert.deepEqual(parseAnicliQuery("Show.Name.S01E03.720p.NF.WEB-DL.DD+5.1.x264-GRP"), {
+    title: "Show Name", year: null, sub: "Season 1", season: 1,
+  });
+  // Already space-separated form of the same tail.
+  assert.equal(parseAnicliQuery("Show Name S01 1080p iT WEB-DL DDP 5 1 H 264-GRP").title, "Show Name");
+});
+
+test("parseAnicliQuery keeps release-tag-looking title words in clean queries", () => {
+  assert.deepEqual(parseAnicliQuery("The Complete Works"), { title: "The Complete Works", year: null, sub: null, season: null });
+  assert.equal(parseAnicliQuery("It").title, "It");
+  assert.equal(parseAnicliQuery("NF").title, "NF");
+});

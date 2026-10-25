@@ -12,7 +12,7 @@ export function cardToTile(item: MediaCard): TileItem {
     title: item.title,
     posterUrl: item.posterUrl,
     subLabel: kindLabel(item.kind),
-    badge: item.isDownloaded ? undefined : "NOT DOWNLOADED",
+    badge: item.isDownloaded ? undefined : "Not downloaded",
   };
 }
 
@@ -20,18 +20,20 @@ export function continueWatchingToTile(entry: ContinueWatchingEntry): TileItem {
   const item = entry.mediaItem;
   const subLabel =
     item.kind === "EPISODE" && item.seasonNumber != null && item.episodeNumber != null
-      ? [entry.seriesTitle, `S${item.seasonNumber}·E${item.episodeNumber}`].filter(Boolean).join(" · ")
+      ? [`S${item.seasonNumber} E${item.episodeNumber}`, entry.seriesTitle].filter(Boolean).join(", ")
       : kindLabel(item.kind);
   return {
     id: item.id,
     title: item.title,
     // Episodes have both posters and backdrops — a continuing episode reads
     // as a landscape "watched so far" card (backdrop), not a vertical poster.
-    posterUrl: item.kind === "EPISODE" ? (item.backdropUrl ?? item.posterUrl) : item.posterUrl,
-    landscape: item.kind === "EPISODE",
+    // Everything in this rail is landscape when it can be (one consistent row
+    // shape); a backdrop-less movie falls back to its poster.
+    posterUrl: item.backdropUrl ?? item.posterUrl,
+    landscape: item.kind === "EPISODE" || item.backdropUrl != null,
     subLabel,
     detailId: entry.detailItemId,
-    badge: entry.upNext ? "NEXT" : undefined,
+    badge: entry.upNext ? "Up next" : undefined,
     progress: !entry.upNext && entry.durationMs ? entry.positionMs / entry.durationMs : undefined,
   };
 }

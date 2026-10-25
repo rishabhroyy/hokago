@@ -103,7 +103,7 @@ export function Hero({
         <div className="pointer-events-none relative z-[3] flex h-full max-w-[640px] flex-col justify-end px-12 pb-11 text-white max-[820px]:px-[22px] max-[820px]:pb-[34px]">
           <div key={`${slide.title}-${active}`} className="pointer-events-auto animate-riseIn">
             <div className="mb-3.5 max-[820px]:mb-3">
-              <span className="inline-flex items-center gap-2 rounded-full border border-white/45 bg-white/20 px-3.5 py-1.5 font-mono text-kicker font-bold uppercase tracking-[0.16em] backdrop-blur-md">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/45 bg-white/20 px-3.5 py-1.5 text-small font-bold backdrop-blur-md">
                 <span className="h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                 {slide.label}
               </span>
@@ -111,21 +111,9 @@ export function Hero({
             <h1 className="mb-3 font-display text-display font-black leading-[1.02] tracking-[-0.015em] drop-shadow-[0_2px_8px_rgba(60,40,30,0.35)] [text-wrap:balance] max-[820px]:text-[34px] max-[820px]:leading-[1.1]">
               {slide.title}
             </h1>
-            <div className="mb-4 flex items-center gap-2.5 text-small font-semibold">
-              {slide.sub && (
-                <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 backdrop-blur-md">{slide.sub}</span>
-              )}
-              {slide.year != null && (
-                <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 font-mono backdrop-blur-md">
-                  {slide.year}
-                </span>
-              )}
-              {slide.timeLeftLabel && (
-                <span className="rounded-full border border-white/40 bg-white/20 px-3 py-1 backdrop-blur-md">
-                  {slide.timeLeftLabel}
-                </span>
-              )}
-            </div>
+            <p className="mb-4 text-meta font-medium text-white/85 drop-shadow-[0_1px_4px_rgba(0,0,0,0.4)]">
+              {[slide.sub, slide.year, slide.timeLeftLabel].filter((x) => x != null && x !== "").join(", ")}
+            </p>
             {slide.progress != null && (
               <div className="mb-5 h-[6px] w-[320px] max-w-full overflow-hidden rounded-full bg-black/25 shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)] max-[820px]:mb-4">
                 <div

@@ -75,8 +75,8 @@ export function TopNav() {
     navigate(path);
   };
 
-  // only the detail page puts artwork under the bar; there it needs a scrim to stay legible
-  const overArt = route.view === "detail" && !scrolled;
+  // home's billboard and the detail banner run under the bar: it's part of the art until you scroll
+  const overArt = (route.view === "home" || route.view === "detail") && !scrolled;
   const linkCls = (active: boolean) =>
     `rounded-full px-3.5 py-[7px] text-meta font-semibold transition-[background-color,opacity,transform] active:scale-95 ${active ? "wii-btn text-white" : "opacity-70 hover:opacity-100 hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)]"}`;
   const iconBtn = (active: boolean) =>

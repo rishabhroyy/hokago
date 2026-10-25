@@ -160,10 +160,12 @@ export function HomeView() {
   // (right-click menu open/close) — otherwise the row's entrance-stagger
   // re-animates and the posters "bounce" every time.
   return (
-    <div className="pb-6 pt-[86px]">
+    <div className={`pb-6 ${slides.length > 0 ? "" : "pt-[86px]"}`}>
       {slides.length > 0 && (
         <Hero slides={slides} onPlay={openHeroPlay} onDetail={openHeroDetail} onPrefetch={prefetchHero} />
       )}
+      {/* the first rail rides up into the hero's fade */}
+      <div className={`relative z-[2] ${slides.length > 0 ? "-mt-[18vh] max-[820px]:-mt-[10vh]" : ""}`}>
 
       {continueWatchingTiles.length > 0 && (
         <Row
@@ -184,6 +186,7 @@ export function HomeView() {
           onContextMenu={onTileMenu}
         />
       ))}
+      </div>
       {tileMenu && (
         <ContextMenu
           x={tileMenu.x}

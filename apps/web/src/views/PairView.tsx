@@ -2,7 +2,6 @@ import { useState } from "react";
 import { api } from "../api-client";
 import { Icon } from "../ui/icons";
 import { LogoMark } from "../ui/Logo";
-import { ThemeToggle } from "../ui/useTheme";
 import { useWiiSound } from "../ui/useWiiSound";
 
 /**
@@ -41,9 +40,6 @@ export function PairView() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center px-6">
-      <div className="panel fixed right-[max(1.5rem,var(--hokago-safe-right))] top-[calc(var(--hokago-safe-top)+1.5rem)] z-50 rounded-full p-1.5">
-        <ThemeToggle />
-      </div>
       <span className="pointer-events-none absolute left-[12%] top-[16%] h-16 w-16 animate-bob text-wii/50">
         <Icon name="cloudsun" className="h-full w-full" />
       </span>

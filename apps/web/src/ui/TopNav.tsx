@@ -9,7 +9,6 @@ import { isTvShell } from "../native";
 import { Icon } from "./icons";
 import { LogoMark } from "./Logo";
 import { popAndPing, starShower, useKonami, useReducedMotion } from "./effects";
-import { ThemeToggle } from "./useTheme";
 
 function useClock() {
   const [label, setLabel] = useState(() => formatClock(new Date()));
@@ -143,7 +142,6 @@ export function TopNav() {
           )}
         </div>
         <span className="font-mono text-small font-medium tabular-nums text-ink-3 max-[820px]:hidden">{clock}</span>
-        {!tv && <ThemeToggle />}
         {!tv && (
           <button
             className={`icobtn flex h-[38px] w-[38px] items-center justify-center rounded-full transition-all duration-150 ease-snap hover:bg-wii/10 active:scale-90 ${enabled ? "text-wii-deep" : "text-ink-3"}`}

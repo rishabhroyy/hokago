@@ -26,8 +26,8 @@ non-obvious.
    `packages-optional/`, fetched at runtime by the operator. This cannot be retrofitted.
 6. **One hardcoded UI, no theming system.** hokago ships a single design
    (`apps/web/tailwind.config.ts` + `src/app.css` are the source of truth). No
-   `ThemeManifest`, no `data-theme` switching, no per-user theme import. One dark-mode
-   toggle (`.dark` class on `<html>`, `localStorage`-remembered, see `src/ui/useTheme.tsx`).
+   `ThemeManifest`, no `data-theme` switching, no per-user theme import. Dark-only: no
+   light mode, no toggle (`index.html` hardcodes `class="dark"` on `<html>`).
 7. **Anime is not a `MediaKind`.** It's `ContentProfile.ANIME` on the Library, which forks the
    parser and provider order.
 8. **Confidence is derived from `Evidence`, never authored.** `MediaItem.confidence` is a

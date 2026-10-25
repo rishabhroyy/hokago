@@ -1,8 +1,7 @@
 @import "tailwindcss";
 @config "../tailwind.config.ts";
 
-/* Class-based dark mode: the .dark class is applied to <html> (see
-   ui/useTheme.tsx + the inline script in index.html). This variant lets the
+/* Dark-only: index.html hardcodes .dark on <html>. This variant lets the
    `dark:` utilities key off that class instead of the OS media query. */
 @custom-variant dark (&:where(.dark, .dark *));
 

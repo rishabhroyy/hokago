@@ -4,9 +4,9 @@ import path from "node:path";
 
 import { Prisma, PrismaClient, type ContentProfile } from "@hokago/db";
 
-import { resolveArtwork, upsertArtworkDescriptor } from "./artwork.js";
+import { resolveArtwork, upsertArtworkDescriptor, type ArtworkDescriptor } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
-import { INGEST_CONCURRENCY, LOCAL_SIGNAL_TYPES, PROBE_CONCURRENCY, parseSeasonDirName } from "./constants.js";
+import { ARTWORK_SOURCE_PRIORITY, INGEST_CONCURRENCY, LOCAL_SIGNAL_TYPES, PROBE_CONCURRENCY, parseSeasonDirName } from "./constants.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import { extractFonts } from "./fonts.js";
 import { partialHash } from "./hash.js";
@@ -724,7 +724,43 @@ export async function storeArtwork(
     await upsertArtworkDescriptor(db, mediaItemId, art);
     artworkStored += 1;
   }
+  const backdrop = artworkList.find((a) => a.kind === "BACKDROP");
+  if (backdrop) await lendBackdropToAncestors(db, mediaItemId, backdrop);
   return artworkStored;
+}
+
+/**
+ * Seasons and series have no file of their own, so nothing ever generates
+ * them a backdrop and every surface fell back to cropping the (small) poster.
+ * The first episode to resolve a backdrop lends it upward as a GENERATED row
+ * (same bytes, lowest priority) — any real sidecar/provider backdrop on the
+ * season or series still wins.
+ * ponytail: first episode processed wins, not episode 1 — prefer the lowest
+ * episode if mid-series frames start reading as spoilers.
+ */
+async function lendBackdropToAncestors(db: PrismaClient, mediaItemId: string, art: ArtworkDescriptor): Promise<void> {
+  let item = await db.mediaItem.findUnique({ where: { id: mediaItemId }, select: { parentId: true } });
+  while (item?.parentId) {
+    const ancestorId = item.parentId;
+    const has = await db.artwork.count({ where: { mediaItemId: ancestorId, kind: "BACKDROP" } });
+    if (has === 0) {
+      await db.artwork
+        .create({
+          data: {
+            mediaItemId: ancestorId,
+            kind: "BACKDROP",
+            source: "GENERATED",
+            priority: ARTWORK_SOURCE_PRIORITY.GENERATED!,
+            bytesPath: art.bytesPath,
+            hash: art.hash,
+            sizeBytes: art.sizeBytes,
+            meta: { strategy: "inherited", fromMediaItemId: mediaItemId },
+          },
+        })
+        .catch(() => {}); // a sibling episode won the race — its frame is just as good
+    }
+    item = await db.mediaItem.findUnique({ where: { id: ancestorId }, select: { parentId: true } });
+  }
 }
 
 export interface IngestOptions {

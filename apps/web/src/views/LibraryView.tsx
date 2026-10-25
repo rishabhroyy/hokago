@@ -43,33 +43,26 @@ export function LibraryView({ libraryId }: { libraryId: string }) {
   useStaggerEntrance(gridRef, [items]);
 
   return (
-    <div className="min-h-screen px-12 pb-10 pt-[86px] max-[820px]:px-5">
-      <div className="pb-[26px] pt-[30px]">
-        <div className="mb-[18px] flex items-baseline gap-3.5">
-          <h2 className="font-display text-title font-bold tracking-[-0.01em]">{library?.name ?? "Library"}</h2>
-          {items.length > 0 && (
-            <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
-              {items.length} {items.length === 1 ? "title" : "titles"}
-            </span>
-          )}
-        </div>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">
+          {library?.name ?? "Library"}
+          {items.length > 0 && <span className="count">{items.length} {items.length === 1 ? "title" : "titles"}</span>}
+        </h1>
       </div>
 
       {loaded && items.length === 0 ? (
         <div className="flex flex-col items-center px-6 py-[76px] pb-24 text-center">
           <Icon name="sparkle" className="h-10 w-10 text-gold opacity-65" />
-          <p className="mt-[14px] font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-2">
-            nothing on this shelf yet
-          </p>
+          <p className="section-title mt-[14px]">Nothing on this shelf yet</p>
           <span className="mt-1 text-body text-ink-2">
-            scan a folder from the admin panel and it will appear here.
+            Scan a folder from the admin panel and it will appear here.
           </span>
         </div>
       ) : (
         <div
           ref={gridRef}
-          className="grid gap-x-[20px] gap-y-8"
-          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}
+          className="poster-grid"
         >
           {items.map((item) => (
             <Tile key={item.id} item={cardToTile(item)} onOpen={openDetail} onPrefetch={prefetch} />

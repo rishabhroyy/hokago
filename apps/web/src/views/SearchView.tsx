@@ -118,9 +118,8 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
   };
 
   return (
-    <div className="min-h-screen px-12 pb-10 pt-[86px] max-[820px]:px-5">
-      <div className="pb-8 pt-[30px]">
-        <div className="mb-3 font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">search</div>
+    <div className="page">
+      <div className="pb-10">
         <div className="relative">
           <Icon
             name="search"
@@ -131,8 +130,8 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="search movies & series…"
-            className="h-14 w-full rounded-full border-[1.5px] border-line bg-[#FBF8F1] pl-14 pr-14 text-[15px] font-semibold text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:text-ink-3 focus:border-wii focus:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_0_0_3.5px_rgba(79,184,224,0.28)] dark:bg-[#1F1C17] dark:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35)] dark:focus:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35),0_0_0_3.5px_rgba(99,195,230,0.28)]"
+            placeholder="Search movies and series"
+            className="h-14 w-full rounded-full border-[1.5px] border-line bg-[#FBF8F1] pl-14 pr-14 text-[15px] font-semibold text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:text-ink-3 focus:border-wii focus:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_0_0_3.5px_rgba(79,184,224,0.28)] dark:bg-paper dark:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35)] dark:focus:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35),0_0_0_3.5px_rgba(99,195,230,0.28)]"
           />
           {query && (
             <button
@@ -149,20 +148,16 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
             </button>
           )}
         </div>
-        <div className="mt-2.5 pl-2 font-mono text-kicker uppercase tracking-[0.1em] text-ink-3">
-          ↵ opens the first result · esc clears
-        </div>
+        <div className="mt-2.5 pl-5 text-small text-ink-3">Enter opens the first result, Esc clears</div>
       </div>
 
       {q ? (
         <section>
-          <div className="mb-[18px] flex items-baseline gap-3.5">
-            <h2 className="font-display text-title font-bold tracking-[-0.01em]">results for “{query.trim()}”</h2>
-            {index && (
-              <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
-                {results.length} {results.length === 1 ? "title" : "titles"}
-              </span>
-            )}
+          <div className="page-head">
+            <h1 className="page-title">
+              Results for “{query.trim()}”
+              {index && <span className="count">{results.length} {results.length === 1 ? "title" : "titles"}</span>}
+            </h1>
           </div>
           {kinds.length > 1 && (
             <div className="mb-6 flex flex-wrap items-center gap-2">
@@ -185,16 +180,13 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
           ) : results.length === 0 ? (
             <div className="flex flex-col items-center px-6 py-[64px] text-center">
               <Icon name="sparkle" className="h-10 w-10 text-gold opacity-65" />
-              <p className="mt-[14px] font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-2">
-                no matches
-              </p>
-              <span className="mt-1 text-body text-ink-2">nothing matches “{query.trim()}” — try another title.</span>
+              <p className="section-title mt-[14px]">No matches</p>
+              <span className="mt-1 text-body text-ink-2">Nothing matches “{query.trim()}”. Try another title.</span>
             </div>
           ) : (
             <div
               ref={resultsRef}
-              className="grid gap-x-[20px] gap-y-8"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}
+              className="poster-grid"
             >
               {tiles.map((item) => (
                 <Tile key={item.id} item={item} onOpen={openDetail} onPrefetch={prefetch} />
@@ -207,18 +199,14 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
       ) : index.length === 0 ? (
         <div className="flex flex-col items-center px-6 py-[64px] text-center">
           <Icon name="search" className="h-10 w-10 text-wii opacity-70" />
-          <p className="mt-[14px] font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-2">
-            nothing on the shelves yet
-          </p>
-          <span className="mt-1 text-body text-ink-2">add a library from the admin panel and titles will show up here.</span>
+          <p className="section-title mt-[14px]">Nothing on the shelves yet</p>
+          <span className="mt-1 text-body text-ink-2">Add a library from the admin panel and titles will show up here.</span>
         </div>
       ) : (
         <section>
           {suggestions.length > 0 && (
             <div className="mb-9">
-              <div className="mb-3 font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
-                try searching
-              </div>
+              <h2 className="section-title mb-4">Try searching</h2>
               <div className="flex flex-wrap gap-2">
                 {suggestions.map((item) => (
                   <button
@@ -236,13 +224,10 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
             </div>
           )}
           <div>
-            <div className="mb-4 font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">
-              you might like
-            </div>
+            <h2 className="section-title mb-4">You might like</h2>
             <div
               ref={picksRef}
-              className="grid gap-x-[20px] gap-y-8"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}
+              className="poster-grid"
             >
               {picksTiles.map((item) => (
                 <Tile key={item.id} item={item} onOpen={openDetail} onPrefetch={prefetch} />

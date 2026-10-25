@@ -31,9 +31,9 @@ function trackLabel(track: { streamIndex: number; lang: string | null }): string
 // same number but very different quality (see classifyBitrateQuality in
 // apps/api/src/browse-routes.ts for the calibration).
 const BITRATE_TONE_CLASS: Record<NonNullable<MediaItemDetail["bitrateQuality"]>, string> = {
-  poor: "bg-red-500/10 text-red-600 ring-red-500/25 dark:text-red-400",
-  ok: "bg-amber-500/10 text-amber-700 ring-amber-500/25 dark:text-amber-400",
-  good: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:text-emerald-400",
+  poor: "text-red-400",
+  ok: "text-amber-400",
+  good: "text-emerald-400",
 };
 
 /** Overviews arrive as provider HTML (<i>, <b>, <a>, <br>…) — sanitized and rendered for real. */
@@ -69,9 +69,7 @@ function SeasonGrid({
     <div>
       <h3 className="mb-[18px] mt-9 flex items-baseline gap-3 font-display text-section font-bold tracking-[0.01em]">
         {label ?? seasonLabel(season)}
-        <span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-kicker font-bold text-wii-ink ring-1 ring-line">
-          {eps.length}
-        </span>
+        <span className="count !ml-0">{eps.length}</span>
       </h3>
       <div ref={gridRef} className="grid gap-x-[20px] gap-y-7" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))" }}>
         {eps.map((ep) => (
@@ -162,7 +160,8 @@ function BackButton({ onClick }: { onClick: () => void }) {
 
 function Banner({ itemId, backdropUrl, posterUrl, onBack }: { itemId: string; backdropUrl?: string | null; posterUrl?: string | null; onBack: () => void }) {
   return (
-    <header className={`relative h-[340px] overflow-hidden ${HUE_CLASS[hueFor(itemId)]} max-[820px]:h-[300px]`}>
+    <header className="relative h-[420px] overflow-hidden max-[820px]:h-[320px]">
+      <div className={`art-fade absolute inset-0 ${HUE_CLASS[hueFor(itemId)]}`}>
       {backdropUrl ? (
         <img src={backdropUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
       ) : posterUrl ? (
@@ -176,12 +175,11 @@ function Banner({ itemId, backdropUrl, posterUrl, onBack }: { itemId: string; ba
           <Icon name={iconFor(itemId)} className="h-full w-full drop-shadow-[0_6px_14px_rgba(90,50,30,0.3)]" />
         </div>
       )}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[40%] bg-gradient-to-b from-white/25 to-transparent" />
-      <div className="pointer-events-none absolute inset-0 z-[1] bg-[linear-gradient(0deg,#F5EFE4_4%,rgba(245,239,228,0.3)_42%,transparent_72%)]" />
       <div
         className="pointer-events-none absolute inset-0 z-[1] opacity-50"
         style={{ backgroundImage: "radial-gradient(rgba(255,255,255,0.14) 1px, transparent 1.5px)", backgroundSize: "18px 18px" }}
       />
+      </div>
       <BackButton onClick={onBack} />
     </header>
   );
@@ -439,75 +437,57 @@ export function DetailView({ itemId }: { itemId: string }) {
               {item.originalTitle && item.originalTitle !== item.title && (
                 <p className="mb-3 -mt-1 text-body font-medium tracking-[0.02em] text-ink-3">{item.originalTitle}</p>
               )}
-              <div className="mb-5 flex flex-wrap items-center gap-2 text-small font-semibold text-ink-2">
-                <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">
+              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-meta font-medium text-ink-2">
+                {item.year != null && <span className="tabular-nums">{item.year}</span>}
+                <span>
                   {item.kind === "MOVIE" ? "Movie" : "Series"}
+                  {item.kind === "SERIES" && hasEpisodes && `, ${item.episodes.length} episodes`}
                 </span>
-                {item.year != null && (
-                  <span className="rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line">{item.year}</span>
-                )}
                 {item.rating != null && (
-                  <span className="flex items-center gap-1.5 rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line">
-                    <Icon name="star" className="h-3.5 w-3.5 text-wii-deep" />
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <Icon name="star" className="h-3.5 w-3.5 text-gold" />
                     {item.rating.toFixed(1)}
                   </span>
                 )}
-                {item.kind === "SERIES" && hasEpisodes && (
-                  <span className="rounded-full bg-paper px-3 py-1 ring-1 ring-line">{item.episodes.length} episodes</span>
+                {item.genres.length > 0 && <span>{item.genres.join(", ")}</span>}
+                {item.studio && <span className="text-ink-3">{item.studio}</span>}
+              </div>
+              <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-ink-3">
+                {item.kind === "SERIES" && hasEpisodes && watchedCount > 0 && (
+                  <span>
+                    <b className="font-semibold text-ink-2">{watchedCount} of {item.episodes.length}</b> watched
+                  </span>
+                )}
+                {item.watch?.playCount != null && item.watch.playCount > 0 && (
+                  <span title="Watch history">
+                    Watched {item.watch.playCount}×
+                    {item.watch.lastWatchedAt
+                      ? `, last on ${item.watch.lastWatchedAt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                      : ""}
+                  </span>
                 )}
                 {item.bitrateKbps != null && item.bitrateQuality != null && (
                   <span
-                    className={`rounded-full px-3 py-1 font-mono ring-1 ${BITRATE_TONE_CLASS[item.bitrateQuality]}`}
+                    className={`tabular-nums ${BITRATE_TONE_CLASS[item.bitrateQuality]}`}
                     title={item.kind === "SERIES" ? "Average video bitrate across episodes" : "Video bitrate"}
                   >
                     {(item.bitrateKbps / 1000).toFixed(1)} Mbps
                   </span>
                 )}
-                {item.kind === "SERIES" && hasEpisodes && watchedCount > 0 && (
-                  <span className="rounded-full bg-wii-deep/[.08] px-3 py-1 font-semibold text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2">
-                    {watchedCount}/{item.episodes.length} watched
-                  </span>
-                )}
-                {item.watch?.playCount != null && item.watch.playCount > 0 && (
-                  <span className="rounded-full bg-paper px-3 py-1 font-mono ring-1 ring-line" title="Watch history">
-                    watched {item.watch.playCount}×
-                    {item.watch.lastWatchedAt
-                      ? ` · ${item.watch.lastWatchedAt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
-                      : ""}
-                  </span>
-                )}
                 {(item.kind === "MOVIE" || item.kind === "SERIES") && (
                   <button
-                    className="rounded-full bg-paper px-3 py-1 font-semibold text-ink-2 ring-1 ring-line transition-colors hover:text-wii-deep"
+                    className="flex items-center gap-1 transition-colors hover:text-wii-deep"
                     onClick={() => {
                       s.select();
                       setFixOpen(true);
                     }}
                     title="Search providers and pin a match (fixes missing artwork/metadata)"
                   >
-                    <Icon name="search" className="mr-1 inline h-3.5 w-3.5" />
+                    <Icon name="search" className="h-3.5 w-3.5" />
                     Fix match
                   </button>
                 )}
               </div>
-
-              {item.genres.length > 0 && (
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  {item.genres.map((genre) => (
-                    <span
-                      key={genre}
-                      className="rounded-full bg-wii-deep/[.08] px-3 py-1 text-small font-bold tracking-[0.03em] text-wii-deep ring-1 ring-wii-deep/15 dark:bg-wii-deep/15 dark:text-wii-2"
-                    >
-                      {genre}
-                    </span>
-                  ))}
-                  {item.studio && (
-                    <span className="ml-1 text-small font-medium text-ink-3">
-                      {item.kind === "MOVIE" ? "Studio" : "Network"}: {item.studio}
-                    </span>
-                  )}
-                </div>
-              )}
 
               <div className="mb-5 flex items-center gap-3 max-[820px]:flex-wrap">
                 {playMediaFileId && (
@@ -524,7 +504,7 @@ export function DetailView({ itemId }: { itemId: string }) {
                       {item.kind === "SERIES"
                         ? nextEpisode?.kind === "MOVIE"
                           ? `${isContinue ? "Continue" : "Play"}`
-                          : `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} · E${nextEpisode?.episodeNumber ?? 1}`
+                          : `${isContinue ? "Continue" : "Play"} S${nextEpisode?.seasonNumber ?? 1} E${nextEpisode?.episodeNumber ?? 1}`
                         : "Play"}
                     </button>
                     <button className="btn btn-ghost" onClick={(e) => startPartyFor(nextEpisode ?? item, e.currentTarget, e.clientX, e.clientY)}>
@@ -570,7 +550,7 @@ export function DetailView({ itemId }: { itemId: string }) {
 
               {item.audioTracks.length >= 2 && (
                 <div className="mb-5 flex items-center gap-2">
-                  <span className="mr-1 font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">Audio</span>
+                  <span className="mr-1 text-small text-ink-3">Audio</span>
                   {item.audioTracks.map((track) => (
                     <button
                       key={track.streamIndex}

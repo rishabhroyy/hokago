@@ -154,13 +154,10 @@ export function PrefsView() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[640px] px-12 pb-12 pt-[86px] max-[820px]:px-5">
-      <div className="pb-[26px] pt-[30px]">
-        <div className="mb-[18px] flex items-baseline gap-3.5">
-          <h1 className="font-display text-title font-bold tracking-[-0.01em]">preferences</h1>
-          <span className="font-mono text-kicker font-bold uppercase tracking-[0.14em] text-ink-3">account settings</span>
-        </div>
-        <p className="mt-1 text-body text-ink-2">look after your own account — picture, name, password.</p>
+    <div className="page mx-auto w-full max-w-[736px]">
+      <div className="mb-7">
+        <h1 className="page-title">Preferences</h1>
+        <p className="page-sub">Your picture, name and password.</p>
       </div>
 
       <section className="panel mb-6 rounded-[32px] p-10">

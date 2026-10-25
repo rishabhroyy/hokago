@@ -3,6 +3,7 @@ import { RouterProvider, useRouter, type Route } from "./router";
 import { paths } from "./router";
 import { SoundProvider } from "./ui/useWiiSound";
 import { TopNav } from "./ui/TopNav";
+import { Backdrop } from "./ui/Backdrop";
 import { useTvKeyboardNav } from "./ui/tv-keys";
 import { HomeView } from "./views/HomeView";
 import { LibraryView } from "./views/LibraryView";
@@ -109,6 +110,7 @@ function Chrome() {
   }, [route.view]);
   return (
     <>
+      {route.view !== "admin" && route.view !== "player" && <Backdrop />}
       {route.view !== "admin" && <TopNav />}
       {!online && route.view !== "offline" && route.view !== "offlineWatch" && route.view !== "admin" && (
         <OfflineBanner />

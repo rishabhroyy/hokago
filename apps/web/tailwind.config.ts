@@ -66,7 +66,7 @@ export default {
           "inset 0 1.5px 0 rgba(255,255,255,0.6), inset 0 0 0 1px rgba(255,255,255,0.14), 0 3px 10px -4px rgba(120,80,60,0.28)",
         // resting Wii glow (compose the pulse via the keyframes below)
         "wii-ring":
-          "0 0 0 3px #fff, 0 0 0 5px #4FB8E0, 0 0 15px 1px rgba(79,184,224,0.55), 0 14px 26px -8px rgba(120,80,60,0.4)",
+          "0 0 0 2.5px #121110, 0 0 0 5px #4FB8E0, 0 0 18px 2px rgba(79,184,224,0.45)",
         // floating white panel — nav, cards, login (variable so .dark can
         // soften the white sheen and deepen the drop shadow on dark surfaces)
         panel: "var(--shadow-panel)",
@@ -78,8 +78,8 @@ export default {
       },
       keyframes: {
         wiipulse: {
-          "0%,100%": { boxShadow: "0 0 0 3px #fff, 0 0 0 5px #4FB8E0, 0 0 15px 1px rgba(79,184,224,.55), 0 14px 26px -8px rgba(120,80,60,.4)" },
-          "50%": { boxShadow: "0 0 0 3px #fff, 0 0 0 6px #4FB8E0, 0 0 26px 4px rgba(79,184,224,.55), 0 14px 26px -8px rgba(120,80,60,.4)" },
+          "0%,100%": { boxShadow: "0 0 0 2.5px #121110, 0 0 0 5px #4FB8E0, 0 0 18px 2px rgba(79,184,224,.45)" },
+          "50%": { boxShadow: "0 0 0 2.5px #121110, 0 0 0 6px #4FB8E0, 0 0 26px 4px rgba(79,184,224,.5)" },
         },
         popsel: { "0%,100%": { transform: "scale(1)" }, "42%": { transform: "scale(1.1)" } },
         riseIn: { from: { opacity: "0", transform: "translateY(18px)" }, to: { opacity: "1", transform: "translateY(0)" } },

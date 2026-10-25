@@ -39,14 +39,14 @@
    into a soft dark surface. */
 .dark {
   color-scheme: dark;
-  --paper: #26221D;
-  --paper-2: #2E2A24;
-  --card: #2B2722;
-  --ink: #F1EADB;
-  --ink-2: #BCB2A2;
-  --ink-3: #857D6F;
-  --line: #3A352E;
-  --line-2: #4A443B;
+  --paper: #1B1A18;
+  --paper-2: #232220;
+  --card: #1F1E1C;
+  --ink: #F3F0EA;
+  --ink-2: #C4BFB6;
+  --ink-3: #948F86;
+  --line: #2C2B28;
+  --line-2: #393734;
   --accent: #F07B63;
   --accent-2: #F49B87;
   --gold: #EDB866;
@@ -145,21 +145,59 @@ body::before {
   background-repeat: no-repeat;
 }
 
-/* dark wallpaper: same aura composition, dimmed into the espresso base */
+/* dark: a plain warm charcoal — the artwork and the Wii blue carry the colour */
 .dark body {
   color: var(--ink);
-  background-color: #171410;
+  background-color: #121110;
 }
+/* Disney+-style: never one flat colour — lit softly from the top, a whisper of Wii blue, deepening as you go down */
 .dark body::before {
-  background-color: #171410;
-  background-image:
-    radial-gradient(130% 70% at 50% -10%, rgba(255, 244, 224, 0.05), transparent 52%),
-    radial-gradient(48% 42% at 92% -4%, rgba(99, 195, 230, 0.09), transparent 68%),
-    radial-gradient(42% 38% at -2% 24%, rgba(240, 131, 111, 0.05), transparent 70%),
-    radial-gradient(36% 50% at 50% 70%, rgba(237, 184, 102, 0.045), transparent 72%),
-    radial-gradient(rgba(143, 224, 245, 0.05) 1px, transparent 1.3px);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 28px 28px;
-  background-repeat: no-repeat;
+  background:
+    radial-gradient(80% 70% at 95% -10%, rgba(79, 184, 224, 0.42), transparent 70%),
+    radial-gradient(65% 60% at -5% 0%, rgba(240, 131, 111, 0.22), transparent 70%),
+    radial-gradient(70% 60% at 100% 110%, rgba(240, 131, 111, 0.12), transparent 70%),
+    radial-gradient(60% 55% at 0% 100%, rgba(79, 184, 224, 0.12), transparent 70%),
+    linear-gradient(180deg, #1f2533 0%, #14161d 50%, #0b0c10 100%);
+}
+
+/* <Backdrop/>: fixed scenery between the gradient and the page */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* Wii Menu dot grid, strongest under the top light and gone by mid-page */
+.backdrop-grid {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(rgba(143, 224, 245, 0.17) 1px, transparent 1.4px) 0 0 / 26px 26px;
+  mask-image: linear-gradient(to bottom, #000, rgba(0, 0, 0, 0.25));
+}
+/* manga screentone: halftone dots swelling toward the top-left and bottom-right corners */
+.backdrop-tone {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(rgba(240, 131, 111, 0.22) 1.6px, transparent 2px) 0 0 / 9px 9px;
+  mask-image:
+    radial-gradient(45% 50% at 0% 0%, #000, transparent),
+    radial-gradient(50% 55% at 100% 100%, rgba(0, 0, 0, 0.8), transparent);
+}
+.backdrop-sparkle {
+  position: absolute;
+  color: #DFF7FF;
+  filter: drop-shadow(0 0 6px rgba(143, 224, 245, 0.9));
+  opacity: 0;
+  animation: twinkle 7s ease-in-out infinite;
+}
+@keyframes twinkle {
+  0%, 100% { opacity: 0; transform: scale(0.4) rotate(0deg) translateY(0); }
+  45% { opacity: 0.7; transform: scale(1) rotate(45deg) translateY(-6px); }
+  70% { opacity: 0; transform: scale(0.6) rotate(80deg) translateY(-10px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .backdrop-sparkle { animation: none; opacity: 0.5; }
 }
 
 ::selection { background: rgba(79, 184, 224, 0.35); }
@@ -169,7 +207,7 @@ body::before {
 ::-webkit-scrollbar-thumb { background: #C8DDE8; border-radius: 100px; border: 3px solid #F5EFE4; }
 ::-webkit-scrollbar-thumb:hover { background: #8FE0F5; }
 ::-webkit-scrollbar-track { background: transparent; }
-.dark ::-webkit-scrollbar-thumb { background: #3A342D; border: 3px solid #171410; }
+.dark ::-webkit-scrollbar-thumb { background: #393734; border: 3px solid #121110; }
 .dark ::-webkit-scrollbar-thumb:hover { background: #4E86A0; }
 
 :focus-visible { outline: 2.5px solid #4FB8E0; outline-offset: 2px; }
@@ -195,6 +233,7 @@ body::before {
 /* hero / detail art fades into the page instead of ending on a hard edge */
 .art-fade { mask-image: linear-gradient(to bottom, #000 55%, transparent); }
 
+@keyframes fadeIn { from { opacity: 0; } }
 @keyframes popsel { 0%,100% { transform: scale(1); } 42% { transform: scale(1.1); } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes shimmer { from { background-position: -300px 0; } to { background-position: 300px 0; } }
@@ -338,7 +377,7 @@ body::before {
 .input:focus { border-color: #4FB8E0; box-shadow: inset 0 2px 4px rgba(120,80,60,0.07), 0 0 0 3.5px rgba(79,184,224,0.28); }
 
 .dark .input {
-  background: #1F1C17;
+  background: #1B1A18;
   border-color: var(--line);
   color: var(--ink);
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.35);

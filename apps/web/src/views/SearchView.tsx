@@ -131,7 +131,7 @@ export function SearchView({ initialQuery }: { initialQuery: string | null }) {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Search movies and series"
-            className="h-14 w-full rounded-full border-[1.5px] border-line bg-[#FBF8F1] pl-14 pr-14 text-[15px] font-semibold text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:text-ink-3 focus:border-wii focus:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_0_0_3.5px_rgba(79,184,224,0.28)] dark:bg-[#1F1C17] dark:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35)] dark:focus:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35),0_0_0_3.5px_rgba(99,195,230,0.28)]"
+            className="h-14 w-full rounded-full border-[1.5px] border-line bg-[#FBF8F1] pl-14 pr-14 text-[15px] font-semibold text-ink shadow-[inset_0_2px_4px_rgba(120,80,60,0.07)] outline-none transition-shadow duration-200 ease-smooth placeholder:font-medium placeholder:text-ink-3 focus:border-wii focus:shadow-[inset_0_2px_4px_rgba(120,80,60,0.07),0_0_0_3.5px_rgba(79,184,224,0.28)] dark:bg-paper dark:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35)] dark:focus:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35),0_0_0_3.5px_rgba(99,195,230,0.28)]"
           />
           {query && (
             <button

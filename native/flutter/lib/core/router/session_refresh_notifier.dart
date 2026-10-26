@@ -7,6 +7,6 @@ import '../session/session_controller.dart';
 /// login/logout/session-expiry immediately re-runs the redirect logic.
 class SessionRefreshNotifier extends ChangeNotifier {
   SessionRefreshNotifier(Ref ref) {
-    ref.listen(sessionProvider, (_, __) => notifyListeners());
+    ref.listen(sessionProvider, (_, _) => notifyListeners());
   }
 }

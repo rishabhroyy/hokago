@@ -14,8 +14,9 @@ class PendingDownload {
 /// In-progress downloads only — DownloadManager removes an entry here the
 /// moment it lands in OfflineManifest, so DownloadsScreen just concatenates
 /// "active" (this) + "done" (offlineEntriesProvider) with no overlap.
-class ActiveDownloadsController extends StateNotifier<Map<String, PendingDownload>> {
-  ActiveDownloadsController() : super({});
+class ActiveDownloadsController extends Notifier<Map<String, PendingDownload>> {
+  @override
+  Map<String, PendingDownload> build() => {};
 
   void start(String downloadId, {required String title, String? posterUrl}) {
     state = {...state, downloadId: PendingDownload(downloadId: downloadId, title: title, posterUrl: posterUrl)};
@@ -33,6 +34,5 @@ class ActiveDownloadsController extends StateNotifier<Map<String, PendingDownloa
   }
 }
 
-final activeDownloadsProvider = StateNotifierProvider<ActiveDownloadsController, Map<String, PendingDownload>>(
-  (ref) => ActiveDownloadsController(),
-);
+final activeDownloadsProvider =
+    NotifierProvider<ActiveDownloadsController, Map<String, PendingDownload>>(ActiveDownloadsController.new);

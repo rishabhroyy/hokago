@@ -85,7 +85,7 @@ class _ZoomOpenOverlayState extends State<_ZoomOpenOverlay> with TickerProviderS
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: Listenable.merge([_grow, _flash]),
-        builder: (_, __) {
+        builder: (_, _) {
           final r = _rect.value ?? widget.endRect;
           return Stack(
             children: [

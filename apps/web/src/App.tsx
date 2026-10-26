@@ -28,6 +28,7 @@ import { getActiveAccount, hasActiveAccount } from "./tv-session";
 import { useConnectivity } from "./useConnectivity";
 import { useProfileId } from "./profile";
 import { Icon } from "./ui/icons";
+import { hideSplashUnlessHeld } from "./splash";
 
 function Shell() {
   const { route } = useRouter();
@@ -99,6 +100,9 @@ function Chrome() {
   const profileId = useProfileId();
   const { online, justReconnected } = useConnectivity(profileId);
   useTvKeyboardNav();
+  // Runs after the first screen's own effects: views that load their own
+  // content (home) have claimed the splash by now; everything else reveals.
+  useEffect(hideSplashUnlessHeld, []);
   // Shells flip native chrome for the player (iOS status bar + home
   // indicator, Android immersive system bars) from the route. Plain browsers
   // have no shell and skip this; old shells ignore the event.

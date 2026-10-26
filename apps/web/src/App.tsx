@@ -28,6 +28,7 @@ import { getActiveAccount, hasActiveAccount } from "./tv-session";
 import { useConnectivity } from "./useConnectivity";
 import { useProfileId } from "./profile";
 import { Icon } from "./ui/icons";
+import { hideSplashUnlessHeld } from "./splash";
 
 function Shell() {
   const { route } = useRouter();
@@ -99,6 +100,15 @@ function Chrome() {
   const profileId = useProfileId();
   const { online, justReconnected } = useConnectivity(profileId);
   useTvKeyboardNav();
+  // Runs after the first screen's own effects: views that load their own
+  // content (home) have claimed the splash by now; everything else reveals.
+  useEffect(hideSplashUnlessHeld, []);
+  // Login/setup screens get no nav — Home/search/avatar there just lead back
+  // to the same gate. Both exit via a full reload, so this needn't be reactive.
+  const signedOut =
+    route.view === "login" ||
+    getSetupState().setupRequired ||
+    (!isTvShell() && !localStorage.getItem("hokago_access_token") && !getActiveAccount());
   // Shells flip native chrome for the player (iOS status bar + home
   // indicator, Android immersive system bars) from the route. Plain browsers
   // have no shell and skip this; old shells ignore the event.
@@ -111,7 +121,7 @@ function Chrome() {
   return (
     <>
       {route.view !== "admin" && route.view !== "player" && <Backdrop />}
-      {route.view !== "admin" && <TopNav />}
+      {route.view !== "admin" && !signedOut && <TopNav />}
       {!online && route.view !== "offline" && route.view !== "offlineWatch" && route.view !== "admin" && (
         <OfflineBanner />
       )}

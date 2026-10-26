@@ -11,6 +11,7 @@ import { Row } from "../ui/Row";
 import { ContextMenu } from "../ui/ContextMenu";
 import { Hero } from "../ui/Hero";
 import { continueWatchingToTile, cardToTile } from "../ui/tile-mapping";
+import { hideSplash, holdSplash, preloadImage } from "../splash";
 
 function shuffle<T>(arr: readonly T[]): T[] {
   const a = [...arr];
@@ -35,16 +36,25 @@ export function HomeView() {
         if (cancelled) return;
         setHome(data);
         setLoaded(true);
+        // first paint = hero art already decoded, not a blank billboard filling in
+        const first = data?.slides[0];
+        return preloadImage(first?.backdropUrl ?? first?.posterUrl);
       })
       .catch(() => {
         if (!cancelled) setLoaded(true);
+      })
+      .finally(() => {
+        if (!cancelled) hideSplash();
       });
     return () => {
       cancelled = true;
     };
   }, [profileId]);
 
-  useEffect(() => load(), [load]);
+  useEffect(() => {
+    holdSplash();
+    return load();
+  }, [load]);
 
   // Variety: shuffle the items within every rail, and rotate the genre rails'
   // order, once per payload — the same shelf, a different arrangement each

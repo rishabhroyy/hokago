@@ -9,8 +9,70 @@
     <meta name="theme-color" content="#121110" />
     <title>hokago</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Boot splash: inline so it paints before any JS/CSS arrives, then
+         src/splash.ts fades it once fonts + the first screen are ready —
+         the app renders underneath instead of popping in piece by piece. -->
+    <style>
+      body { background: #121110; }
+      #hk-splash {
+        position: fixed; inset: 0; z-index: 10000;
+        display: flex; align-items: center; justify-content: center;
+        background:
+          radial-gradient(80% 70% at 95% -10%, rgba(79, 184, 224, 0.42), transparent 70%),
+          radial-gradient(65% 60% at -5% 0%, rgba(240, 131, 111, 0.22), transparent 70%),
+          linear-gradient(180deg, #1f2533 0%, #14161d 50%, #0b0c10 100%);
+        transition: opacity 0.45s cubic-bezier(.4, 0, .2, 1), visibility 0s 0.45s;
+      }
+      #hk-splash.hk-out { opacity: 0; visibility: hidden; }
+      #hk-splash.hk-out .hk-stage { transform: scale(1.08); }
+      .hk-stage { position: relative; width: 170px; height: 200px; transition: transform 0.45s cubic-bezier(.4, 0, .2, 1); }
+      /* the mascot hops: squash on landing, stretch on take-off */
+      .hk-cat {
+        position: absolute; left: 15px; bottom: 26px; width: 140px; height: 120px;
+        transform-origin: 50% 100%;
+        filter: drop-shadow(0 0 1.5px rgba(223, 247, 255, 0.85)) drop-shadow(0 0 22px rgba(143, 224, 245, 0.45));
+        animation: hk-hop 1.1s cubic-bezier(.4, 0, .2, 1) infinite;
+      }
+      .hk-shadow {
+        position: absolute; left: 45px; bottom: 14px; width: 80px; height: 12px; border-radius: 50%;
+        background: rgba(143, 224, 245, 0.28); filter: blur(3px);
+        animation: hk-shadow 1.1s cubic-bezier(.4, 0, .2, 1) infinite;
+      }
+      .hk-spark { position: absolute; width: 18px; height: 18px; color: #DFF7FF; opacity: 0;
+        filter: drop-shadow(0 0 6px rgba(143, 224, 245, 0.9)); animation: hk-twinkle 2.2s ease-in-out infinite; }
+      .hk-spark:nth-of-type(1) { left: -10px; top: 40px; }
+      .hk-spark:nth-of-type(2) { right: -8px; top: 6px; width: 24px; height: 24px; animation-delay: 0.7s; }
+      .hk-spark:nth-of-type(3) { right: -2px; top: 92px; width: 13px; height: 13px; animation-delay: 1.4s; }
+      @keyframes hk-hop {
+        0%, 100% { transform: translateY(0) scale(1.12, 0.86); }
+        12% { transform: translateY(0) scale(0.92, 1.1); }
+        45% { transform: translateY(-44px) scale(1, 1); }
+        80% { transform: translateY(0) scale(0.96, 1.05); }
+      }
+      @keyframes hk-shadow {
+        0%, 12%, 100% { transform: scaleX(1); opacity: 1; }
+        45% { transform: scaleX(0.55); opacity: 0.45; }
+      }
+      @keyframes hk-twinkle {
+        0%, 100% { opacity: 0; transform: scale(0.3) rotate(0deg); }
+        50% { opacity: 1; transform: scale(1) rotate(60deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .hk-cat, .hk-shadow { animation: none; }
+        .hk-spark { animation-duration: 4s; }
+      }
+    </style>
   </head>
   <body>
+    <div id="hk-splash" role="progressbar" aria-label="loading hokago">
+      <div class="hk-stage">
+        <svg class="hk-spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C12 8 14 10 20 12 14 14 12 16 12 22 12 16 10 14 4 12 10 10 12 8 12 2Z" /></svg>
+        <svg class="hk-spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C12 8 14 10 20 12 14 14 12 16 12 22 12 16 10 14 4 12 10 10 12 8 12 2Z" /></svg>
+        <svg class="hk-spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C12 8 14 10 20 12 14 14 12 16 12 22 12 16 10 14 4 12 10 10 12 8 12 2Z" /></svg>
+        <div class="hk-shadow"></div>
+        <img class="hk-cat" src="/favicon.svg" alt="" />
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

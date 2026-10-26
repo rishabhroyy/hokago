@@ -729,35 +729,49 @@ export async function storeArtwork(
   return artworkStored;
 }
 
+const frameScore = (meta: unknown): number => {
+  const score = (meta as { score?: unknown } | null)?.score;
+  return typeof score === "number" ? score : 0;
+};
+
 /**
  * Seasons and series have no file of their own, so nothing ever generates
  * them a backdrop and every surface fell back to cropping the (small) poster.
- * The first episode to resolve a backdrop lends it upward as a GENERATED row
- * (same bytes, lowest priority) — any real sidecar/provider backdrop on the
- * season or series still wins.
- * ponytail: first episode processed wins, not episode 1 — prefer the lowest
- * episode if mid-series frames start reading as spoilers.
+ * Each episode's backdrop is offered upward as a GENERATED row (same bytes,
+ * lowest priority); the season/series keeps the best-scoring frame across all
+ * its episodes. Any real sidecar/provider backdrop on the season or series
+ * still wins and is never touched here.
  */
 async function lendBackdropToAncestors(db: PrismaClient, mediaItemId: string, art: ArtworkDescriptor): Promise<void> {
+  const score = frameScore(art.meta);
+  const data = {
+    bytesPath: art.bytesPath,
+    hash: art.hash,
+    sizeBytes: art.sizeBytes,
+    meta: { strategy: "inherited", fromMediaItemId: mediaItemId, score },
+  };
   let item = await db.mediaItem.findUnique({ where: { id: mediaItemId }, select: { parentId: true } });
   while (item?.parentId) {
     const ancestorId = item.parentId;
-    const has = await db.artwork.count({ where: { mediaItemId: ancestorId, kind: "BACKDROP" } });
-    if (has === 0) {
+    const current = await db.artwork.findMany({
+      where: { mediaItemId: ancestorId, kind: "BACKDROP" },
+      select: { id: true, source: true, meta: true },
+    });
+    const inherited = current.find((a) => a.source === "GENERATED");
+    if (current.length === 0) {
       await db.artwork
         .create({
           data: {
+            ...data,
             mediaItemId: ancestorId,
             kind: "BACKDROP",
             source: "GENERATED",
             priority: ARTWORK_SOURCE_PRIORITY.GENERATED!,
-            bytesPath: art.bytesPath,
-            hash: art.hash,
-            sizeBytes: art.sizeBytes,
-            meta: { strategy: "inherited", fromMediaItemId: mediaItemId },
           },
         })
-        .catch(() => {}); // a sibling episode won the race — its frame is just as good
+        .catch(() => {}); // a sibling episode created it first; the next rescan re-offers this frame
+    } else if (current.length === 1 && inherited && score > frameScore(inherited.meta)) {
+      await db.artwork.update({ where: { id: inherited.id }, data });
     }
     item = await db.mediaItem.findUnique({ where: { id: ancestorId }, select: { parentId: true } });
   }

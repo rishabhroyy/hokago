@@ -186,6 +186,8 @@ async function scoreFrame(imgPath: string): Promise<FrameScore> {
 export interface SelectedFrame {
   path: string;
   atSec: number;
+  /** scoreFrame's colorfulness + contrast — lets a series pick its best episode frame. */
+  score: number;
 }
 
 /**
@@ -230,7 +232,7 @@ export async function selectBestFrame(filePath: string, durationMs: number): Pro
     // billboard shows this frame full-bleed. q:v 2 — a bare re-encode here
     // fell back to ffmpeg's default JPEG quality and smeared every backdrop.
     await runFfmpeg(["-y", "-i", best.path, "-vf", "hqdn3d=1.5:1.5:0:0,cas=0.8", "-q:v", "2", stablePath]);
-    return { path: stablePath, atSec: best.atSec };
+    return { path: stablePath, atSec: best.atSec, score: best.score.score };
   } catch {
     return null;
   } finally {

@@ -14,9 +14,12 @@ const _tokenWarmthInterval = Duration(minutes: 4);
 /// profile) and the current HokagoApi instance. Mirrors the web app's
 /// api-client.ts + browse-api.ts + profile.ts boot flow, condensed into one
 /// controller since there's no router-driven redirect chain to replicate.
-class SessionController extends StateNotifier<SessionState> {
-  SessionController() : super(const SessionState.loading()) {
-    _init();
+class SessionController extends Notifier<SessionState> {
+  @override
+  SessionState build() {
+    ref.onDispose(() => _warmthTimer?.cancel());
+    Future.microtask(_init);
+    return const SessionState.loading();
   }
 
   HokagoApi? _api;
@@ -36,35 +39,25 @@ class SessionController extends StateNotifier<SessionState> {
     });
   }
 
-  @override
-  void dispose() {
-    _warmthTimer?.cancel();
-    super.dispose();
-  }
-
   Future<void> _init() async {
     final storedUrl = await TokenStore.instance.serverUrl;
     if (storedUrl == null) {
       state = state.copyWith(status: SessionStatus.needsServer);
       return;
     }
-    await _connectTo(storedUrl, persist: false);
+    await _connectTo(storedUrl, showBoot: true);
   }
 
   Future<void> setServerUrl(String rawUrl) async {
-    final url = _normalize(rawUrl);
+    final url = normalizeServerUrl(rawUrl);
     await TokenStore.instance.setServerUrl(url);
-    await _connectTo(url, persist: false);
+    await _connectTo(url, showBoot: false);
   }
 
-  String _normalize(String url) {
-    var u = url.trim();
-    if (!u.startsWith('http://') && !u.startsWith('https://')) u = 'https://$u';
-    return u.replaceAll(RegExp(r'/$'), '');
-  }
-
-  Future<void> _connectTo(String url, {required bool persist}) async {
-    state = state.copyWith(status: SessionStatus.loading, serverUrl: url);
+  /// [showBoot]: cold start shows the boot splash; a URL typed on the server
+  /// screen keeps that screen up (and its text) while the probe runs.
+  Future<void> _connectTo(String url, {required bool showBoot}) async {
+    state = showBoot ? state.copyWith(status: SessionStatus.loading, serverUrl: url) : state.copyWith(serverUrl: url);
     _api = HokagoApi(HokagoApiClient(baseUrl: url));
     try {
       final setup = await api.setupState();
@@ -80,7 +73,21 @@ class SessionController extends StateNotifier<SessionState> {
       }
       await _resolvePrimaryProfile();
     } catch (e) {
-      state = state.copyWith(status: SessionStatus.needsServer, error: 'Could not reach that server: $e');
+      // Local-first: a signed-in install with the server unreachable still
+      // opens (downloads play offline, screens show a retry), it never gets
+      // bounced to the server screen just because the network is down.
+      final last = await TokenStore.instance.lastProfile;
+      if (showBoot && last != null && await TokenStore.instance.refreshToken != null) {
+        state = state.copyWith(
+          status: SessionStatus.authenticated,
+          profileId: last.$1,
+          profileName: last.$2,
+          accessToken: await TokenStore.instance.accessToken,
+        );
+        _startTokenWarmth();
+        return;
+      }
+      state = state.copyWith(status: SessionStatus.needsServer, error: "Couldn't reach a hokago server there — check the address and that it's running.");
     }
   }
 
@@ -92,7 +99,6 @@ class SessionController extends StateNotifier<SessionState> {
   }
 
   Future<void> login({required String username, required String password}) async {
-    state = state.copyWith(status: SessionStatus.loading);
     try {
       final res = await api.login(username: username, password: password, platform: currentDevicePlatform());
       await TokenStore.instance.setAccessToken(res.accessToken);
@@ -122,6 +128,7 @@ class SessionController extends StateNotifier<SessionState> {
       final options = profiles.map((p) => ProfileOption(id: p.id, name: p.name)).toList();
       if (options.length <= 1) {
         final only = options.isNotEmpty ? options.first : null;
+        if (only != null) await TokenStore.instance.setLastProfile(only.id, only.name);
         state = state.copyWith(
           status: SessionStatus.authenticated,
           profileId: only?.id,
@@ -139,7 +146,17 @@ class SessionController extends StateNotifier<SessionState> {
   }
 
   void selectProfile(ProfileOption profile) {
+    TokenStore.instance.setLastProfile(profile.id, profile.name);
     state = state.copyWith(status: SessionStatus.authenticated, profileId: profile.id, profileName: profile.name);
+  }
+
+  /// Settings → display name: keeps the picker list and header in sync.
+  void renamedProfile(String id, String name) {
+    TokenStore.instance.setLastProfile(id, name);
+    state = state.copyWith(
+      profileName: state.profileId == id ? name : null,
+      profiles: [for (final p in state.profiles) p.id == id ? ProfileOption(id: id, name: name) : p],
+    );
   }
 
   /// Prefs' "switch profile" — drops the active selection and returns to
@@ -173,4 +190,19 @@ class SessionController extends StateNotifier<SessionState> {
   }
 }
 
-final sessionProvider = StateNotifierProvider<SessionController, SessionState>((ref) => SessionController());
+/// A typed address → a base URL. An explicit scheme wins; otherwise
+/// LAN-looking hosts (IPs, localhost, *.local, a bare MagicDNS-style name)
+/// get http — that's how a self-hosted box on the couch is reached — and
+/// everything else (a real domain behind a proxy/tunnel) gets https.
+String normalizeServerUrl(String raw) {
+  var u = raw.trim().replaceAll(RegExp(r'/+$'), '');
+  if (u.startsWith('http://') || u.startsWith('https://')) return u;
+  final host = u.split('/').first.split(':').first.toLowerCase();
+  final lan = host == 'localhost' ||
+      host.endsWith('.local') ||
+      !host.contains('.') ||
+      RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host);
+  return '${lan ? 'http' : 'https'}://$u';
+}
+
+final sessionProvider = NotifierProvider<SessionController, SessionState>(SessionController.new);

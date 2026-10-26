@@ -3,120 +3,111 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/auth/login_screen.dart';
+import '../../features/boot/boot_screen.dart';
 import '../../features/detail/detail_screen.dart';
+import '../../features/devices/device_management_screen.dart';
+import '../../features/downloads/downloads_screen.dart';
 import '../../features/home/home_screen.dart';
 import '../../features/library/library_screen.dart';
 import '../../features/onboarding/first_run_setup_screen.dart';
 import '../../features/onboarding/server_setup_screen.dart';
+import '../../features/pair/approve_pair_screen.dart';
 import '../../features/pair/pair_screen.dart';
 import '../../features/party/party_join_screen.dart';
 import '../../features/player/player_screen.dart';
 import '../../features/prefs/prefs_screen.dart';
 import '../../features/profiles/profile_picker_screen.dart';
 import '../../features/search/search_screen.dart';
-import '../../features/downloads/downloads_screen.dart';
 import '../../features/shell/app_shell.dart';
+import '../platform.dart';
 import '../session/session_controller.dart';
 import '../session/session_state.dart';
+import '../theme/app_theme.dart';
 import 'session_refresh_notifier.dart';
 
-/// A pure geometric slide — position only, NEVER opacity. Any opacity
-/// component (tried twice — a full crossfade, then just a partial fade-in)
-/// blends the old and new page's content together for however long it
-/// lasts, which reads as "morphing" once every Scaffold is transparent (to
-/// show the shared wallpaper) — at any instant during a pure slide, each
-/// pixel shows only ONE page fully opaque, never a blend, so there's
-/// nothing to morph. Subtle and quick (220ms), not the iOS default (which
-/// also draws a drop shadow under the incoming page).
-CustomTransitionPage<void> _slidePage(Widget child, GoRouterState state) {
-  return CustomTransitionPage<void>(
-    key: state.pageKey,
-    child: child,
-    transitionDuration: const Duration(milliseconds: 220),
-    reverseTransitionDuration: const Duration(milliseconds: 220),
-    transitionsBuilder: (context, animation, secondaryAnimation, child) {
-      final offset = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
-      return SlideTransition(position: offset, child: child);
-    },
-  );
-}
+/// Lateral tab switches: a quick fade-through, never a slide (both tabs'
+/// full-opacity content overlapping mid-slide reads as "morphing").
+CustomTransitionPage<void> _tabPage(Widget child, GoRouterState state) => CustomTransitionPage<void>(
+      key: state.pageKey,
+      child: child,
+      transitionDuration: const Duration(milliseconds: 180),
+      reverseTransitionDuration: const Duration(milliseconds: 180),
+      transitionsBuilder: (context, animation, _, child) => FadeTransition(opacity: CurvedAnimation(parent: animation, curve: HokagoMotion.smooth), child: child),
+    );
 
-/// The ShellRoute's own tab routes (Home/Search/Downloads/Settings) — lateral
-/// switches between siblings, not a drill-down. A push-style slide reads as
-/// "navigating into" a tab, and for the length of the animation both the old
-/// and new tab's full-opacity content are simultaneously on screen mid-slide
-/// (the incoming page sliding in from the side necessarily overlaps the
-/// outgoing one), which is the same "morphing" complaint again just from
-/// geometry instead of opacity. Tabs swap instantly, like every mainstream
-/// tab bar (iOS Tab Bar, Android bottom nav) actually does.
-CustomTransitionPage<void> _tabPage(Widget child, GoRouterState state) {
-  return CustomTransitionPage<void>(
-    key: state.pageKey,
-    child: child,
-    transitionDuration: Duration.zero,
-    reverseTransitionDuration: Duration.zero,
-    transitionsBuilder: (context, animation, secondaryAnimation, child) => child,
-  );
-}
+/// The gate screens (server, setup, login, profiles) cross-fade with a hint
+/// of scale — the web's `zoomin` keyframe.
+CustomTransitionPage<void> _gatePage(Widget child, GoRouterState state) => CustomTransitionPage<void>(
+      key: state.pageKey,
+      child: child,
+      transitionDuration: const Duration(milliseconds: 380),
+      transitionsBuilder: (context, animation, _, child) {
+        final a = CurvedAnimation(parent: animation, curve: HokagoMotion.smooth);
+        return FadeTransition(opacity: a, child: ScaleTransition(scale: Tween(begin: 0.94, end: 1.0).animate(a), child: child));
+      },
+    );
 
-/// Paths mirror apps/web/src/router.tsx 1:1 (/, /library/:id, /title/:id,
-/// /watch/:mediaFileId, /search, /downloads) so a deep link or a habit
-/// carried over from the web app lands in the same place.
+/// Drill-downs (title, library, player…) use the platform transition from
+/// the theme — iOS swipe-back, Android predictive back.
+MaterialPage<void> _page(Widget child, GoRouterState state) => MaterialPage<void>(key: state.pageKey, child: child);
+
+const _gates = {'/boot', '/setup-server', '/setup', '/login', '/pair', '/pick-profile'};
+
+/// Paths mirror apps/web/src/router.tsx (/, /library/:id, /title/:id,
+/// /watch/:mediaFileId, /search, /downloads, /prefs, /party, /pair) so a
+/// habit carried over from the web lands in the same place.
 GoRouter buildAppRouter(Ref ref) {
   final refresh = SessionRefreshNotifier(ref);
   return GoRouter(
     refreshListenable: refresh,
-    initialLocation: '/',
+    initialLocation: '/boot',
     redirect: (context, state) {
-      final session = ref.read(sessionProvider);
       final path = state.matchedLocation;
-      switch (session.status) {
-        case SessionStatus.loading:
-          return null;
-        case SessionStatus.needsServer:
-          return path == '/setup-server' ? null : '/setup-server';
-        case SessionStatus.needsSetup:
-          return path == '/setup' ? null : '/setup';
-        case SessionStatus.needsLogin:
-          return path == '/login' || path == '/pair' ? null : '/login';
-        case SessionStatus.needsProfile:
-          return path == '/pick-profile' ? null : '/pick-profile';
-        case SessionStatus.authenticated:
-          const gates = {'/setup-server', '/setup', '/login', '/pair', '/pick-profile'};
-          return gates.contains(path) ? '/' : null;
-      }
+      String? only(String target) => path == target ? null : target;
+      return switch (ref.read(sessionProvider).status) {
+        SessionStatus.loading => only('/boot'),
+        SessionStatus.needsServer => only('/setup-server'),
+        SessionStatus.needsSetup => only('/setup'),
+        // TVs can't comfortably type a password: pairing is their front door.
+        SessionStatus.needsLogin => path == '/login' || path == '/pair' ? null : (isTvBuild ? '/pair' : '/login'),
+        SessionStatus.needsProfile => only('/pick-profile'),
+        SessionStatus.authenticated => _gates.contains(path) ? '/' : null,
+      };
     },
     routes: [
-      GoRoute(path: '/setup-server', pageBuilder: (_, state) => _slidePage(const ServerSetupScreen(), state)),
-      GoRoute(path: '/setup', pageBuilder: (_, state) => _slidePage(const FirstRunSetupScreen(), state)),
-      GoRoute(path: '/login', pageBuilder: (_, state) => _slidePage(const LoginScreen(), state)),
-      GoRoute(path: '/pair', pageBuilder: (_, state) => _slidePage(const PairScreen(), state)),
-      GoRoute(path: '/pick-profile', pageBuilder: (_, state) => _slidePage(const ProfilePickerScreen(), state)),
+      GoRoute(path: '/boot', pageBuilder: (_, state) => _gatePage(const BootScreen(), state)),
+      GoRoute(path: '/setup-server', pageBuilder: (_, state) => _gatePage(const ServerSetupScreen(), state)),
+      GoRoute(path: '/setup', pageBuilder: (_, state) => _gatePage(const FirstRunSetupScreen(), state)),
+      GoRoute(path: '/login', pageBuilder: (_, state) => _gatePage(const LoginScreen(), state)),
+      GoRoute(path: '/pair', pageBuilder: (_, state) => _gatePage(const PairScreen(), state)),
+      GoRoute(path: '/pick-profile', pageBuilder: (_, state) => _gatePage(const ProfilePickerScreen(), state)),
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [
           GoRoute(path: '/', pageBuilder: (_, state) => _tabPage(const HomeScreen(), state)),
+          GoRoute(path: '/libraries', pageBuilder: (_, state) => _tabPage(const LibrariesScreen(), state)),
           GoRoute(
             path: '/library/:id',
-            pageBuilder: (_, state) => _slidePage(LibraryScreen(libraryId: state.pathParameters['id']!), state),
+            pageBuilder: (_, state) => _page(LibraryScreen(libraryId: state.pathParameters['id']!, name: state.uri.queryParameters['name']), state),
           ),
           GoRoute(path: '/search', pageBuilder: (_, state) => _tabPage(const SearchScreen(), state)),
           GoRoute(path: '/downloads', pageBuilder: (_, state) => _tabPage(const DownloadsScreen(), state)),
           GoRoute(path: '/prefs', pageBuilder: (_, state) => _tabPage(const PrefsScreen(), state)),
         ],
       ),
-      GoRoute(
-        path: '/title/:id',
-        pageBuilder: (_, state) => _slidePage(DetailScreen(itemId: state.pathParameters['id']!), state),
-      ),
-      GoRoute(path: '/party', pageBuilder: (_, state) => _slidePage(const PartyJoinScreen(), state)),
+      GoRoute(path: '/title/:id', pageBuilder: (_, state) => _page(DetailScreen(itemId: state.pathParameters['id']!), state)),
+      GoRoute(path: '/party', pageBuilder: (_, state) => _page(const PartyJoinScreen(), state)),
+      GoRoute(path: '/approve', pageBuilder: (_, state) => _page(const ApprovePairScreen(), state)),
+      GoRoute(path: '/devices', pageBuilder: (_, state) => _page(const DeviceManagementScreen(), state)),
       GoRoute(
         path: '/watch/:mediaFileId',
-        pageBuilder: (_, state) => _slidePage(
+        pageBuilder: (_, state) => _page(
           PlayerScreen(
             mediaFileId: state.pathParameters['mediaFileId']!,
             mediaItemId: state.uri.queryParameters['mediaItemId']!,
             partyId: state.uri.queryParameters['party'],
+            audioStreamIndex: int.tryParse(state.uri.queryParameters['audio'] ?? ''),
+            seriesId: state.uri.queryParameters['series'],
           ),
           state,
         ),

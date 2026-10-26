@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/hokago_panel.dart';
 import '../../core/widgets/wii_button.dart';
+import '../common/gate_card.dart';
 
 class ServerSetupScreen extends ConsumerStatefulWidget {
   const ServerSetupScreen({super.key});
@@ -14,7 +14,7 @@ class ServerSetupScreen extends ConsumerStatefulWidget {
 }
 
 class _ServerSetupScreenState extends ConsumerState<ServerSetupScreen> {
-  final _controller = TextEditingController();
+  late final _controller = TextEditingController(text: ref.read(sessionProvider).serverUrl ?? '');
   bool _connecting = false;
 
   @override
@@ -32,51 +32,27 @@ class _ServerSetupScreenState extends ConsumerState<ServerSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final error = ref.watch(sessionProvider).error;
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: HokagoPanel(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Icon(Icons.local_movies_rounded, size: 56, color: HokagoColors.accent),
-                  const SizedBox(height: 16),
-                  Text('hokago', style: HokagoText.title),
-                  const SizedBox(height: 6),
-                  Text('Enter your server address to get started.', style: TextStyle(color: HokagoColors.ink2)),
-                  const SizedBox(height: 24),
-                  TextField(
-                    controller: _controller,
-                    keyboardType: TextInputType.url,
-                    autocorrect: false,
-                    textCapitalization: TextCapitalization.none,
-                    decoration: const InputDecoration(labelText: 'Server address', hintText: 'https://hokago.example.com'),
-                    onSubmitted: (_) => _connect(),
-                  ),
-                  if (error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(error, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
-                  ],
-                  const SizedBox(height: 20),
-                  Center(
-                    child: WiiButton(
-                      onPressed: _connecting ? null : _connect,
-                      child: _connecting
-                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('Continue'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+    final error = ref.watch(sessionProvider.select((s) => s.error));
+    return GateCard(
+      title: 'hokago',
+      subtitle: 'Enter your server address to get started.',
+      children: [
+        TextField(
+          controller: _controller,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          autofocus: true,
+          textInputAction: TextInputAction.go,
+          autofillHints: const [AutofillHints.url],
+          decoration: const InputDecoration(labelText: 'Server address', hintText: '192.168.1.20:3000 or hokago.example.com'),
+          onSubmitted: (_) => _connect(),
         ),
-      ),
+        GateError(error),
+        const SizedBox(height: 22),
+        Center(child: WiiButton(label: 'Continue', busy: _connecting, onPressed: _connect)),
+        const SizedBox(height: 14),
+        const Text('Local addresses (IPs, .local names) connect over http; domains over https. Type http:// or https:// to choose.', textAlign: TextAlign.center, style: HokagoText.small),
+      ],
     );
   }
 }

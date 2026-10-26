@@ -2,13 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/session/session_controller.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/widgets/hokago_panel.dart';
 import '../../core/widgets/wii_button.dart';
+import '../common/gate_card.dart';
 
-/// Fresh-install wizard — mirrors apps/web/src/views/SetupView.tsx's core
-/// step (create the first admin account). Library setup stays a web/admin
-/// task for now (SetupState.setupRequired only gates the admin account).
+/// Fresh-install wizard — SetupView.tsx's first step (create the admin
+/// account). Library setup stays on the web admin panel.
 class FirstRunSetupScreen extends ConsumerStatefulWidget {
   const FirstRunSetupScreen({super.key});
 
@@ -22,9 +20,16 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
   bool _submitting = false;
   String? _error;
 
+  @override
+  void dispose() {
+    _username.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
   Future<void> _submit() async {
     if (_username.text.trim().isEmpty || _password.text.length < 8) {
-      setState(() => _error = 'Password must be at least 8 characters.');
+      setState(() => _error = 'Pick a username and a password of at least 8 characters.');
       return;
     }
     setState(() {
@@ -33,8 +38,8 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
     });
     try {
       await ref.read(sessionProvider.notifier).completeSetup(username: _username.text.trim(), password: _password.text);
-    } catch (e) {
-      setState(() => _error = 'Could not create the admin account.');
+    } catch (_) {
+      if (mounted) setState(() => _error = "Couldn't create the admin account.");
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -42,43 +47,34 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: HokagoPanel(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('Create the admin account', style: HokagoText.section),
-                  const SizedBox(height: 6),
-                  Text('This server has no account yet — you\'re first.', style: TextStyle(color: HokagoColors.ink2)),
-                  const SizedBox(height: 24),
-                  TextField(controller: _username, decoration: const InputDecoration(labelText: 'Username')),
-                  const SizedBox(height: 12),
-                  TextField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password (min 8 characters)')),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
-                  ],
-                  const SizedBox(height: 20),
-                  Center(
-                    child: WiiButton(
-                      onPressed: _submitting ? null : _submit,
-                      child: _submitting
-                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('Create account'),
-                    ),
-                  ),
-                ],
-              ),
+    return GateCard(
+      title: 'Create the admin account',
+      subtitle: "This server has no accounts yet — you're first.",
+      children: [
+        AutofillGroup(
+          child: Column(children: [
+            TextField(
+              controller: _username,
+              autofocus: true,
+              textInputAction: TextInputAction.next,
+              autofillHints: const [AutofillHints.newUsername],
+              decoration: const InputDecoration(labelText: 'Username'),
             ),
-          ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              textInputAction: TextInputAction.done,
+              autofillHints: const [AutofillHints.newPassword],
+              decoration: const InputDecoration(labelText: 'Password (8+ characters)'),
+              onSubmitted: (_) => _submit(),
+            ),
+          ]),
         ),
-      ),
+        GateError(_error),
+        const SizedBox(height: 22),
+        Center(child: WiiButton(label: 'Create account', busy: _submitting, onPressed: _submit)),
+      ],
     );
   }
 }

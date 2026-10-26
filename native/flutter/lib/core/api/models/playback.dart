@@ -37,6 +37,21 @@ class DeviceProfile {
         if (enableDirectStream != null) 'enableDirectStream': enableDirectStream,
       };
 
+  /// The same profile with encode caps merged in (a remembered quality pick
+  /// rides on /start instead of costing an immediate /quality restart).
+  DeviceProfile withCaps({int? maxWidth, int? maxHeight, int? maxVideoBitrateKbps}) => DeviceProfile(
+        supportedContainers: supportedContainers,
+        supportedVideoCodecs: supportedVideoCodecs,
+        supportedAudioCodecs: supportedAudioCodecs,
+        maxVideoBitrateKbps: maxVideoBitrateKbps ?? this.maxVideoBitrateKbps,
+        maxWidth: maxWidth ?? this.maxWidth,
+        maxHeight: maxHeight ?? this.maxHeight,
+        supportsHdr: supportsHdr,
+        subtitleMode: subtitleMode,
+        enableDirectPlay: enableDirectPlay,
+        enableDirectStream: enableDirectStream,
+      );
+
   /// media_kit (libmpv) plays effectively anything and renders ASS natively —
   /// the device profile exists so the server can still choose DIRECT_PLAY
   /// whenever possible (cheapest for the server) with wide codec/container

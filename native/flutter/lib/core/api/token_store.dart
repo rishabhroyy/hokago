@@ -18,6 +18,7 @@ class TokenStore {
   static const _deviceIdKey = 'hokago_device_id';
   static const _serverUrlKey = 'hokago_server_url';
   static const _clientKeyKey = 'hokago_client_key';
+  static const _profileKey = 'hokago_profile';
 
   Future<String?> get accessToken => _storage.read(key: _accessKey);
   Future<void> setAccessToken(String v) => _storage.write(key: _accessKey, value: v);
@@ -31,6 +32,16 @@ class TokenStore {
 
   Future<String?> get serverUrl => _storage.read(key: _serverUrlKey);
   Future<void> setServerUrl(String v) => _storage.write(key: _serverUrlKey, value: v);
+
+  /// Last selected profile as "id\nname" — lets a cold start with no server
+  /// reachable still open (offline downloads + the offline watch queue).
+  Future<(String, String)?> get lastProfile async {
+    final v = await _storage.read(key: _profileKey);
+    final i = v?.indexOf('\n') ?? -1;
+    return i > 0 ? (v!.substring(0, i), v.substring(i + 1)) : null;
+  }
+
+  Future<void> setLastProfile(String id, String name) => _storage.write(key: _profileKey, value: '$id\n$name');
 
   Future<String> get clientKey async {
     final existing = await _storage.read(key: _clientKeyKey);
@@ -46,6 +57,7 @@ class TokenStore {
     await _storage.delete(key: _accessKey);
     await _storage.delete(key: _refreshKey);
     await _storage.delete(key: _deviceIdKey);
+    await _storage.delete(key: _profileKey);
   }
 
   /// Decodes the JWT payload without verifying — mirrors api-client.ts's

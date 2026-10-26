@@ -55,6 +55,27 @@ class DownloadManager {
   final ActiveDownloadsController _active;
 
   static const _pollInterval = Duration(seconds: 2);
+  static bool _notificationsReady = false;
+
+  /// A progress notification is what lets the OS keep a big transfer alive:
+  /// on Android 14+ a priority-0 task with one runs as a user-initiated data
+  /// transfer job (no 9-minute WorkManager cap — a movie routinely exceeds it).
+  static Future<void> _prepareNotifications() async {
+    if (_notificationsReady) return;
+    _notificationsReady = true;
+    try {
+      await FileDownloader().permissions.request(PermissionType.notifications);
+    } catch (_) {
+      // a denied notification permission only costs the progress UI
+    }
+    FileDownloader().configureNotification(
+      running: const TaskNotification('Saving for offline', '{displayName}'),
+      complete: const TaskNotification('Ready to watch offline', '{displayName}'),
+      error: const TaskNotification("Download didn't finish", '{displayName}'),
+      paused: const TaskNotification('Download paused', '{displayName}'),
+      progressBar: true,
+    );
+  }
   static const _pollTimeout = Duration(minutes: 15);
 
   /// [maxHeight]/[maxBitrateKbps]: request the transcode variant (smaller
@@ -81,6 +102,7 @@ class DownloadManager {
       maxBitrateKbps: maxBitrateKbps,
     );
     final downloadId = created.id;
+    await _prepareNotifications();
     _active.start(downloadId, title: subtitle != null ? '$title — $subtitle' : title, posterUrl: posterUrl);
 
     try {
@@ -121,9 +143,11 @@ class DownloadManager {
         taskId: downloadId,
         url: _api.resolve('/downloads/$downloadId/artifact/media'),
         filename: media.filename,
+        displayName: subtitle != null ? '$title — $subtitle' : title,
         baseDirectory: BaseDirectory.applicationDocuments,
         directory: 'hokago',
         updates: Updates.statusAndProgress,
+        priority: 0,
         retries: 5,
         options: TaskOptions(auth: authFor(access)),
       );

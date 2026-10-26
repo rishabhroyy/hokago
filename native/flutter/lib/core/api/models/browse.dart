@@ -192,6 +192,9 @@ class MediaItemDetail extends MediaCard {
   final List<DetailAudioTrack> audioTracks;
   final MediaItemWatch? watch;
   final List<MediaCollection> collections;
+  final int? bitrateKbps;
+  final String? bitrateQuality; // poor | ok | good
+  final List<({String provider, String providerId})> externalIds;
 
   MediaItemDetail({
     required super.id,
@@ -215,6 +218,9 @@ class MediaItemDetail extends MediaCard {
     required this.audioTracks,
     required this.watch,
     required this.collections,
+    required this.bitrateKbps,
+    required this.bitrateQuality,
+    required this.externalIds,
   });
 
   factory MediaItemDetail.fromJson(Map<String, dynamic> j) {
@@ -243,6 +249,12 @@ class MediaItemDetail extends MediaCard {
       watch: j['watch'] != null ? MediaItemWatch.fromJson(j['watch'] as Map<String, dynamic>) : null,
       collections:
           (j['collections'] as List? ?? const []).map((e) => MediaCollection.fromJson(e as Map<String, dynamic>)).toList(),
+      bitrateKbps: j['bitrateKbps'] as int?,
+      bitrateQuality: j['bitrateQuality'] as String?,
+      externalIds: [
+        for (final e in (j['externalIds'] as List? ?? const []).cast<Map<String, dynamic>>())
+          (provider: e['provider'] as String, providerId: e['providerId'] as String),
+      ],
     );
   }
 }
@@ -290,5 +302,24 @@ class MediaFileDescriptor {
         sizeBytes: j['sizeBytes'] as int?,
         bitrate: j['bitrate'] as int?,
         video: j['video'] != null ? MediaFileVideoInfo.fromJson(j['video'] as Map<String, dynamic>) : null,
+      );
+}
+
+/// Mirrors packages/contract/src/metadata.ts's MetadataSearchCandidate.
+class MetadataCandidate {
+  final String provider; // TVMAZE | WIKIPEDIA | ANILIST | MAL
+  final String providerId;
+  final String title;
+  final int? year;
+  final String? overview;
+  final String? artworkUrl;
+  MetadataCandidate({required this.provider, required this.providerId, required this.title, this.year, this.overview, this.artworkUrl});
+  factory MetadataCandidate.fromJson(Map<String, dynamic> j) => MetadataCandidate(
+        provider: j['provider'] as String,
+        providerId: j['providerId'] as String,
+        title: j['title'] as String,
+        year: j['year'] as int?,
+        overview: j['overview'] as String?,
+        artworkUrl: j['artworkUrl'] as String?,
       );
 }

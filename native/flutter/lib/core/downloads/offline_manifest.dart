@@ -30,6 +30,19 @@ class OfflineEntry {
     required this.sizeBytes,
   });
 
+  OfflineEntry withPath(String path) => OfflineEntry(
+        downloadId: downloadId,
+        mediaItemId: mediaItemId,
+        mediaFileId: mediaFileId,
+        title: title,
+        kind: kind,
+        subtitle: subtitle,
+        posterUrl: posterUrl,
+        durationMs: durationMs,
+        localPath: path,
+        sizeBytes: sizeBytes,
+      );
+
   Map<String, dynamic> toJson() => {
         'downloadId': downloadId,
         'mediaItemId': mediaItemId,
@@ -108,15 +121,24 @@ class OfflineManifest {
   }
 
   /// Drops entries whose backing file no longer exists (reinstall, manual
-  /// deletion) — mirrors offline.ts's reconcileOfflineManifest.
+  /// deletion) — mirrors offline.ts's reconcileOfflineManifest. iOS moves the
+  /// app container on every update, so an absolute path going stale doesn't
+  /// mean the file is gone: re-base it onto today's documents dir first
+  /// (otherwise every app update silently "forgot" every download).
   Future<List<OfflineEntry>> reconcile() async {
     final map = await _read();
+    final docs = (await getApplicationDocumentsDirectory()).path;
     var changed = false;
     for (final id in map.keys.toList()) {
-      if (!await File(map[id]!.localPath).exists()) {
+      final entry = map[id]!;
+      if (await File(entry.localPath).exists()) continue;
+      final rebased = '$docs/hokago/${entry.localPath.split('/').last}';
+      if (await File(rebased).exists()) {
+        map[id] = entry.withPath(rebased);
+      } else {
         map.remove(id);
-        changed = true;
       }
+      changed = true;
     }
     if (changed) await _write(map);
     return map.values.toList()..sort((a, b) => a.title.compareTo(b.title));

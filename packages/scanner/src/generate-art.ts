@@ -152,13 +152,18 @@ interface FrameScore {
   yavg: number;
   yrange: number;
   satavg: number;
+  blur: number;
   rejected: boolean;
   score: number;
 }
 
-/** Classical scoring : reject near-black/near-white and low-variance frames, then score by colorfulness + contrast. No ML. */
+// blurdetect on real 1080p frames: crisp ones land ~4–7, motion-blurred or
+// soft-focus ones 10+.
+const MAX_BLUR = 10;
+
+/** Classical scoring : reject near-black/near-white, low-variance and blurry frames, then score by colorfulness + contrast. No ML. */
 async function scoreFrame(imgPath: string): Promise<FrameScore> {
-  const { stdout } = await runFfmpeg(["-i", imgPath, "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-"]);
+  const { stdout } = await runFfmpeg(["-i", imgPath, "-vf", "signalstats,blurdetect,metadata=print:file=-", "-f", "null", "-"]);
 
   const grab = (key: string): number => {
     const m = new RegExp(`lavfi\\.signalstats\\.${key}=([0-9.]+)`).exec(stdout);
@@ -170,16 +175,19 @@ async function scoreFrame(imgPath: string): Promise<FrameScore> {
   const yavg = grab("YAVG");
   const satavg = grab("SATAVG");
   const yrange = ymax - ymin;
+  const blur = Number.parseFloat(/lavfi\.blur=([0-9.]+)/.exec(stdout)?.[1] ?? "0");
 
-  const rejected = yavg < 20 || yavg > 235 || yrange < 20;
+  const rejected = yavg < 20 || yavg > 235 || yrange < 20 || blur > MAX_BLUR;
   const score = satavg + yrange * 0.5;
 
-  return { yavg, yrange, satavg, rejected, score };
+  return { yavg, yrange, satavg, blur, rejected, score };
 }
 
 export interface SelectedFrame {
   path: string;
   atSec: number;
+  /** scoreFrame's colorfulness + contrast — lets a series pick its best episode frame. */
+  score: number;
 }
 
 /**
@@ -220,8 +228,11 @@ export async function selectBestFrame(filePath: string, durationMs: number): Pro
     const best = pool.reduce((a, b) => (b.score.score > a.score.score ? b : a));
 
     const stablePath = path.join(tmpdir(), `hokago-frame-${randomUUID()}.jpg`);
-    await runFfmpeg(["-y", "-i", best.path, stablePath]);
-    return { path: stablePath, atSec: best.atSec };
+    // Light denoise + contrast-adaptive sharpen: web encodes are soft, and the
+    // billboard shows this frame full-bleed. q:v 2 — a bare re-encode here
+    // fell back to ffmpeg's default JPEG quality and smeared every backdrop.
+    await runFfmpeg(["-y", "-i", best.path, "-vf", "hqdn3d=1.5:1.5:0:0,cas=0.8", "-q:v", "2", stablePath]);
+    return { path: stablePath, atSec: best.atSec, score: best.score.score };
   } catch {
     return null;
   } finally {

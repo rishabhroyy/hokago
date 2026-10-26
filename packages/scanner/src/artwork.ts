@@ -193,7 +193,7 @@ export async function generateArt(filePath: string, durationMs: number): Promise
       bytesPath: backdrop.bytesPath,
       hash: backdrop.hash,
       sizeBytes: backdropBytes.length,
-      meta: { strategy: "frame-select", sourceFrameMs: Math.round(frame.atSec * 1000) },
+      meta: { strategy: "frame-select", sourceFrameMs: Math.round(frame.atSec * 1000), score: frame.score },
     });
 
     const posterBytes = await composePoster(frame.path);

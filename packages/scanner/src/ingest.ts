@@ -4,9 +4,9 @@ import path from "node:path";
 
 import { Prisma, PrismaClient, type ContentProfile } from "@hokago/db";
 
-import { resolveArtwork, upsertArtworkDescriptor } from "./artwork.js";
+import { resolveArtwork, upsertArtworkDescriptor, type ArtworkDescriptor } from "./artwork.js";
 import { clusterByRuntime } from "./cluster.js";
-import { INGEST_CONCURRENCY, LOCAL_SIGNAL_TYPES, PROBE_CONCURRENCY, parseSeasonDirName } from "./constants.js";
+import { ARTWORK_SOURCE_PRIORITY, INGEST_CONCURRENCY, LOCAL_SIGNAL_TYPES, PROBE_CONCURRENCY, parseSeasonDirName } from "./constants.js";
 import { syncEvidenceAndConfidence, type EvidenceInput } from "./evidence.js";
 import { extractFonts } from "./fonts.js";
 import { partialHash } from "./hash.js";
@@ -724,7 +724,57 @@ export async function storeArtwork(
     await upsertArtworkDescriptor(db, mediaItemId, art);
     artworkStored += 1;
   }
+  const backdrop = artworkList.find((a) => a.kind === "BACKDROP");
+  if (backdrop) await lendBackdropToAncestors(db, mediaItemId, backdrop);
   return artworkStored;
+}
+
+const frameScore = (meta: unknown): number => {
+  const score = (meta as { score?: unknown } | null)?.score;
+  return typeof score === "number" ? score : 0;
+};
+
+/**
+ * Seasons and series have no file of their own, so nothing ever generates
+ * them a backdrop and every surface fell back to cropping the (small) poster.
+ * Each episode's backdrop is offered upward as a GENERATED row (same bytes,
+ * lowest priority); the season/series keeps the best-scoring frame across all
+ * its episodes. Any real sidecar/provider backdrop on the season or series
+ * still wins and is never touched here.
+ */
+async function lendBackdropToAncestors(db: PrismaClient, mediaItemId: string, art: ArtworkDescriptor): Promise<void> {
+  const score = frameScore(art.meta);
+  const data = {
+    bytesPath: art.bytesPath,
+    hash: art.hash,
+    sizeBytes: art.sizeBytes,
+    meta: { strategy: "inherited", fromMediaItemId: mediaItemId, score },
+  };
+  let item = await db.mediaItem.findUnique({ where: { id: mediaItemId }, select: { parentId: true } });
+  while (item?.parentId) {
+    const ancestorId = item.parentId;
+    const current = await db.artwork.findMany({
+      where: { mediaItemId: ancestorId, kind: "BACKDROP" },
+      select: { id: true, source: true, meta: true },
+    });
+    const inherited = current.find((a) => a.source === "GENERATED");
+    if (current.length === 0) {
+      await db.artwork
+        .create({
+          data: {
+            ...data,
+            mediaItemId: ancestorId,
+            kind: "BACKDROP",
+            source: "GENERATED",
+            priority: ARTWORK_SOURCE_PRIORITY.GENERATED!,
+          },
+        })
+        .catch(() => {}); // a sibling episode created it first; the next rescan re-offers this frame
+    } else if (current.length === 1 && inherited && score > frameScore(inherited.meta)) {
+      await db.artwork.update({ where: { id: inherited.id }, data });
+    }
+    item = await db.mediaItem.findUnique({ where: { id: ancestorId }, select: { parentId: true } });
+  }
 }
 
 export interface IngestOptions {

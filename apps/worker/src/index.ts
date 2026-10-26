@@ -207,18 +207,17 @@ async function enqueueScan(libraryId: string, mode: "light" | "heavy" = "light",
 // one bad enqueue must not fail the whole scan and lose every later directory.
 async function enqueueArtwork(job: ArtworkJobData): Promise<void> {
   try {
-    // Cheap gate: skip if provider poster+backdrop already covered on disk (same check as processArtwork's early-exit).
+    // Cheap gate: skip only when poster AND backdrop are both provider-grade
+    // or better — the same rule as processArtwork's early-exit, minus the disk
+    // check. A provider poster alone must not skip: no keyless provider ships
+    // backdrops, so the backdrop is still a GENERATED frame that needs redoing.
     const item = await db.mediaItem.findUnique({
       where: { id: job.mediaItemId },
-      select: { artwork: { select: { priority: true } } },
+      select: { artwork: { select: { kind: true, priority: true } } },
     });
-    if (item?.artwork.some((a) => a.priority <= 1)) {
-      // priority 1 = PROVIDER; if any provider art exists, let reconciler handle the rest — skip scan-path enqueue
-      // Check disk via artwork worker's covered() logic would need configDir; rely on DB priority as cheap proxy
-      // Actual disk check happens in processArtwork, but this gate already saves 90% of no-op enqueues
-      const hasProvider = item.artwork.some((a) => a.priority === 1);
-      if (hasProvider) return;
-    }
+    const covered = (kind: "POSTER" | "BACKDROP"): boolean =>
+      !!item?.artwork.some((a) => a.kind === kind && a.priority <= ARTWORK_SOURCE_PRIORITY.PROVIDER!);
+    if (covered("POSTER") && covered("BACKDROP")) return;
     await artworkQueue.add(QUEUE_NAMES.ARTWORK, job, { jobId: artworkJobId(job.mediaItemId) });
   } catch (err) {
     console.error(`enqueueArtwork failed for ${job.mediaItemId}, will be re-derived on next reconcile:`, err);

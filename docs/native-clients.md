@@ -78,7 +78,7 @@ kept in sync by hand going forward.
   React Native's stack (ExoPlayer/AVPlayer/react-native-video don't render
   ASS), and because Immich's mobile app — the explicit visual/quality
   reference — is Flutter.
-- **State**: `flutter_riverpod`, plain `StateNotifierProvider`s — no
+- **State**: `flutter_riverpod` 3, plain `Notifier`/`FutureProvider`s — no
   codegen (`riverpod_generator`/`build_runner`) to keep the toolchain small.
 - **Routing**: `go_router`, paths mirror `apps/web/src/router.tsx` 1:1
   (`/`, `/library/:id`, `/title/:id`, `/watch/:mediaFileId`, `/search`,
@@ -118,76 +118,100 @@ kept in sync by hand going forward.
 
 ### Visual parity with the webui
 
-Rishabh's explicit call: the app should look as close as possible to
-`apps/web`'s actual design (`apps/web/tailwind.config.ts` +
-`apps/web/src/app.css`), laid out for mobile/TV instead of desktop
-breakpoints — not a generic "native Material app" reinterpretation. Ported
-directly (values copied from the CSS, not eyeballed):
+The app follows `apps/web`'s current design (`tailwind.config.ts` +
+`app.css`), laid out for phone / tablet / TV — not a stock Material app.
+**Dark-only**, same as the web (CLAUDE.md #6): there is no theme toggle.
 
-- **Colors**: `lib/core/theme/app_theme.dart`'s `HokagoColors` — the exact
-  `.dark` scope hex values.
-- **Type scale**: `HokagoText` — same purpose-named sizes as the Tailwind
-  config's `fontSize` block, with the same font-family pairing the web
-  actually uses (`text-title`/`-section`/`-title-xl` → Zen Maru Gothic,
-  `text-kicker` → JetBrains Mono, everything else → Plus Jakarta Sans).
-- **Wallpaper**: `HokagoBackground` — the four-radial-gradient-aura "wii
-  dream" background from `.dark body::before`, painted via a
-  `CustomPainter` (Flutter's `RadialGradient` is circle-only; elliptical
-  auras need a per-layer canvas scale transform to match the CSS's
-  independent x/y radii).
-- **Primary action button**: `WiiButton` — the glossy blue pill
-  (`.btn-primary`/`.wii-btn`: gradient stops, pill radius, inset-highlight
-  shadow, press-scale animation), not a stock Material button.
-- **Floating cards**: `HokagoPanel` — the frosted/blurred panel
-  (`.panel`: backdrop blur + two-layer shadow) used for login/setup.
-- **Pill-radius inputs**: matching `.input`'s 999px radius.
+- **Tokens**: `lib/core/theme/app_theme.dart` — the `.dark` palette as
+  consts (`HokagoColors`), the purpose-named type scale (`HokagoText`), the
+  `--e-snap` / `--e` curves (`HokagoMotion`), panel shadow + Wii focus ring.
+- **Wallpaper**: `HokagoBackground` — the dark `body::before` gradient + four
+  auras, the Wii dot grid and corner screentone (`<Backdrop/>`), painted once.
+- **Home**: full-bleed swipeable billboard (`HokagoHero`, auto-advance with
+  filling Wii page pills) under a transparent top bar that frosts on scroll;
+  the first rail rides up into the art fade. Rails/tiles are `Tile.tsx`'s
+  channel-framed cards via the same `cardToTile` / `continueWatchingToTile`
+  mapping.
+- **Detail**: art-fade banner, the glossy `.panel` sheet with the tilted
+  framed poster, quiet comma-joined metadata, season grids, collections rails.
+- **Buttons/inputs**: `WiiButton` (`.btn-primary`, `.ghost` = `.btn-ghost`,
+  with the `.btn::after` sheen), `WiiChip`, pill `.input`s, `HokagoPanel`.
+- **Icons**: `HokagoIcon` is `ui/icons.tsx` generated verbatim (regenerate
+  from that file, don't hand-edit). Logo mark = `ui/Logo.tsx`.
+- **Loading/empty/error**: shimmer `Skeleton`s (`.skeleton`) and one
+  `MessageState` — never a provider name or status code.
 
-Not yet ported: the CSS's inset box-shadows on cards/tiles (Flutter has no
-true inset shadow primitive — would need a custom painter per surface, not
-done yet), the `.skeleton` shimmer loading state, and per-screen pixel
-auditing beyond the surfaces above. Flag drift against the web app as it's
-found.
+### Navigation & form factors
+
+Tabs: Home · Library · Search · Downloads (not on TV) · Settings. Phones get a
+frosted floating bottom bar; tablets (>= 820 logical px, the web breakpoint)
+and TV get the same pills as a left rail. Every tappable is a `Pressable`:
+focusable, D-pad / keyboard activatable, with the web's Wii hover ring as the
+focus ring — that's the whole TV navigation story, no separate TV UI.
+Long-press (the web's right-click menus) opens action sheets: mark watched /
+unwatch (tile, episode, whole title), fix match, per-episode download / party.
 
 ### Android TV
 
-`phone`/`tv` product flavors (`android/app/build.gradle.kts`,
-`manifestPlaceholders["isTv"]`), a `src/tv/AndroidManifest.xml` overlay
-adding the `LEANBACK_LAUNCHER` intent-filter — same split the retired
-webview shell used. D-pad focus navigation and the TV pairing/account-
-switcher flow (mirroring `apps/web`'s `TvPairFlow`/`TvAccountsView`) are
-**not yet built** — the flavor exists structurally, the TV-specific UX
-doesn't yet.
+`phone`/`tv` product flavors (`android/app/build.gradle.kts`), detected in
+Dart via `appFlavor` (`lib/core/platform.dart` `isTvBuild`). TV builds: land
+on code pairing instead of a password (`/pair`), register as `ANDROIDTV`,
+hide downloads, autofocus primary actions, D-pad drives the player directly
+(left/right seek, select play/pause, media keys). Launcher banner is
+`res/drawable/tv_banner.xml`. A phone can approve a TV from Settings →
+Approve a TV or device (`/auth/pair/verify`).
 
-**tvOS is out of scope, not just dropped.** The old reasoning ("Apple
-forbids third-party WKWebView on tvOS") no longer applies — a native
-Flutter app isn't a webview. But Flutter itself has **zero official tvOS
-support**; the only route is `flutter-tvos`, a third-party fork with its
-own custom engine and CLI. That's a toolchain-install decision, not a code
-decision — out of scope until/unless Rishabh explicitly approves installing
-it.
+**tvOS is out of scope, not just dropped.** Flutter has zero official tvOS
+support; the only route is `flutter-tvos`, a third-party fork with its own
+engine and CLI — a toolchain decision, out of scope until explicitly approved.
+
+### Player
+
+`player_chrome.dart` is shared by streaming and offline playback: auto-hiding
+chrome, double-tap ±10s, the glowing Wii scrubber with trickplay preview,
+buffering spinner, immersive landscape. `player_screen.dart` adds the server
+contract: 503 (transcoder busy) retry on start, server-decided seek restarts,
+audio / quality / subtitle switching, remembered track choices
+(`track_prefs.dart` — the native `track-prefs.ts`; unset subtitles default to
+the first renderable track), watch-party sync + an invite-code sheet, and an
+up-next card (series order, 8s) when the player knows the series (`&series=`).
+
+### Offline
+
+Downloads are OS-managed (`background_downloader`, progress notification,
+Android 14+ user-initiated transfer so a movie isn't killed at WorkManager's
+~9 min cap). The manifest re-bases paths onto the current documents dir (iOS
+moves the app container on every update). Offline playback progress is queued
+on disk (`offline_watch_queue.dart`) and flushed to `/watch-state/sync` on the
+next Home load. A signed-in install with no server reachable still opens
+(last profile is remembered) instead of bouncing to the server screen.
 
 ### What's deliberately not done yet
 
-- TV D-pad navigation + pairing/account-switcher UX.
-- Trickplay scrubber preview, quality-switch menu, watch-party sync in the
-  player (the server endpoints exist — `/media-files/{id}/trickplay`,
-  `/playback/{id}/quality`, `/parties/*` — just no client for them yet).
-- `Prefs`/`Search` parity polish, a dedicated Pair screen (TV pairing is a
-  web-only flow today from the mobile app's perspective).
-- Per-screen visual audit beyond the shared theme primitives above.
-- Store signing/notarization (same as desktop: ad-hoc/sideload only, real
-  App Store/Play Store distribution is future work, matching the existing
-  desktop posture).
+- Profile avatar upload, admin-only actions (delete show files) — web only.
+- Bitmap subtitle (PGS/VOBSUB) burn-in selection — those tracks are hidden.
+- Picture-in-picture, AirPlay, background audio.
+- Offline sidecar subtitles: downloaded with the media but not yet attached
+  by the offline player.
+- TV multi-account switcher (`TvAccountsView`) — one account per install.
+- Store signing/notarization (ad-hoc/sideload only, same as desktop).
+
+### Verification without devices
+
+`flutter analyze` + `flutter test` (CI job `flutter` in `ci.yml`): logic
+tests (`test/logic_test.dart`) and headless widget tests that render every
+browse screen at phone, TV and large-text sizes and fail on any overflow or
+exception (`test/screens_test.dart`).
 
 ## Platform matrix
 
 | Platform | Shell | Player | Downloads | Auth UI |
 |---|---|---|---|---|
 | Web | browser | vidstack + hls.js + JASSUB (in-app) | — (never, browser) | login/pair |
-| iOS / iPadOS | native Flutter (`native/flutter`) | native (media_kit/libmpv) | yes (`background_downloader`) | login (pairing not yet ported) |
-| Android (phone) | native Flutter (`native/flutter`) | native (media_kit/libmpv) | yes | login |
+| iOS / iPadOS | native Flutter (`native/flutter`) | native (media_kit/libmpv) | yes (`background_downloader`) | login + code sign-in + approve a TV |
+| Android (phone) | native Flutter (`native/flutter`) | native (media_kit/libmpv) | yes | login + code sign-in + approve a TV |
 | macOS / Windows / Linux | Tauri 2 (`native/tauri`, unchanged) | web player in webview | yes (native, `~/Downloads/hokago/`) | login + pair |
-| Android TV / Google TV | native Flutter (`tv` flavor) | native (media_kit/libmpv) | **no** (by design) | not yet ported (was pairing + account switcher on the old shell) |
+| Android TV / Google TV | native Flutter (`tv` flavor) | native (media_kit/libmpv) | **no** (by design) | code pairing (account switcher not yet) |
 | ~~tvOS~~ | — | — | — | — (Flutter has no official tvOS support; see above) |
 
 TV apps must not offer downloads/offline (explicit product decision,
@@ -361,8 +385,7 @@ Keep both in sync by hand when the contract changes.
    `refreshToken` + `sessionId` in the secure store → silent refresh forever.
    Send `clientKey` (persisted UUID) + `deviceName` + `platform` on login.
 2. **TV**: `pair/request` → show 6-digit code → poll `pair/status` → on
-   `COMPLETE`, store tokens as a new account. **Not yet built in the Flutter
-   TV flavor** — the backend flow is ready, the client UI isn't.
+   `COMPLETE`, store tokens as a new account. Built: `features/pair/`.
 3. **Logout**: `POST /auth/logout` with the refresh token, clear the secure
    store.
 4. **Token refresh**: single in-flight refresh mutex, refresh when <60s

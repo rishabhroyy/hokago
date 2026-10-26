@@ -34,3 +34,19 @@ jobs:
       - run: pnpm -r build
       - run: pnpm -r typecheck
       - run: pnpm --filter @hokago/ffmpeg test
+  # native/flutter (iOS / Android / Android TV): static analysis + the
+  # headless widget/logic tests — no simulator or device needed.
+  flutter:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: native/flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- HokagoColors.bg — dark-only, matches the web's #121110 charcoal. -->
+    <color name="hokago_bg">#121110</color>
+</resources>

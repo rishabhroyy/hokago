@@ -1333,6 +1333,15 @@ async function reconcile(): Promise<void> {
     console.log(`reconciler: cleared ${benign.length} trickplay poison row(s) mis-accounted by the old bug — sheets will re-derive`);
   }
 
+  // Trickplay leg zero-b: pre-fix, sheetPaths was stored in ffmpeg completion
+  // order, not timeline order — the API serves sheets by index, so scrubber
+  // previews pointed at the wrong time. Sheet filenames are zero-padded, so a
+  // lexical sort restores timeline order. Touches only still-scrambled rows.
+  const reordered = await db.$executeRaw`
+    UPDATE trickplay SET "sheetPaths" = ARRAY(SELECT unnest("sheetPaths") ORDER BY 1)
+    WHERE "sheetPaths" <> ARRAY(SELECT unnest("sheetPaths") ORDER BY 1)`;
+  if (reordered > 0) console.log(`reconciler: reordered ${reordered} scrambled trickplay sheet list(s)`);
+
   // Trickplay leg one: files that never got sheets. The enqueue gate inside
   // enqueueTrickplay makes the hash comparison, so no need to repeat it here.
   const needingTrickplay = await db.mediaFile.findMany({

@@ -119,9 +119,8 @@ export async function generateTrickplaySheets(
   // Pass 1 — one keyframe-seek per tile, bounded-fan-out so the seek spawns
   // for a whole show overlap instead of running serially. Tile N of sheet M is
   // exactly (M*25 + N) * 10s of media time, matching the old window-decode grid.
-  const tilePaths: string[] = [];
   let blackTile: string | null = null;
-  await mapLimit(Array.from({ length: totalTiles }), TILE_CONCURRENCY, async (_, tile) => {
+  const tilePaths = await mapLimit(Array.from({ length: totalTiles }), TILE_CONCURRENCY, async (_, tile) => {
     const startSec = (tile * TRICKPLAY_INTERVAL_MS) / 1000;
     const tilePath = path.join(dir, `tile-${String(tile + 1).padStart(6, "0")}.jpg`);
     try {
@@ -158,15 +157,15 @@ export async function generateTrickplaySheets(
       blackTile ??= await makeBlackTile(dir);
       await copyFile(blackTile, tilePath);
     }
-    tilePaths.push(tilePath);
+    return tilePath;
   });
 
   // Pass 2 — lay each sheet's tiles into a 5x5 grid in one image2 pass; the
   // tail sheet simply has fewer frames (the grid leaves empty cells, same as
   // the old window decode). Sheets are independent once pass 1 is done, so
-  // they can fan out too.
-  const sheetPaths: string[] = [];
-  await mapLimit(Array.from({ length: sheetCount }), TILE_CONCURRENCY, async (_, sheet) => {
+  // they can fan out too. mapLimit's result keeps sheet order — the API
+  // serves sheets by array index, so completion order would scramble them.
+  const sheetPaths = await mapLimit(Array.from({ length: sheetCount }), TILE_CONCURRENCY, async (_, sheet) => {
     const outPath = path.join(dir, `sheet-${String(sheet + 1).padStart(4, "0")}.jpg`);
     await runFfmpeg(
       [
@@ -185,7 +184,7 @@ export async function generateTrickplaySheets(
       ],
       { timeoutMs: TILE_TIMEOUT_MS },
     );
-    sheetPaths.push(path.relative(configDir(), outPath));
+    return path.relative(configDir(), outPath);
   });
 
   // Tiles are intermediate — the sheets are the deliverable.

@@ -4,46 +4,90 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>hokago</title>
+  <!-- The desktop shell's only local page: pick the server, then the webview
+       navigates to it. Styled as the web app's login card (apps/web
+       app.css .panel / .input / .btn-primary, dark-only) with system fonts —
+       nothing is fetched before the server URL is known. -->
   <style>
-    :root { color-scheme: dark; }
+    :root { color-scheme: dark; --ink: #F3F0EA; --ink-2: #C4BFB6; --ink-3: #948F86; --line: #2C2B28; --wii: #63C3E6; --accent: #F07B63; }
     * { box-sizing: border-box; margin: 0; }
     html, body { height: 100%; }
     body {
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: #0d0f13; color: #e8eaed;
-      display: flex; align-items: center; justify-content: center;
+      font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      color: var(--ink);
+      background:
+        radial-gradient(80% 70% at 95% -10%, rgba(79, 184, 224, 0.42), transparent 70%),
+        radial-gradient(65% 60% at -5% 0%, rgba(240, 131, 111, 0.22), transparent 70%),
+        radial-gradient(70% 60% at 100% 110%, rgba(240, 131, 111, 0.12), transparent 70%),
+        radial-gradient(60% 55% at 0% 100%, rgba(79, 184, 224, 0.12), transparent 70%),
+        linear-gradient(180deg, #1f2533 0%, #14161d 50%, #0b0c10 100%);
+      display: flex; align-items: center; justify-content: center; padding: 20px;
     }
-    .card { width: min(460px, 90vw); padding: 4rem 0; }
-    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: .5rem; }
-    p { color: #9aa3b2; font-size: .9rem; line-height: 1.5; margin-bottom: 1.75rem; }
-    form { display: flex; flex-direction: column; gap: .75rem; }
+    body::before {
+      content: ""; position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(rgba(143, 224, 245, 0.17) 1px, transparent 1.4px) 0 0 / 26px 26px;
+      mask-image: linear-gradient(to bottom, #000, rgba(0, 0, 0, 0.25));
+    }
+    .card {
+      position: relative; width: min(440px, 100%); padding: 36px 32px 30px; border-radius: 32px; text-align: center;
+      background: rgba(43, 39, 34, 0.88); border: 1px solid rgba(255, 255, 255, 0.07);
+      box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.06), 0 2px 6px -2px rgba(0,0,0,0.45), 0 18px 44px -18px rgba(0,0,0,0.65);
+      backdrop-filter: blur(10px);
+      animation: zoomin .42s cubic-bezier(.4,0,.2,1);
+    }
+    @keyframes zoomin { from { opacity: 0; transform: scale(.94); } }
+    .mark { width: 60px; height: auto; margin-bottom: 18px; }
+    h1 { font-family: "Zen Maru Gothic", ui-rounded, system-ui, sans-serif; font-size: 28px; line-height: 1.15; letter-spacing: -0.01em; font-weight: 700; margin-bottom: 8px; }
+    p { color: var(--ink-2); font-size: 14.5px; line-height: 1.6; margin-bottom: 24px; }
+    code { background: #1B1A18; padding: .1em .45em; border-radius: 6px; color: var(--ink); font-size: 13px; }
+    form { display: flex; flex-direction: column; gap: 14px; align-items: center; }
     input {
-      padding: .75rem .9rem; border-radius: .5rem; border: 1px solid #2a2f3a;
-      background: #15181f; color: inherit; font-size: .95rem; outline: none;
+      width: 100%; height: 48px; border-radius: 999px; border: 1.5px solid var(--line); background: #1B1A18;
+      padding: 0 20px; font: inherit; font-size: 14.5px; color: var(--ink); outline: none; text-align: center;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.35); transition: border-color .15s ease, box-shadow .15s ease;
     }
-    input:focus { border-color: #4f7cff; }
-    .row { display: flex; gap: .75rem; }
+    input::placeholder { color: var(--ink-3); }
+    input:focus { border-color: var(--wii); box-shadow: inset 0 2px 4px rgba(0,0,0,0.35), 0 0 0 3.5px rgba(99,195,230,0.28); }
     button {
-      padding: .75rem 1.25rem; border-radius: .5rem; border: none;
-      background: #4f7cff; color: #fff; font-size: .95rem; font-weight: 600; cursor: pointer;
+      position: relative; overflow: hidden; border: none; cursor: pointer; margin-top: 6px;
+      border-radius: 999px; padding: 13px 34px; font: inherit; font-size: 14.5px; font-weight: 700; color: #fff;
+      background: linear-gradient(180deg, #45ADDD, #187AA5);
+      box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 6px 18px -6px rgba(46,155,196,0.65);
+      text-shadow: 0 1px 2px rgba(23,122,158,0.4);
+      transition: transform .15s cubic-bezier(.4,1.4,.5,1), box-shadow .2s ease;
     }
-    button:hover { background: #6a90ff; }
-    .error { color: #ff6b6b; font-size: .85rem; min-height: 1.25em; }
-    .hint { color: #6b7480; font-size: .8rem; margin-top: .5rem; }
-    code { background: #15181f; padding: .1em .35em; border-radius: .25em; color: #b6c2d4; }
+    button::after {
+      content: ""; position: absolute; top: 0; left: 6%; right: 6%; height: 46%;
+      border-radius: 100px 100px 60% 60% / 100% 100% 34% 34%;
+      background: linear-gradient(rgba(255, 255, 255, 0.5), transparent); pointer-events: none;
+    }
+    button:hover { transform: translateY(-2px); box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.45), 0 4px 24px -2px rgba(79,184,224,0.8), 0 0 0 3px rgba(18,17,16,0.9), 0 0 0 5px rgba(79,184,224,0.5); }
+    button:active { transform: scale(.96); }
+    button:focus-visible { outline: 2.5px solid #4FB8E0; outline-offset: 3px; }
+    .error { color: var(--accent); font-size: 13px; font-weight: 600; min-height: 1.25em; }
+    .hint { color: var(--ink-3); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+    @media (prefers-reduced-motion: reduce) { .card { animation: none; } button { transition: none; } }
   </style>
 </head>
 <body>
   <div class="card">
+    <svg class="mark" aria-hidden="true" viewBox="260 295 505 432" xmlns="http://www.w3.org/2000/svg">
+<path fill="#303d55" fill-rule="evenodd" d="M 297.0 320.0 L 295.0 332.0 L 285.0 336.0 L 281.0 341.0 L 281.0 349.0 L 286.0 359.0 L 283.0 387.0 L 283.0 415.0 L 289.0 456.0 L 281.0 459.0 L 280.0 469.0 L 285.0 486.0 L 290.0 490.0 L 290.0 494.0 L 292.0 495.0 L 288.0 509.0 L 289.0 522.0 L 297.0 535.0 L 308.0 545.0 L 308.0 551.0 L 294.0 568.0 L 293.0 576.0 L 300.0 582.0 L 312.0 584.0 L 309.0 605.0 L 312.0 621.0 L 316.0 626.0 L 330.0 626.0 L 342.0 664.0 L 364.0 701.0 L 371.0 707.0 L 379.0 707.0 L 384.0 701.0 L 383.0 694.0 L 374.0 678.0 L 365.0 652.0 L 360.0 625.0 L 359.0 602.0 L 361.0 579.0 L 367.0 553.0 L 374.0 535.0 L 386.0 513.0 L 392.0 505.0 L 418.0 502.0 L 434.0 494.0 L 444.0 481.0 L 444.0 460.0 L 446.0 458.0 L 477.0 446.0 L 516.0 442.0 L 546.0 446.0 L 576.0 457.0 L 579.0 460.0 L 579.0 481.0 L 584.0 489.0 L 592.0 496.0 L 605.0 502.0 L 631.0 505.0 L 639.0 516.0 L 641.0 524.0 L 644.0 525.0 L 644.0 529.0 L 651.0 539.0 L 657.0 556.0 L 664.0 600.0 L 663.0 624.0 L 657.0 656.0 L 649.0 678.0 L 640.0 695.0 L 641.0 705.0 L 645.0 707.0 L 654.0 706.0 L 661.0 699.0 L 678.0 671.0 L 685.0 655.0 L 693.0 626.0 L 707.0 626.0 L 711.0 621.0 L 713.0 615.0 L 711.0 584.0 L 723.0 582.0 L 730.0 576.0 L 730.0 570.0 L 726.0 565.0 L 726.0 561.0 L 722.0 561.0 L 715.0 551.0 L 715.0 545.0 L 733.0 526.0 L 735.0 508.0 L 731.0 499.0 L 731.0 493.0 L 736.0 487.0 L 739.0 487.0 L 739.0 480.0 L 743.0 470.0 L 742.0 459.0 L 735.0 456.0 L 740.0 421.0 L 740.0 385.0 L 737.0 359.0 L 742.0 349.0 L 742.0 341.0 L 738.0 336.0 L 728.0 332.0 L 727.0 322.0 L 723.0 318.0 L 718.0 317.0 L 698.0 321.0 L 693.0 316.0 L 685.0 317.0 L 632.0 346.0 L 607.0 364.0 L 596.0 375.0 L 591.0 375.0 L 587.0 370.0 L 581.0 370.0 L 571.0 379.0 L 566.0 387.0 L 559.0 389.0 L 555.0 397.0 L 524.0 393.0 L 499.0 393.0 L 468.0 397.0 L 465.0 390.0 L 461.0 387.0 L 457.0 387.0 L 451.0 377.0 L 442.0 370.0 L 436.0 370.0 L 432.0 375.0 L 428.0 375.0 L 410.0 359.0 L 375.0 335.0 L 362.0 331.0 L 343.0 319.0 L 330.0 316.0 L 326.0 321.0 L 306.0 317.0 Z" />
+<path fill="#efb8c6" fill-rule="evenodd" d="M 654.0 479.0 L 646.0 487.0 L 644.0 492.0 L 645.0 497.0 L 647.0 499.0 L 651.0 499.0 L 647.0 495.0 L 647.0 488.0 L 653.0 483.0 L 661.0 483.0 L 666.0 487.0 L 667.0 497.0 L 665.0 499.0 L 670.0 491.0 L 668.0 486.0 L 663.0 481.0 L 659.0 479.0 Z M 355.0 486.0 L 354.0 494.0 L 357.0 499.0 L 359.0 499.0 L 356.0 495.0 L 357.0 488.0 L 363.0 483.0 L 370.0 483.0 L 377.0 489.0 L 377.0 493.0 L 372.0 499.0 L 376.0 499.0 L 379.0 495.0 L 379.0 491.0 L 375.0 484.0 L 368.0 479.0 L 360.0 481.0 Z M 703.0 356.0 L 697.0 357.0 L 687.0 364.0 L 666.0 385.0 L 654.0 401.0 L 676.0 401.0 L 681.0 407.0 L 681.0 416.0 L 678.0 425.0 L 686.0 430.0 L 692.0 436.0 L 695.0 442.0 L 694.0 452.0 L 685.0 458.0 L 686.0 470.0 L 683.0 478.0 L 685.0 481.0 L 696.0 481.0 L 698.0 479.0 L 706.0 457.0 L 711.0 434.0 L 713.0 419.0 L 713.0 382.0 L 710.0 364.0 L 707.0 358.0 Z M 320.0 356.0 L 315.0 360.0 L 313.0 364.0 L 310.0 381.0 L 311.0 427.0 L 316.0 453.0 L 325.0 479.0 L 327.0 481.0 L 337.0 481.0 L 339.0 480.0 L 339.0 461.0 L 338.0 458.0 L 332.0 455.0 L 328.0 450.0 L 328.0 442.0 L 333.0 434.0 L 345.0 425.0 L 342.0 414.0 L 343.0 405.0 L 349.0 400.0 L 363.0 400.0 L 368.0 402.0 L 369.0 401.0 L 357.0 385.0 L 335.0 363.0 L 325.0 357.0 Z" />
+<path fill="#d78f9e" fill-rule="evenodd" d="M 645.0 493.0 L 646.0 498.0 L 648.0 500.0 L 650.0 500.0 L 650.0 498.0 L 648.0 496.0 L 648.0 489.0 L 654.0 484.0 L 662.0 484.0 L 667.0 488.0 L 668.0 497.0 L 669.0 497.0 L 670.0 489.0 L 664.0 482.0 L 660.0 480.0 L 655.0 480.0 L 650.0 484.0 Z M 356.0 487.0 L 355.0 495.0 L 358.0 500.0 L 359.0 499.0 L 357.0 496.0 L 357.0 490.0 L 364.0 483.0 L 369.0 483.0 L 378.0 490.0 L 378.0 494.0 L 374.0 500.0 L 377.0 500.0 L 380.0 496.0 L 380.0 492.0 L 376.0 485.0 L 369.0 480.0 L 365.0 480.0 L 361.0 482.0 Z M 340.0 409.0 L 339.0 411.0 L 339.0 421.0 L 342.0 427.0 L 346.0 426.0 L 346.0 423.0 L 343.0 415.0 L 343.0 410.0 Z M 685.0 406.0 L 681.0 406.0 L 682.0 408.0 L 682.0 417.0 L 680.0 421.0 L 681.0 427.0 L 683.0 427.0 L 686.0 419.0 L 686.0 408.0 Z M 691.0 364.0 L 688.0 365.0 L 679.0 374.0 L 678.0 378.0 L 674.0 379.0 L 673.0 387.0 L 668.0 392.0 L 666.0 392.0 L 664.0 390.0 L 656.0 402.0 L 673.0 401.0 L 675.0 396.0 L 680.0 395.0 L 685.0 382.0 L 685.0 379.0 L 691.0 374.0 L 694.0 369.0 Z M 334.0 364.0 L 332.0 368.0 L 332.0 371.0 L 336.0 378.0 L 341.0 383.0 L 344.0 392.0 L 351.0 398.0 L 352.0 401.0 L 367.0 402.0 L 368.0 399.0 L 361.0 390.0 L 359.0 390.0 L 357.0 392.0 L 352.0 391.0 L 352.0 385.0 L 354.0 382.0 L 350.0 378.0 L 348.0 378.0 L 347.0 375.0 L 336.0 364.0 Z" />
+<path fill="#f3f9fc" fill-rule="evenodd" d="M 698.0 495.0 L 682.0 494.0 L 676.0 507.0 L 671.0 512.0 L 663.0 517.0 L 664.0 528.0 L 668.0 539.0 L 678.0 551.0 L 683.0 553.0 L 693.0 550.0 L 700.0 543.0 L 703.0 536.0 L 718.0 522.0 L 721.0 516.0 L 720.0 507.0 L 715.0 502.0 Z M 310.0 501.0 L 304.0 506.0 L 302.0 512.0 L 306.0 523.0 L 318.0 533.0 L 324.0 544.0 L 330.0 550.0 L 337.0 553.0 L 345.0 551.0 L 352.0 544.0 L 356.0 537.0 L 361.0 517.0 L 356.0 515.0 L 347.0 507.0 L 341.0 494.0 L 325.0 495.0 Z M 625.0 430.0 L 620.0 432.0 L 613.0 439.0 L 609.0 449.0 L 598.0 459.0 L 593.0 469.0 L 593.0 475.0 L 596.0 481.0 L 607.0 487.0 L 621.0 490.0 L 632.0 490.0 L 633.0 485.0 L 638.0 477.0 L 643.0 472.0 L 650.0 468.0 L 650.0 464.0 L 647.0 453.0 L 640.0 439.0 L 633.0 432.0 Z M 390.0 432.0 L 384.0 438.0 L 377.0 451.0 L 373.0 468.0 L 379.0 471.0 L 387.0 479.0 L 392.0 490.0 L 402.0 490.0 L 413.0 488.0 L 426.0 482.0 L 430.0 476.0 L 430.0 468.0 L 426.0 460.0 L 415.0 450.0 L 411.0 441.0 L 403.0 432.0 L 398.0 430.0 Z M 664.0 409.0 L 647.0 415.0 L 641.0 421.0 L 654.0 436.0 L 661.0 453.0 L 664.0 467.0 L 674.0 474.0 L 676.0 471.0 L 676.0 465.0 L 672.0 457.0 L 672.0 453.0 L 676.0 450.0 L 684.0 448.0 L 686.0 445.0 L 678.0 436.0 L 666.0 430.0 L 666.0 424.0 L 670.0 418.0 L 672.0 411.0 L 670.0 409.0 Z M 359.0 409.0 L 352.0 410.0 L 353.0 417.0 L 357.0 424.0 L 357.0 430.0 L 345.0 436.0 L 338.0 443.0 L 339.0 448.0 L 351.0 452.0 L 351.0 457.0 L 347.0 465.0 L 347.0 470.0 L 349.0 474.0 L 359.0 468.0 L 362.0 454.0 L 367.0 440.0 L 375.0 428.0 L 382.0 421.0 L 376.0 415.0 Z" />
+<path fill="#cbd2dc" fill-rule="evenodd" d="M 665.0 517.0 L 664.0 518.0 L 664.0 523.0 L 665.0 524.0 L 665.0 529.0 L 667.0 535.0 L 673.0 546.0 L 678.0 551.0 L 685.0 554.0 L 690.0 553.0 L 694.0 551.0 L 700.0 545.0 L 702.0 542.0 L 702.0 540.0 L 695.0 543.0 L 689.0 543.0 L 683.0 539.0 L 675.0 530.0 L 673.0 524.0 L 669.0 518.0 L 669.0 516.0 Z M 355.0 515.0 L 355.0 519.0 L 351.0 529.0 L 339.0 542.0 L 337.0 543.0 L 328.0 543.0 L 323.0 540.0 L 326.0 546.0 L 331.0 551.0 L 335.0 553.0 L 344.0 553.0 L 346.0 552.0 L 353.0 545.0 L 358.0 535.0 L 360.0 529.0 L 360.0 525.0 L 361.0 524.0 L 361.0 518.0 Z M 678.0 506.0 L 674.0 512.0 L 683.0 520.0 L 689.0 521.0 L 690.0 520.0 L 690.0 515.0 L 680.0 506.0 Z M 347.0 506.0 L 345.0 506.0 L 336.0 514.0 L 335.0 519.0 L 337.0 521.0 L 341.0 521.0 L 351.0 512.0 Z M 626.0 466.0 L 626.0 471.0 L 636.0 480.0 L 638.0 480.0 L 642.0 474.0 L 634.0 466.0 L 630.0 464.0 Z M 397.0 464.0 L 393.0 465.0 L 383.0 474.0 L 388.0 481.0 L 399.0 471.0 L 400.0 468.0 Z M 428.0 463.0 L 426.0 464.0 L 420.0 474.0 L 416.0 477.0 L 403.0 482.0 L 391.0 484.0 L 392.0 490.0 L 393.0 491.0 L 409.0 490.0 L 419.0 487.0 L 428.0 482.0 L 431.0 476.0 L 431.0 470.0 Z M 598.0 462.0 L 595.0 467.0 L 594.0 475.0 L 596.0 480.0 L 600.0 484.0 L 606.0 487.0 L 616.0 490.0 L 622.0 490.0 L 623.0 491.0 L 632.0 491.0 L 633.0 490.0 L 634.0 484.0 L 619.0 481.0 L 609.0 476.0 L 607.0 476.0 L 601.0 469.0 L 599.0 465.0 L 599.0 462.0 Z" />
+<path fill="#dc675f" fill-rule="evenodd" d="M 656.0 479.0 L 653.0 480.0 L 647.0 486.0 L 645.0 490.0 L 645.0 496.0 L 650.0 502.0 L 654.0 504.0 L 659.0 504.0 L 665.0 500.0 L 669.0 494.0 L 669.0 489.0 L 664.0 482.0 L 661.0 480.0 Z M 365.0 479.0 L 362.0 480.0 L 356.0 485.0 L 354.0 489.0 L 354.0 492.0 L 359.0 501.0 L 364.0 504.0 L 369.0 504.0 L 377.0 498.0 L 378.0 489.0 L 370.0 480.0 Z" />
+<path fill="#ef756a" fill-rule="evenodd" d="M 660.0 485.0 L 656.0 485.0 L 653.0 487.0 L 653.0 492.0 L 652.0 493.0 L 650.0 493.0 L 649.0 495.0 L 651.0 499.0 L 654.0 499.0 L 653.0 495.0 L 655.0 494.0 L 655.0 492.0 L 656.0 491.0 L 659.0 491.0 Z M 361.0 486.0 L 358.0 490.0 L 359.0 492.0 L 364.0 491.0 L 365.0 490.0 L 368.0 490.0 L 370.0 495.0 L 369.0 499.0 L 371.0 500.0 L 375.0 497.0 L 374.0 492.0 L 373.0 491.0 L 373.0 488.0 L 369.0 484.0 L 364.0 484.0 Z" />
+</svg>
     <h1>Connect to your server</h1>
-    <p>hokago is a thin client for your self-hosted media server. Enter the URL of your <b>hokago</b> instance — e.g. <code>http://192.168.1.20:3000</code> or your remote address.</p>
+    <p>Enter the address of your hokago server — e.g. <code>192.168.1.20:3000</code> or your remote address.</p>
     <form id="form">
-      <input id="url" type="url" placeholder="https://hokago.example.com" autocomplete="off" spellcheck="false" />
-      <div class="row">
-        <button type="submit">Connect</button>
-      </div>
+      <input id="url" type="url" placeholder="https://hokago.example.com" autocomplete="off" spellcheck="false" autofocus />
+      <button type="submit">Connect</button>
       <div class="error" id="error"></div>
-      <div class="hint">The app ships an embedded copy of the hokago web UI; your server URL is stored on this device only.</div>
+      <div class="hint">Saved on this device only. If the server can't be reached, the app opens its built-in copy of hokago for your downloads.</div>
     </form>
   </div>
 

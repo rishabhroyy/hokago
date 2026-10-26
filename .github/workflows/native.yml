@@ -219,7 +219,8 @@ jobs:
 
   ios:
     needs: [versions, release]
-    runs-on: macos-14
+    # Xcode 26+: connectivity_plus >=7.1 uses iOS 26 SDK APIs (NWPath.isUltraConstrained).
+    runs-on: macos-26
     env:
       APP_VERSION: ${{ needs.versions.outputs.version }}
     steps:

@@ -1,17 +1,33 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Download progress notifications (Android 13+), and the user-initiated
+         data transfer job that lets a long movie download outlive WorkManager's
+         ~9 minute cap (Android 14+, background_downloader priority 0). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
 
     <!-- TV: required on the tv flavor (manifestPlaceholders["isTv"]), absent
          (optional) on phone — same split as the retired native/android shell. -->
     <uses-feature
         android:name="android.software.leanback"
         android:required="${isTv}" />
+    <!-- Not required on either flavor: the TV build is D-pad driven, and phone
+         installs on TV boxes stay possible. -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
 
     <application
         android:label="hokago"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
+        android:enableOnBackInvokedCallback="true"
+        android:usesCleartextTraffic="true">
+        <!-- usesCleartextTraffic: self-hosted servers are routinely plain http
+             on the LAN / tailnet (http://192.168.1.20:3000); without it every
+             request to one silently fails on API 28+. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

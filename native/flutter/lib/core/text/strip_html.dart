@@ -10,10 +10,10 @@ String stripHtml(String input) {
   s = s.replaceAll(RegExp(r'<[^>]+>'), '');
   s = s
       .replaceAll('&nbsp;', ' ')
-      .replaceAll('&amp;', '&')
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
       .replaceAll('&quot;', '"')
-      .replaceAll('&#39;', "'");
+      .replaceAll('&#39;', "'")
+      .replaceAll('&amp;', '&'); // last, so "&amp;lt;" stays "&lt;"
   return s.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
 }

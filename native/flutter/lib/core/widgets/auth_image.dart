@@ -5,44 +5,57 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../session/session_controller.dart';
 import '../theme/app_theme.dart';
 
-/// Poster/backdrop image, resolved against the configured server and sent
-/// with the current bearer token — hokago serves all artwork from its own
-/// origin and requires auth on every route.
+/// Poster/backdrop image from the configured server, sent with the bearer
+/// token (hokago serves all artwork from its own origin, every route authed).
+///
+/// Decoded at the size it's laid out at (memCacheWidth) — the server only
+/// stores full-size art, and decoding a 2000px poster per 130px tile is what
+/// made long rails stutter and blow the image cache.
 class AuthImage extends ConsumerWidget {
-  const AuthImage({super.key, required this.url, this.fit = BoxFit.cover, this.borderRadius});
+  const AuthImage({super.key, required this.url, this.fit = BoxFit.cover, this.alignment = Alignment.center, this.fallback});
 
   final String? url;
   final BoxFit fit;
-  final BorderRadius? borderRadius;
+  final Alignment alignment;
+
+  /// Shown when there's no url or the fetch fails. Defaults to a plain card fill.
+  final Widget? fallback;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider);
-    // Explicit double.infinity on every branch: a bare Container/Image
-    // inside a flexible parent (Expanded, Positioned.fill without an
-    // ancestor SizedBox) sizes to its *content*, not its constraints,
-    // which read as a smaller image with background "lines" down the
-    // sides — force fill so cover-fit always covers the whole box.
-    final placeholder = Container(width: double.infinity, height: double.infinity, color: HokagoColors.card);
-    if (url == null || session.serverUrl == null) {
-      return ClipRRect(borderRadius: borderRadius ?? BorderRadius.zero, child: placeholder);
-    }
-    final resolved = url!.startsWith('http') ? url! : '${session.serverUrl}$url';
-    final image = CachedNetworkImage(
-      imageUrl: resolved,
-      httpHeaders: session.accessToken != null ? {'Authorization': 'Bearer ${session.accessToken}'} : null,
-      fit: fit,
-      width: double.infinity,
-      height: double.infinity,
-      placeholder: (_, __) => placeholder,
-      errorWidget: (_, __, ___) => Container(
-        width: double.infinity,
-        height: double.infinity,
-        color: HokagoColors.card,
-        alignment: Alignment.center,
-        child: Icon(Icons.movie_creation_outlined, color: HokagoColors.ink3),
-      ),
+    // select(): rebuild on server change only — the 4-minute token warmth
+    // would otherwise rebuild every image on screen.
+    final serverUrl = ref.watch(sessionProvider.select((s) => s.serverUrl));
+    final empty = fallback ?? const ColoredBox(color: HokagoColors.card, child: SizedBox.expand());
+    if (url == null || serverUrl == null) return empty;
+    final token = ref.read(sessionProvider).accessToken;
+    final resolved = url!.startsWith('http') ? url! : '$serverUrl$url';
+    return LayoutBuilder(
+      builder: (context, c) {
+        // Cap the decode on the box's *long* side: with cover-fit that keeps
+        // both image dimensions >= the box whatever the art's aspect (a 16:9
+        // backdrop in the tall phone hero would blur if capped by width).
+        final dpr = MediaQuery.devicePixelRatioOf(context);
+        final bounded = c.hasBoundedWidth && c.hasBoundedHeight;
+        final tall = bounded && c.maxHeight > c.maxWidth;
+        final w = bounded && !tall ? (c.maxWidth * dpr).round() : null;
+        final h = tall ? (c.maxHeight * dpr).round() : null;
+        return CachedNetworkImage(
+          imageUrl: resolved,
+          httpHeaders: token != null ? {'Authorization': 'Bearer $token'} : null,
+          fit: fit,
+          alignment: alignment,
+          width: double.infinity,
+          height: double.infinity,
+          memCacheWidth: w,
+          memCacheHeight: h,
+          fadeInDuration: const Duration(milliseconds: 260),
+          fadeOutDuration: Duration.zero,
+          filterQuality: FilterQuality.medium,
+          placeholder: (_, _) => const ColoredBox(color: HokagoColors.card, child: SizedBox.expand()),
+          errorWidget: (_, _, _) => empty,
+        );
+      },
     );
-    return borderRadius != null ? ClipRRect(borderRadius: borderRadius!, child: image) : image;
   }
 }

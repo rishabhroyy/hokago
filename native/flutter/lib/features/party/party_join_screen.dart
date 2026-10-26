@@ -4,12 +4,12 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/session/session_controller.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/hokago_panel.dart';
+import '../common/gate_card.dart';
 import '../../core/widgets/wii_button.dart';
 
-/// Join a watch party by invite code — mirrors apps/web's /party route
-/// (PartyView.tsx). Hosting a party starts from the detail screen's Watch
-/// party button instead (needs a media item to attach to).
+/// Join a watch party by invite code — apps/web's /party (PartyView.tsx).
+/// Hosting starts from a title's Watch party button. Reached from Home's
+/// top bar (it was unreachable before).
 class PartyJoinScreen extends ConsumerStatefulWidget {
   const PartyJoinScreen({super.key});
   @override
@@ -31,8 +31,8 @@ class _PartyJoinScreenState extends ConsumerState<PartyJoinScreen> {
     try {
       final api = ref.read(sessionProvider.notifier).api;
       final party = await api.joinParty(inviteCode: _code.text.trim(), profileId: profileId);
-      if (party.mediaFileId == null) throw Exception('This party has nothing playable yet');
-      if (mounted) context.go('/watch/${party.mediaFileId}?mediaItemId=${party.mediaItemId}&party=${party.id}');
+      if (party.mediaFileId == null) throw StateError('nothing playable');
+      if (mounted) context.pushReplacement('/watch/${party.mediaFileId}?mediaItemId=${party.mediaItemId}&party=${party.id}');
     } catch (e) {
       setState(() => _error = "Couldn't join — check the code and try again.");
     } finally {
@@ -42,49 +42,31 @@ class _PartyJoinScreenState extends ConsumerState<PartyJoinScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Join watch party')),
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: HokagoPanel(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Icon(Icons.groups_rounded, size: 40, color: HokagoColors.wiiDeep),
-                  const SizedBox(height: 12),
-                  Text('Enter the invite code', style: HokagoText.section, textAlign: TextAlign.center),
-                  const SizedBox(height: 20),
-                  TextField(
-                    controller: _code,
-                    textCapitalization: TextCapitalization.characters,
-                    textAlign: TextAlign.center,
-                    style: HokagoText.title.copyWith(letterSpacing: 4),
-                    decoration: const InputDecoration(hintText: 'CODE'),
-                    onSubmitted: (_) => _join(),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
-                  ],
-                  const SizedBox(height: 20),
-                  Center(
-                    child: WiiButton(
-                      onPressed: _joining ? null : _join,
-                      child: _joining
-                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('Join'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+    return Stack(children: [
+      GateCard(
+        title: 'Join a watch party',
+        subtitle: 'Enter the invite code a friend shared.',
+        children: [
+          TextField(
+            controller: _code,
+            autofocus: true,
+            textCapitalization: TextCapitalization.characters,
+            autocorrect: false,
+            textAlign: TextAlign.center,
+            style: HokagoText.title.copyWith(letterSpacing: 6),
+            decoration: const InputDecoration(hintText: 'CODE'),
+            onSubmitted: (_) => _join(),
           ),
-        ),
+          GateError(_error),
+          const SizedBox(height: 22),
+          Center(child: WiiButton(icon: 'users', label: 'Join', busy: _joining, onPressed: _join)),
+        ],
       ),
-    );
+      Positioned(
+        top: MediaQuery.paddingOf(context).top + 10,
+        left: 16,
+        child: GlassIconButton(icon: 'back', semanticLabel: 'Back', onPressed: () => context.pop()),
+      ),
+    ]);
   }
 }

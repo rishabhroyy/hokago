@@ -9,6 +9,7 @@ import 'models/media_files.dart';
 import 'models/party.dart';
 import 'models/playback.dart';
 import 'models/profile.dart';
+import '../platform.dart';
 import 'token_store.dart';
 
 /// Typed surface over HokagoApiClient — one method per endpoint this app
@@ -45,7 +46,7 @@ class HokagoApi {
       'username': username,
       'password': password,
       'clientKey': clientKey,
-      'deviceName': 'hokago mobile',
+      'deviceName': currentDeviceName(),
       'platform': platform,
     });
     return LoginResponse.fromJson(res.data as Map<String, dynamic>);
@@ -61,6 +62,15 @@ class HokagoApi {
     return PairingRequestResponse.fromJson(res.data as Map<String, dynamic>);
   }
 
+  /// The phone/PC side of TV pairing: approve the code a TV is showing.
+  Future<void> pairVerify(String code) async {
+    await _client.dio.post('/auth/pair/verify', data: {'code': code});
+  }
+
+  Future<void> changePassword({required String currentPassword, required String newPassword}) async {
+    await _client.dio.post('/auth/password', data: {'currentPassword': currentPassword, 'newPassword': newPassword});
+  }
+
   Future<PairingStatusResponse> pairStatus(String pairingId) async {
     final res = await _client.dio.post('/auth/pair/status', data: {'pairingId': pairingId});
     return PairingStatusResponse.fromJson(res.data as Map<String, dynamic>);
@@ -70,6 +80,10 @@ class HokagoApi {
   Future<List<Profile>> profiles() async {
     final res = await _client.dio.get('/profiles');
     return (res.data as List).map((e) => Profile.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> renameProfile(String id, String name) async {
+    await _client.dio.patch('/profiles/$id', data: {'name': name});
   }
 
   // ── Browse ─────────────────────────────────────────────────────────────
@@ -84,7 +98,7 @@ class HokagoApi {
   }
 
   Future<MediaItemDetail> mediaItemDetail(String id, {String? profileId}) async {
-    final res = await _client.dio.get('/media-items/$id', queryParameters: {if (profileId != null) 'profileId': profileId});
+    final res = await _client.dio.get('/media-items/$id', queryParameters: {'profileId': ?profileId});
     return MediaItemDetail.fromJson(res.data as Map<String, dynamic>);
   }
 
@@ -94,8 +108,28 @@ class HokagoApi {
   }
 
   Future<HomeResponse> home({String? profileId}) async {
-    final res = await _client.dio.get('/home', queryParameters: {if (profileId != null) 'profileId': profileId});
+    final res = await _client.dio.get('/home', queryParameters: {'profileId': ?profileId});
     return HomeResponse.fromJson(res.data as Map<String, dynamic>);
+  }
+
+  Future<List<ContinueWatchingEntry>> continueWatching(String profileId) async {
+    final res = await _client.dio.get('/continue-watching', queryParameters: {'profileId': profileId});
+    return (res.data as List).map((e) => ContinueWatchingEntry.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Manual watched / unwatched (the long-press menu). Unwatched clears position + count.
+  Future<void> setWatched(String mediaItemId, {required String profileId, required bool watched}) async {
+    await _client.dio.post('/watch-state/$mediaItemId', data: {'profileId': profileId, 'watched': watched});
+  }
+
+  // ── Fix match ──────────────────────────────────────────────────────────
+  Future<List<MetadataCandidate>> metadataSearch({required String title, int? year, required String kind}) async {
+    final res = await _client.dio.get('/metadata/search', queryParameters: {'title': title, 'year': ?year, 'kind': kind});
+    return ((res.data as Map<String, dynamic>)['candidates'] as List).map((e) => MetadataCandidate.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> pinMetadataMatch(String itemId, MetadataCandidate c) async {
+    await _client.dio.post('/media-items/$itemId/metadata-match', data: {'provider': c.provider, 'providerId': c.providerId, 'title': c.title, 'year': c.year});
   }
 
   // ── Media file tracks ──────────────────────────────────────────────────
@@ -131,13 +165,14 @@ class HokagoApi {
     required String mediaItemId,
     required String mediaFileId,
     int? audioStreamIndex,
+    DeviceProfile deviceProfile = DeviceProfile.native,
   }) async {
     final res = await _client.dio.post('/playback/start', data: {
       'profileId': profileId,
       'mediaItemId': mediaItemId,
       'mediaFileId': mediaFileId,
-      'deviceProfile': DeviceProfile.native.toJson(),
-      if (audioStreamIndex != null) 'audioStreamIndex': audioStreamIndex,
+      'deviceProfile': deviceProfile.toJson(),
+      'audioStreamIndex': ?audioStreamIndex,
     });
     return StartPlaybackResponse.fromJson(res.data as Map<String, dynamic>);
   }
@@ -164,16 +199,16 @@ class HokagoApi {
     final res = await _client.dio.post('/playback/$sessionId/quality', data: {
       'positionMs': positionMs,
       if (reset) 'reset': true,
-      if (maxWidth != null) 'maxWidth': maxWidth,
-      if (maxHeight != null) 'maxHeight': maxHeight,
-      if (maxVideoBitrateKbps != null) 'maxVideoBitrateKbps': maxVideoBitrateKbps,
+      'maxWidth': ?maxWidth,
+      'maxHeight': ?maxHeight,
+      'maxVideoBitrateKbps': ?maxVideoBitrateKbps,
     });
     return QualitySwitchResponse.fromJson(res.data as Map<String, dynamic>);
   }
 
   Future<void> heartbeat(String sessionId, {required int positionMs, int? durationMs}) async {
     await _client.dio
-        .post('/playback/$sessionId/heartbeat', data: {'positionMs': positionMs, if (durationMs != null) 'durationMs': durationMs});
+        .post('/playback/$sessionId/heartbeat', data: {'positionMs': positionMs, 'durationMs': ?durationMs});
   }
 
   Future<void> stopPlayback(String sessionId) async {
@@ -182,7 +217,7 @@ class HokagoApi {
 
   // ── Downloads ──────────────────────────────────────────────────────────
   Future<List<DownloadInfo>> downloads({String? deviceId}) async {
-    final res = await _client.dio.get('/downloads', queryParameters: {if (deviceId != null) 'deviceId': deviceId});
+    final res = await _client.dio.get('/downloads', queryParameters: {'deviceId': ?deviceId});
     return (res.data as List).map((e) => DownloadInfo.fromJson(e as Map<String, dynamic>)).toList();
   }
 
@@ -201,9 +236,9 @@ class HokagoApi {
       'mediaFileId': mediaFileId,
       'deviceId': deviceId,
       'variant': maxHeight != null || maxBitrateKbps != null
-          ? {'kind': 'transcode', if (maxHeight != null) 'maxHeight': maxHeight, if (maxBitrateKbps != null) 'maxBitrateKbps': maxBitrateKbps}
+          ? {'kind': 'transcode', 'maxHeight': ?maxHeight, 'maxBitrateKbps': ?maxBitrateKbps}
           : {'kind': 'original'},
-      if (subtitleTrackIds != null) 'subtitleTrackIds': subtitleTrackIds,
+      'subtitleTrackIds': ?subtitleTrackIds,
     });
     return DownloadInfo.fromJson(res.data as Map<String, dynamic>);
   }

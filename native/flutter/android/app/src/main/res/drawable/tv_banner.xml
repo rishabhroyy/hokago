@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV launcher banner (320x180dp): the hokago mark on the app's
+     charcoal, a Wii-blue glow top-right like the web wallpaper. Vector/layer
+     only, so no per-density PNGs to keep in sync with the icon. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#1F2533"
+                android:centerColor="#14161D"
+                android:endColor="#0B0C10" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:centerX="0.95"
+                android:centerY="0.0"
+                android:gradientRadius="220dp"
+                android:startColor="#6B4FB8E0"
+                android:endColor="#004FB8E0" />
+        </shape>
+    </item>
+    <item
+        android:width="112dp"
+        android:height="112dp"
+        android:gravity="center">
+        <bitmap
+            android:gravity="fill"
+            android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>

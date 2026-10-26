@@ -1,17 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-/// hokago's real icon set — ui/icons.tsx's raw SVG paths, ported verbatim
-/// (not a Material Icons substitute). Only the handful the mobile shell
-/// actually needs so far; add more names here as they come up.
+/// hokago's real icon set — apps/web/src/ui/icons.tsx's raw SVG bodies, ported
+/// verbatim (regenerate from that file rather than hand-editing). Not a
+/// Material Icons substitute.
 const Map<String, String> _iconBodies = {
-  'search': '<circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>'
-      '<path d="M20 20l-4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  'download': '<path d="M12 3v13m0 0l-5-5m5 5l5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
-      '<path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  'gear': '<circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/>'
-      '<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  'search': '<circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  'x': '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+  'play': '<path d="M6 4l14 8-14 8V4Z" fill="currentColor"/>',
+  'home': '<path d="M3.5 11.5 12 4l8.5 7.5M6 10v10h12V10" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+  'wifi-off': '<path d="M2 8.5a14.5 14.5 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8.5 15.5a5.5 5.5 0 0 1 7 0M12 19h.01M2 2l20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  'pause': '<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>',
+  'plus': '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  'download': '<path d="M12 3v13m0 0l-5-5m5 5l5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  'star': '<path d="M12 3l2.7 5.9 6.3.7-4.7 4.4 1.3 6.2L12 16.9 6.4 20.2l1.3-6.2L3 9.6l6.3-.7L12 3Z" fill="currentColor"/>',
+  'check': '<path d="M4 12l6 6L20 6" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  'back': '<path d="M15 4L7 12l8 8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+  'vol': '<path d="M4 9v6h4l5 4V5l-5 4H4Z" fill="currentColor"/><path d="M17 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+  'mute': '<path d="M4 9v6h4l5 4V5l-5 4H4Z" fill="currentColor"/><path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  'moon': '<path d="M20.2 13.4A8.2 8.2 0 0 1 10.6 3.8a8.2 8.2 0 1 0 9.6 9.6Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  'sun': '<circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2M12 19.5v2M21.5 12h-2M4.5 12h-2M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4M18.5 18.5l-1.4-1.4M6.9 6.9 5.5 5.5"/></g>',
+  'cc': '<rect x="2.5" y="5" width="19" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10.3c-.5-.5-1.2-.6-1.8-.3-.8.4-1.2 1.3-1.2 2.4s.4 2 1.2 2.4c.6.3 1.3.2 1.8-.3M16 10.3c-.5-.5-1.2-.6-1.8-.3-.8.4-1.2 1.3-1.2 2.4s.4 2 1.2 2.4c.6.3 1.3.2 1.8-.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
+  'expand': '<path d="M9 3H3v6M15 3h6v6M3 15v6h6M21 15v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  'list': '<path d="M8 6h13M8 12h13M8 18h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/>',
+  'sparkle': '<path d="M12 2C12 8 14 10 20 12 14 14 12 16 12 22 12 16 10 14 4 12 10 10 12 8 12 2Z" fill="currentColor"/>',
+  'window': '<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M12 3.5V20.5M3.5 12H20.5"/></g><circle cx="16.3" cy="7.8" r="1.6" fill="currentColor"/>',
+  'music': '<ellipse cx="8.4" cy="18.6" rx="3.3" ry="2.6" fill="currentColor"/><ellipse cx="16.6" cy="16.6" rx="3.3" ry="2.6" fill="currentColor"/><path d="M11.7 18.4V6.2M19.9 16.4V6.2" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><rect x="11.7" y="4.4" width="8.2" height="1.8" rx="0.9" fill="currentColor"/>',
+  'teacup': '<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 11.2c0-1.6 1.2-2.9 2.8-2.9h7.2c1.6 0 2.8 1.3 2.8 2.9v2.2c0 3.3-2.9 5.8-6.4 5.8-3.5 0-6.4-2.5-6.4-5.8Z"/><path d="M18 11.4h1.9a2 2 0 0 1 0 4.2H18"/><path d="M8.2 7.6c-.5-1 .1-1.9 1.2-2.4M13 7.6c-.5-1 .1-1.9 1.2-2.4" stroke-width="1.6"/></g><path d="M4.6 20.6h14.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  'cherry': '<g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12.6 3.8C11 6.4 10 9.2 9.5 12.3"/><path d="M12.6 3.8c1.1 3.4 1.2 7 1.5 10.7"/></g><circle cx="8" cy="14.5" r="2.9" fill="currentColor"/><circle cx="14.6" cy="16.8" r="2.5" fill="currentColor"/><path d="M12.8 4c1.7-.8 3.1 0 3.8 1.1-.8.8-2 1.1-3.8.6Z" fill="currentColor"/><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 12.6l.8-.7"/><path d="M12.9 15.2l.7-.7"/></g>',
+  'paperplane': '<path d="M4.2 11.8 19.8 4.6l-6.4 9.2L19.8 18.8Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/><path d="M4.2 11.8 13.4 13.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  'lantern': '<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.6V5.9" stroke-width="1.6"/><path d="M12 6c-4 0-5.6 2.8-5.6 6.2 0 3.4 1.6 6.2 5.6 6.2 4 0 5.6-2.8 5.6-6.2 0-3.4-1.6-6.2-5.6-6.2Z"/><path d="M12 6v12.4M6.4 12.2h11.2"/><path d="M12 18.4V20.6" stroke-width="1.6"/></g><circle cx="12" cy="21.6" r="1" fill="currentColor"/>',
+  'cloudsun': '<circle cx="8.6" cy="8" r="2.9" fill="currentColor"/><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8.6 4V3M11.5 5.6l.8-.8M12.6 8h1M11.5 10.4l.8.8M8.6 12v1M5.7 10.4l-.8.8M4.6 8h-1M5.7 5.6l-.8-.8"/></g><path d="M16.6 20.2H8.4a4.4 4.4 0 0 1 .5-8.6 5.4 5.4 0 0 1 10.6 1.5 3.8 3.8 0 0 1-.4 7.1Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>',
+  'cassette': '<rect x="3.2" y="5.5" width="17.6" height="13" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.75"/><circle cx="8.2" cy="11" r="2.1" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.2" cy="11" r="0.8" fill="currentColor"/><circle cx="15.8" cy="11" r="2.1" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="15.8" cy="11" r="0.8" fill="currentColor"/><path d="M6.2 16.2h11.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+  'grid': '<rect x="3" y="3" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/>',
+  'users': '<circle cx="9" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 20c0-3.4 2.7-6 6-6s6 2.6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="17.5" cy="9" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 20c.3-2.7 2-4.8 4.3-5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  'info': '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.3" fill="currentColor"/>',
+  'film': '<rect x="3" y="3" width="18" height="18" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 3v18M17 3v18M3 7.5h4M3 12h4M3 16.5h4M17 7.5h4M17 12h4M17 16.5h4" stroke="currentColor" stroke-width="1.8"/>',
+  'disk': '<path d="M5 3h12.5L21 6.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 3v6h8V3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 21v-5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v5" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  'tv': '<rect x="2.5" y="6.5" width="19" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16.8 2.8-4.3 4.3M7.8 2.8l4.3 4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  'alert': '<path d="M10.3 3.9 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 9.5v4.5M12 17.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  'lib': '<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v16.5a2.5 2.5 0 0 1-2.5 2.5H6.5A2.5 2.5 0 0 1 4 18.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/><path d="M20 17.5a2.5 2.5 0 0 1-2.5 2.5H5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  'ticket': '<path d="M3 10V6.5A2.5 2.5 0 0 1 5.5 4h13A2.5 2.5 0 0 1 21 6.5V10a2.5 2.5 0 0 0 0 5v2.5A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5V15a2.5 2.5 0 0 0 0-5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 4v2M13 10v2M13 16v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  'monitor': '<rect x="2.5" y="4" width="19" height="13" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 21h7M12 17v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  'activity': '<path d="M3 12h4l3-8 4 16 3-8h4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+  'gear': '<circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  'copy': '<rect x="9" y="9" width="12" height="12" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15H4.5A2.5 2.5 0 0 1 2 12.5v-8A2.5 2.5 0 0 1 4.5 2h8A2.5 2.5 0 0 1 15 4.5V5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  'edit': '<path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+  'trash': '<path d="M3 6h18M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6M18.5 6l-.8 13a2 2 0 0 1-2 1.9H8.3a2 2 0 0 1-2-1.9L5.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  'scan': '<path d="M3 8V5.5A2.5 2.5 0 0 1 5.5 3H8M16 3h2.5A2.5 2.5 0 0 1 21 5.5V8M21 16v2.5a2.5 2.5 0 0 1-2.5 2.5H16M8 21H5.5A2.5 2.5 0 0 1 3 18.5V16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  'key': '<circle cx="7.5" cy="15.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  'ban': '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.6 5.6l12.8 12.8" stroke="currentColor" stroke-width="1.8"/>',
+  'shield': '<path d="M12 21.5s7.5-3 7.5-9.8V5.6L12 2.5 4.5 5.6v6.1c0 6.8 7.5 9.8 7.5 9.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m9 12 2.2 2.2L15.5 10" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+  'broom': '<path d="m13.5 10.5-9.7 9.7a1.9 1.9 0 0 1-2.7-2.7c.2-.2.4-.4.7-.5l8.9-6.5M8.2 21h12.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="m12 12 3.2 3.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="m15.8 4.2 4 4M20 8l1.9 1.9 1.1-1.1a3.2 3.2 0 0 0-4.5-4.5l-1.1 1.1L19 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'refresh': '<path d="M21 2v6h-6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 22v-6h6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
 };
+
+/// The per-title fallback glyphs (Tile.tsx's ICON_POOL), picked by the same hash as the hue.
+const hokagoIconPool = ['window', 'teacup', 'music', 'cherry', 'cloudsun', 'paperplane', 'lantern', 'cassette'];
 
 class HokagoIcon extends StatelessWidget {
   const HokagoIcon(this.name, {super.key, this.size = 22, this.color});
@@ -23,7 +68,7 @@ class HokagoIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     final body = _iconBodies[name];
     assert(body != null, 'no HokagoIcon body registered for "$name"');
-    final tint = color ?? IconTheme.of(context).color ?? DefaultTextStyle.of(context).style.color ?? Colors.black;
+    final tint = color ?? IconTheme.of(context).color ?? DefaultTextStyle.of(context).style.color ?? Colors.white;
     return SvgPicture.string(
       '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">$body</svg>',
       width: size,
